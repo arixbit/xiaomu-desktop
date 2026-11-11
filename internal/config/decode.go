@@ -52,8 +52,8 @@ func looksLikeJSON(b []byte) bool {
 func skipSpaceAndComments(b []byte) []byte {
 	for {
 		b = bytes.TrimLeftFunc(b, unicode.IsSpace)
-		if bytes.HasPrefix(b, []byte("//")) {
-			if i := bytes.IndexByte(b, '\n'); i >= 0 {
+		if bytes.HasPrefix(b, []byte("//")) || bytes.HasPrefix(b, []byte("#")) {
+			if i := bytes.IndexAny(b, "\r\n"); i >= 0 {
 				b = b[i+1:]
 				continue
 			}

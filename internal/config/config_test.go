@@ -177,3 +177,87 @@ func TestClassifySource(t *testing.T) {
 		t.Fatalf("engine name %s", got)
 	}
 }
+
+func TestReadHTMLResponseExplainsConfigurationError(t *testing.T) {
+	const target = "https://example.com/config"
+	fetch := func(context.Context, string) (Response, error) {
+		return Response{Status: 200, ContentType: "text/html; charset=utf-8", Body: []byte("<html>landing page</html>")}, nil
+	}
+	_, err := Read(context.Background(), target, fetch)
+	if err == nil || !strings.Contains(err.Error(), target) || !strings.Contains(err.Error(), "HTTP 200") || !strings.Contains(err.Error(), "Content-Type") || !strings.Contains(err.Error(), "HTML") {
+		t.Fatalf("error: %v", err)
+	}
+}
+
+func TestReadDepotWithoutFollowingLines(t *testing.T) {
+	const root = "https://example.com/box/depot.json"
+	var calls []string
+	fetch := func(_ context.Context, raw string) (Response, error) {
+		calls = append(calls, raw)
+		return Response{Status: 200, URL: root, Body: []byte(`{"urls":[{"name":"🚀演示","url":"./config.json"},{"name":"jar","url":"./app.jar"}]}`)}, nil
+	}
+	cfg, err := Read(context.Background(), root, fetch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || len(cfg.Lines) != 2 || cfg.Lines[0].URL != "https://example.com/box/config.json" {
+		t.Fatalf("cfg %+v calls %v", cfg, calls)
+	}
+	if _, err := Read(context.Background(), cfg.Lines[1].URL, fetch); err == nil || len(calls) != 1 {
+		t.Fatal("jar was fetched")
+	}
+}
+
+func TestXBPQAndConfiguredParsers(t *testing.T) {
+	cfg, err := Read(context.Background(), "https://example.com/config.json", func(context.Context, string) (Response, error) {
+		return Response{Status: 200, Body: []byte("{\"sites\":[{\"key\":\"rule\",\"type\":3,\"api\":\"csp_XBPQ\",\"ext\":\"./rule.json\"}],\"parses\":[{\"name\":\"web\",\"type\":0,\"url\":\"./parse?url=\"}]}")}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Sites[0].Kind != KindXBPQ || cfg.Sites[0].Kind.Unsupported() {
+		t.Fatal(cfg.Sites)
+	}
+	if len(cfg.Parsers) != 1 || cfg.Parsers[0].URL != "https://example.com/parse?url=" {
+		t.Fatal(cfg.Parsers)
+	}
+	if !Classify(3, "csp_Custom", "", "").Unsupported() {
+		t.Fatal("custom jar misclassified")
+	}
+}
+
+func TestReadHashCommentsPreservesStrings(t *testing.T) {
+	const body = `{
+   "sites": [{"key":"demo","name":"演示\"#站点","type":1,"api":"./api#section"}],
+   # JSON parsing endpoints
+   "parses": [
+     {"name":"JSON","type":1,"url":"./parse?url="}, # inline comment
+     /* mixed comments */
+     # web parsing endpoints
+     {"name":"Web","type":0,"url":"./player#fragment"}, # trailing comma
+   ],
+   "notice":"第一集$https://example.com/1.m3u8#第二集$https://example.com/2.m3u8",
+   "flags":["test#flag", # array trailing comma
+   ], # object trailing comma
+ } # comment at end of file`
+	for _, prefix := range []string{"", "# leading comment\n", "// first\n/* second */\n# third\n"} {
+		for _, newline := range []string{"\n", "\r\n", "\r"} {
+			input := strings.ReplaceAll(prefix+body, "\n", newline)
+			cfg, err := Read(context.Background(), "https://example.com/TVbox.text", func(context.Context, string) (Response, error) {
+				return Response{Status: 200, ContentType: "text/plain; charset=utf-8", Body: []byte(input)}, nil
+			})
+			if err != nil {
+				t.Fatalf("prefix=%q newline=%q: %v", prefix, newline, err)
+			}
+			if len(cfg.Sites) != 1 || cfg.Sites[0].Name != "演示\"#站点" || cfg.Sites[0].API != "https://example.com/api#section" {
+				t.Fatalf("site strings changed: %+v", cfg.Sites)
+			}
+			if len(cfg.Parsers) != 2 || cfg.Parsers[1].URL != "https://example.com/player#fragment" {
+				t.Fatalf("parsers: %+v", cfg.Parsers)
+			}
+			if cfg.Notice != "第一集$https://example.com/1.m3u8#第二集$https://example.com/2.m3u8" || len(cfg.Flags) != 1 || cfg.Flags[0] != "test#flag" {
+				t.Fatalf("hash inside string changed: notice=%q flags=%v", cfg.Notice, cfg.Flags)
+			}
+		}
+	}
+}

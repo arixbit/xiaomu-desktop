@@ -32,9 +32,10 @@ func TestProbeFixture(t *testing.T) {
   searchUrl: "/search?wd=**&pg=fypage",
   class_name: "电影",
   class_url: "1",
-  一级: ".list&&.item"
+  一级: ".list&&.item",
+  搜索: ".list&&.item"
 };`, srv.URL)
-		case "/list/1/1":
+		case "/list/1/1", "/search":
 			_, _ = ioWrite(w, `<div class="list"><div class="item"><a href="/v/7">示例甲</a><img data-src="/p.jpg"></div></div>`)
 		case "/v/7":
 			_, _ = ioWrite(w, `<h1>示例甲</h1><div class="eps"><a href="/play/7">第1集</a></div>`)
@@ -53,6 +54,7 @@ func TestProbeFixture(t *testing.T) {
 	defer srv.Close()
 
 	rows, err := Run(context.Background(), Options{
+		AssetsDir: "../drpy/assets",
 		ConfigURL: srv.URL + "/cfg.json",
 		N:         2,
 		Timeout:   15 * time.Second,
@@ -72,6 +74,16 @@ func TestProbeFixture(t *testing.T) {
 	}
 	if rows[1].Status != "SKIP" || rows[1].Kind != config.KindCSP {
 		t.Fatalf("jar %+v", rows[1])
+	}
+	searched, err := Run(context.Background(), Options{
+		AssetsDir: "../drpy/assets",
+		ConfigURL: srv.URL + "/cfg.json",
+		Query:     "示例",
+		N:         1,
+		Fetch:     config.HTTPFetcher(srv.Client()),
+	})
+	if err != nil || len(searched) != 1 || searched[0].Status != "PASS" {
+		t.Fatalf("search probe: %+v, %v", searched, err)
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/arixbit/xiaomu-desktop/internal/urljoin"
+	"github.com/egoist/mygo/netproxy"
 )
 
 const playlistLimit = 8 << 20
@@ -42,13 +43,13 @@ func Start(headers map[string]string) (*Proxy, error) {
 	if err != nil {
 		return nil, err
 	}
+	transport := netproxy.Transport().Clone()
+	transport.DisableCompression = true
 	p := &Proxy{
 		base:    "http://" + ln.Addr().String(),
 		ln:      ln,
 		headers: clone(headers),
-		client: &http.Client{
-			Transport: &http.Transport{DisableCompression: true, Proxy: http.ProxyFromEnvironment},
-		},
+		client:  &http.Client{Transport: transport},
 	}
 	p.client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {
@@ -118,7 +119,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.apply(req)
-	if rg := r.Header.Get("Range"); rg != "" {
+	// A rewritten playlist has different byte offsets from its upstream.
+	// Fetch it whole; segment and MP4 byte ranges still pass through.
+	if rg := r.Header.Get("Range"); rg != "" && !playlist("", u.Path) {
 		req.Header.Set("Range", rg)
 	}
 	resp, err := p.client.Do(req)
@@ -130,14 +133,24 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	base := u
+	if resp.Request != nil && resp.Request.URL != nil {
+		base = resp.Request.URL
+	}
 
 	if r.Method == http.MethodHead {
 		copyMediaHeaders(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
 		return
 	}
-	if playlist(resp.Header.Get("Content-Type"), u.Path) {
-		p.writePlaylist(w, resp, u.String())
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		copyMediaHeaders(w.Header(), resp.Header)
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+		return
+	}
+	if playlist(resp.Header.Get("Content-Type"), base.Path) {
+		p.writePlaylist(w, resp, base.String())
 		return
 	}
 	// Sniff a short prefix so a playlist without a useful content type
@@ -145,13 +158,17 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	buf := make([]byte, 64)
 	n, _ := io.ReadFull(resp.Body, buf)
 	if n > 0 && bytes.HasPrefix(bytes.TrimSpace(buf[:n]), []byte("#EXTM3U")) {
+		if resp.StatusCode == http.StatusPartialContent {
+			p.writePlaylist(w, resp, base.String())
+			return
+		}
 		rest, err := io.ReadAll(io.LimitReader(resp.Body, playlistLimit))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
 		body := append(append([]byte{}, buf[:n]...), rest...)
-		p.writeRewritten(w, resp.StatusCode, resp.Header, u.String(), body)
+		p.writeRewritten(w, base.String(), body)
 		return
 	}
 	copyMediaHeaders(w.Header(), resp.Header)
@@ -163,23 +180,41 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Proxy) writePlaylist(w http.ResponseWriter, resp *http.Response, playlistURL string) {
+	if resp.StatusCode == http.StatusPartialContent {
+		// Extensionless playlist endpoints can only be identified after the
+		// response. Retry without the player's range before rewriting.
+		req := resp.Request.Clone(resp.Request.Context())
+		req.Header.Del("Range")
+		_ = resp.Body.Close()
+		full, err := p.client.Do(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer full.Body.Close()
+		if full.StatusCode != http.StatusOK {
+			http.Error(w, "upstream did not return a complete playlist", http.StatusBadGateway)
+			return
+		}
+		resp = full
+		playlistURL = full.Request.URL.String()
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, playlistLimit))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	p.writeRewritten(w, resp.StatusCode, resp.Header, playlistURL, body)
+	p.writeRewritten(w, playlistURL, body)
 }
 
-func (p *Proxy) writeRewritten(w http.ResponseWriter, status int, hdr http.Header, playlistURL string, body []byte) {
-	out := rewriteM3U8(string(body), playlistURL, p.Wrap)
-	h := w.Header()
-	if ct := hdr.Get("Content-Type"); ct != "" {
-		h.Set("Content-Type", ct)
-	} else {
-		h.Set("Content-Type", "application/vnd.apple.mpegurl")
+func (p *Proxy) writeRewritten(w http.ResponseWriter, playlistURL string, body []byte) {
+	if !bytes.HasPrefix(bytes.TrimSpace(body), []byte("#EXTM3U")) {
+		http.Error(w, "upstream returned a page instead of an HLS playlist", http.StatusBadGateway)
+		return
 	}
-	w.WriteHeader(status)
+	out := rewriteM3U8(string(body), playlistURL, p.Wrap)
+	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, out)
 }
 

@@ -19,7 +19,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arixbit/xiaomu-desktop/internal/iptv"
 	"github.com/arixbit/xiaomu-desktop/internal/urljoin"
+	"github.com/egoist/mygo/netproxy"
 )
 
 const maxBytes = 32 << 20
@@ -32,6 +34,7 @@ const (
 	KindJSON    Kind = "json"   // type 1, JSON CMS
 	KindDRPY2   Kind = "drpy2"  // type 3, drpy2 engine plus a rule
 	KindFongMi  Kind = "fongmi" // type 3, FongMi class spider
+	KindXBPQ    Kind = "xbpq"   // csp_XBPQ text rules interpreted natively
 	KindCSP     Kind = "csp"    // csp_ jar class, not supported
 	KindPython  Kind = "python" // .py spider, not supported
 	KindUnknown Kind = "unknown"
@@ -40,7 +43,7 @@ const (
 // Unsupported reports kinds this prototype does not run.
 func (k Kind) Unsupported() bool {
 	switch k {
-	case KindCSP, KindPython, KindUnknown, KindFongMi, KindXML, KindJSON:
+	case KindCSP, KindPython, KindUnknown:
 		return true
 	default:
 		return false
@@ -64,21 +67,34 @@ type Site struct {
 	Kind Kind   `json:"kind"`
 }
 
+// Parser is a TVBox web (type 0) or JSON (type 1) playback resolver.
+type Parser struct {
+	Name string          `json:"name"`
+	Type int             `json:"type"`
+	URL  string          `json:"url"`
+	Ext  json.RawMessage `json:"ext,omitempty"`
+}
+
 // Config is a single (non-depot) configuration.
 type Config struct {
-	URL       string `json:"url"`
-	Spider    string `json:"spider,omitempty"`
-	Sites     []Site `json:"sites"`
-	Notice    string `json:"notice,omitempty"`
-	FromDepot bool   `json:"-"`
-	Line      string `json:"-"`
+	Parsers   []Parser      `json:"parses,omitempty"`
+	Flags     []string      `json:"flags,omitempty"`
+	URL       string        `json:"url"`
+	Spider    string        `json:"spider,omitempty"`
+	Sites     []Site        `json:"sites"`
+	Lives     []iptv.Source `json:"lives,omitempty"`
+	Notice    string        `json:"notice,omitempty"`
+	FromDepot bool          `json:"-"`
+	Line      string        `json:"-"`
+	Lines     []Line        `json:"-"` // available choices when this document is a depot
 }
 
 // Response is one HTTP response used to load a config.
 type Response struct {
-	Status int
-	Body   []byte
-	URL    string // final URL after redirects; empty means the request URL
+	Status      int
+	ContentType string
+	Body        []byte
+	URL         string // final URL after redirects; empty means the request URL
 }
 
 // Fetcher loads one URL. Tests supply a map; the CLI uses HTTPFetcher.
@@ -87,8 +103,12 @@ type Fetcher func(ctx context.Context, u string) (Response, error)
 // HTTPFetcher downloads with a plain user agent. file: URLs are read from
 // disk. The client follows redirects.
 func HTTPFetcher(client *http.Client) Fetcher {
+	return httpFetcher(client, nil)
+}
+
+func httpFetcher(client *http.Client, headers map[string]string) Fetcher {
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = &http.Client{Transport: netproxy.Transport(), Timeout: 30 * time.Second}
 	}
 	return func(ctx context.Context, raw string) (Response, error) {
 		if strings.HasPrefix(raw, "file://") {
@@ -104,6 +124,9 @@ func HTTPFetcher(client *http.Client) Fetcher {
 			return Response{}, err
 		}
 		req.Header.Set("User-Agent", "xiaomu/0.0.1")
+		for name, value := range headers {
+			req.Header.Set(name, value)
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			return Response{}, err
@@ -117,7 +140,7 @@ func HTTPFetcher(client *http.Client) Fetcher {
 		if resp.Request != nil && resp.Request.URL != nil {
 			final = resp.Request.URL.String()
 		}
-		return Response{Status: resp.StatusCode, Body: body, URL: final}, nil
+		return Response{Status: resp.StatusCode, ContentType: resp.Header.Get("Content-Type"), Body: body, URL: final}, nil
 	}
 }
 
@@ -135,6 +158,34 @@ func load(ctx context.Context, pageURL, line string, fetch Fetcher, depth int) (
 	if depth > 4 {
 		return nil, fmt.Errorf("config: depot nested too deep at %s", pageURL)
 	}
+	cfg, err := Read(ctx, pageURL, fetch)
+	if err != nil {
+		return nil, err
+	}
+	if len(cfg.Lines) == 0 {
+		return cfg, nil
+	}
+	picked, err := pickLine(cfg.Lines, line)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err = load(ctx, picked.URL, "", fetch, depth+1)
+	if err != nil {
+		return nil, err
+	}
+	cfg.FromDepot, cfg.Line = true, picked.Name
+	return cfg, nil
+}
+
+// Read loads one document without choosing a depot line. Lines and Sites have
+// resolved URLs; callers can present the choices before fetching another file.
+func Read(ctx context.Context, pageURL string, fetch Fetcher) (*Config, error) {
+	if extOf(pageURL) == ".jar" {
+		return nil, fmt.Errorf("config: refusing to download jar %s", pageURL)
+	}
+	if fetch == nil {
+		fetch = HTTPFetcher(nil)
+	}
 	res, err := fetchFallback(ctx, pageURL, fetch)
 	if err != nil {
 		return nil, err
@@ -145,34 +196,40 @@ func load(ctx context.Context, pageURL, line string, fetch Fetcher, depth int) (
 	}
 	body, err := Decode(res.Body)
 	if err != nil {
-		return nil, fmt.Errorf("config: %s: %w", pageURL, err)
+		return nil, fmt.Errorf("config: %s: HTTP %d%s: %w", pageURL, res.Status, contentTypeDetail(res.ContentType), err)
+	}
+	if !looksLikeJSON(body) {
+		what := "返回的内容不是 TVBox 配置 JSON 或 IPTV 频道列表，请检查配置地址"
+		if strings.HasPrefix(strings.TrimSpace(string(body)), "<") || strings.Contains(strings.ToLower(res.ContentType), "html") {
+			what = "返回的是 HTML 页面，不是 TVBox 配置 JSON，请检查配置地址"
+		} else if channels, err := iptv.Parse(base, body); err == nil {
+			return &Config{URL: base, Lives: []iptv.Source{{Name: "IPTV 直播", Channels: channels}}}, nil
+		}
+		return nil, fmt.Errorf("config: %s: HTTP %d%s: %s", pageURL, res.Status, contentTypeDetail(res.ContentType), what)
 	}
 	clean := Strip(body)
+	if strings.HasPrefix(strings.TrimSpace(string(clean)), "[") {
+		lives, err := iptv.ParseSources(base, clean)
+		if err != nil {
+			return nil, err
+		}
+		return &Config{URL: base, Lives: lives}, nil
+	}
 	var head struct {
 		URLs   []Line          `json:"urls"`
 		Sites  json.RawMessage `json:"sites"`
 		Spider string          `json:"spider"`
 		Notice string          `json:"notice"`
+		Lives  json.RawMessage `json:"lives"`
 	}
 	if err := json.Unmarshal(clean, &head); err != nil {
-		return nil, fmt.Errorf("config: parse %s: %w", pageURL, err)
+		return nil, fmt.Errorf("config: parse %s: HTTP %d%s: %w", pageURL, res.Status, contentTypeDetail(res.ContentType), err)
 	}
-	if isDepot(head.URLs, head.Sites) {
-		picked, err := pickLine(head.URLs, line)
-		if err != nil {
-			return nil, err
+	if isDepot(head.URLs, head.Sites) && (len(head.Lives) == 0 || string(head.Lives) == "null") {
+		for i := range head.URLs {
+			head.URLs[i].URL = urljoin.Join(base, strings.TrimSpace(head.URLs[i].URL))
 		}
-		next := urljoin.Join(base, strings.TrimSpace(picked.URL))
-		if extOf(next) == ".jar" {
-			return nil, fmt.Errorf("config: refusing to download jar %s", next)
-		}
-		cfg, err := load(ctx, next, "", fetch, depth+1)
-		if err != nil {
-			return nil, err
-		}
-		cfg.FromDepot = true
-		cfg.Line = picked.Name
-		return cfg, nil
+		return &Config{URL: base, Lines: head.URLs, FromDepot: true}, nil
 	}
 	return buildConfig(base, clean, head.Spider, head.Notice)
 }
@@ -208,7 +265,10 @@ func pickLine(lines []Line, name string) (Line, error) {
 
 func buildConfig(base string, clean []byte, spider, notice string) (*Config, error) {
 	var raw struct {
-		Sites []struct {
+		Parsers []Parser        `json:"parses"`
+		Flags   []string        `json:"flags"`
+		Lives   json.RawMessage `json:"lives"`
+		Sites   []struct {
 			Key  string          `json:"key"`
 			Name string          `json:"name"`
 			Type int             `json:"type"`
@@ -221,9 +281,18 @@ func buildConfig(base string, clean []byte, spider, notice string) (*Config, err
 		return nil, fmt.Errorf("config: parse sites: %w", err)
 	}
 	cfg := &Config{
-		URL:    base,
-		Spider: resolveSpider(base, spider),
-		Notice: notice,
+		URL:     base,
+		Spider:  resolveSpider(base, spider),
+		Notice:  notice,
+		Parsers: raw.Parsers, Flags: raw.Flags,
+	}
+	for i := range cfg.Parsers {
+		cfg.Parsers[i].URL = urljoin.Join(base, cfg.Parsers[i].URL)
+	}
+	var err error
+	cfg.Lives, err = iptv.ParseSources(base, raw.Lives)
+	if err != nil {
+		return nil, fmt.Errorf("config: 读取直播配置：%w", err)
 	}
 	for _, s := range raw.Sites {
 		api := resolveMaybe(base, s.API)
@@ -293,9 +362,16 @@ func fetchFallback(ctx context.Context, raw string, fetch Fetcher) (Response, er
 		return Response{}, fmt.Errorf("config: get %s: %w", raw, err)
 	}
 	if res.Status < 200 || res.Status >= 300 {
-		return Response{}, fmt.Errorf("config: get %s: status %d", raw, res.Status)
+		return Response{}, fmt.Errorf("config: get %s: HTTP %d%s", raw, res.Status, contentTypeDetail(res.ContentType))
 	}
 	return res, nil
+}
+
+func contentTypeDetail(contentType string) string {
+	if contentType == "" {
+		return ""
+	}
+	return fmt.Sprintf(" (Content-Type %q)", contentType)
 }
 
 func failed(res Response, err error) bool {
@@ -309,6 +385,9 @@ func Classify(typ int, api, ext, source string) Kind {
 		return KindPython
 	}
 	if isCSP(api) {
+		if strings.Split(path.Base(api), ";")[0] == "csp_XBPQ" {
+			return KindXBPQ
+		}
 		return KindCSP
 	}
 	switch typ {

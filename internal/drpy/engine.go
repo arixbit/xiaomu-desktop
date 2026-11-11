@@ -1,11 +1,8 @@
 // Package drpy hosts a drpy2-style JavaScript module on QuickJS.
 //
 // The engine file (the site's api) is loaded as an ES module. Imports of
-// assets://js/lib/... resolve to files shipped with this package, or to a
-// directory the caller passes. Those shipped files are small stand-ins so
-// tests run offline; they are not cheerio, crypto-js, jsencrypt or the
-// drpy template. Point AssetsDir at the real files to load an upstream
-// engine, and keep that engine's license.
+// assets://js/lib/... resolve to the caller's AssetsDir, or to dependencies
+// alongside the selected engine. Libraries and site rules are not bundled.
 //
 // Host globals match the shell drpy2 calls: req, joinUrl, pdfh, pdfa, pd,
 // and local.get/set/delete.
@@ -13,24 +10,23 @@ package drpy
 
 import (
 	"context"
-	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/pdfh"
 	"github.com/arixbit/xiaomu-desktop/internal/urljoin"
+	"github.com/egoist/mygo/netproxy"
 	"modernc.org/quickjs"
 )
-
-//go:embed assets
-var embedded embed.FS
 
 // Request is one req() call from JavaScript.
 type Request struct {
@@ -54,7 +50,7 @@ type Fetcher func(ctx context.Context, req Request) (Result, error)
 type Options struct {
 	Fetch     Fetcher
 	Modules   map[string]string // module URL -> source, used before the network
-	AssetsDir string            // overrides assets:// files
+	AssetsDir string            // overrides assets:// files; modules.json maps module URLs to local files
 	Timeout   time.Duration
 }
 
@@ -66,12 +62,20 @@ type Engine struct {
 	fetch   Fetcher
 	modules map[string]string
 	assets  string
+	entry   string
 	ctx     context.Context
 	store   map[string]string
 }
 
 // Open starts a runtime and registers the host globals.
 func Open(opt Options) (*Engine, error) {
+	modules, err := readModuleOverrides(opt.AssetsDir)
+	if err != nil {
+		return nil, err
+	}
+	for name, src := range opt.Modules {
+		modules[name] = src
+	}
 	vm, err := quickjs.NewVM()
 	if err != nil {
 		return nil, err
@@ -79,16 +83,13 @@ func Open(opt Options) (*Engine, error) {
 	e := &Engine{
 		vm:      vm,
 		fetch:   opt.Fetch,
-		modules: opt.Modules,
+		modules: modules,
 		assets:  opt.AssetsDir,
 		store:   map[string]string{},
 		ctx:     context.Background(),
 	}
 	if e.fetch == nil {
 		e.fetch = httpFetch
-	}
-	if e.modules == nil {
-		e.modules = map[string]string{}
 	}
 	to := opt.Timeout
 	if to <= 0 {
@@ -131,6 +132,19 @@ func (e *Engine) Close() error {
 // Load evaluates the module at moduleURL. Source already in Options.Modules
 // is used; otherwise the module loader fetches it.
 func (e *Engine) Load(moduleURL string) error {
+	return e.LoadContext(context.Background(), moduleURL)
+}
+
+// LoadContext loads a module with cancellation for its network requests.
+func (e *Engine) LoadContext(ctx context.Context, moduleURL string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	e.ctx = ctx
+	e.entry = moduleURL
 	quoted, err := jsonQuote(moduleURL)
 	if err != nil {
 		return err
@@ -195,6 +209,110 @@ func (e *Engine) Call(ctx context.Context, name string, args ...any) (string, er
 	return stringify(res), nil
 }
 
+// CallAwait runs a method that returns a Promise. FongMi class spiders may
+// implement their methods asynchronously; drpy2's synchronous calls still use Call.
+func (e *Engine) CallAwait(ctx context.Context, name string, args ...any) (string, error) {
+	if !e.loaded {
+		return "", fmt.Errorf("drpy: engine not loaded")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	e.ctx = ctx
+	if ctx.Done() != nil {
+		done := make(chan struct{})
+		vm := e.vm
+		defer close(done)
+		go func() {
+			select {
+			case <-ctx.Done():
+				vm.Interrupt()
+			case <-done:
+			}
+		}()
+	}
+	atom, err := e.vm.NewAtom(name)
+	if err != nil {
+		return "", err
+	}
+	fn, err := e.eng.GetPropertyValue(atom)
+	if err != nil {
+		return "", err
+	}
+	defer fn.Free()
+	if fn.IsUndefined() {
+		return "", fmt.Errorf("drpy: no function %s", name)
+	}
+	res, err := fn.CallValue(e.eng, args...)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", err
+	}
+	defer res.Free()
+	var result string
+	var settled bool
+	var failure error
+	chained, err := res.Then(func(v quickjs.Value) {
+		value, convertErr := v.Any()
+		if convertErr != nil {
+			failure = convertErr
+		} else {
+			result = stringify(value)
+		}
+		settled = true
+	}, func(v quickjs.Value) {
+		failure = fmt.Errorf("drpy: %s: %s", name, jsReason(e.vm, v))
+		settled = true
+	})
+	if err != nil {
+		return "", fmt.Errorf("drpy: %s did not return a Promise: %w", name, err)
+	}
+	defer chained.Free()
+	for !settled {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		n, err := e.vm.ExecutePendingJobs()
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			return "", fmt.Errorf("drpy: %s: %w", name, err)
+		}
+		if n == 0 && !settled {
+			return "", fmt.Errorf("drpy: %s: Promise did not settle", name)
+		}
+	}
+	if failure != nil {
+		return "", failure
+	}
+	return result, nil
+}
+
+func jsReason(vm *quickjs.VM, v quickjs.Value) string {
+	atom, err := vm.NewAtom("message")
+	if err == nil {
+		message, getErr := v.GetPropertyValue(atom)
+		if getErr == nil {
+			defer message.Free()
+			if !message.IsUndefined() {
+				if value, convertErr := message.Any(); convertErr == nil {
+					return fmt.Sprint(value)
+				}
+			}
+		}
+	}
+	if value, err := v.Any(); err == nil {
+		return fmt.Sprint(value)
+	}
+	return "unknown JavaScript rejection"
+}
+
 func (e *Engine) register() error {
 	binds := []struct {
 		name string
@@ -232,6 +350,25 @@ globalThis.local = {
     return __xiaomuLocalDel("", a == null ? "" : String(a));
   }
 };
+// Timers run as QuickJS microtasks when the host drains pending jobs. The
+// delay is intentionally ignored; callbacks never enter QuickJS from Go threads.
+(() => {
+  let nextTimer = 1;
+  const pending = new Map();
+  globalThis.setTimeout = (callback, delay, ...args) => {
+    if (typeof callback !== 'function') throw new TypeError('setTimeout callback must be a function');
+    const id = nextTimer++;
+    pending.set(id, {callback, args});
+    Promise.resolve().then(() => {
+      const task = pending.get(id);
+      if (!task) return;
+      pending.delete(id);
+      task.callback(...task.args);
+    });
+    return id;
+  };
+  globalThis.clearTimeout = id => { pending.delete(Number(id)); };
+})();
 `
 
 func (e *Engine) hostReq(args []any) (any, error) {
@@ -276,13 +413,26 @@ func (e *Engine) hostReq(args []any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if res.Status >= 400 {
+		contentType := ""
+		for name, value := range res.Headers {
+			if strings.EqualFold(name, "Content-Type") {
+				contentType = value
+				break
+			}
+		}
+		if strings.Contains(strings.ToLower(contentType), "html") || strings.HasPrefix(strings.TrimSpace(res.Content), "<") {
+			return nil, fmt.Errorf("req %s: HTTP %d (Content-Type %q): 返回 HTML，站点接口可能已失效", raw, res.Status, contentType)
+		}
+	}
 	if res.Headers == nil {
 		res.Headers = map[string]string{}
 	}
 	return struct {
 		Content string            `json:"content"`
 		Headers map[string]string `json:"headers"`
-	}{Content: res.Content, Headers: res.Headers}, nil
+		Code    int               `json:"code"`
+	}{Content: res.Content, Headers: res.Headers, Code: res.Status}, nil
 }
 
 func (e *Engine) hostJoin(args []any) (any, error) {
@@ -328,6 +478,9 @@ func (e *Engine) normalize(_ *quickjs.VM, base, name string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("drpy: empty module specifier")
 	}
+	if _, ok := e.modules[name]; ok {
+		return name, nil
+	}
 	if strings.HasPrefix(name, "assets://") || strings.Contains(name, "://") {
 		return name, nil
 	}
@@ -347,41 +500,86 @@ func (e *Engine) normalize(_ *quickjs.VM, base, name string) (string, error) {
 
 func (e *Engine) loadModule(_ *quickjs.VM, name string) (string, error) {
 	if src, ok := e.modules[name]; ok {
-		return asModule(src), nil
+		return asModule(name, src), nil
 	}
 	if strings.HasPrefix(name, "assets://") {
-		src, err := e.readAsset(strings.TrimPrefix(name, "assets://"))
-		if err != nil {
+		key := strings.TrimPrefix(name, "assets://")
+		src, err := e.readAsset(key)
+		if err == nil {
+			return asModule(name, src), nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
 			return "", err
 		}
-		return asModule(src), nil
+		if strings.HasPrefix(key, "js/lib/") && (strings.HasPrefix(e.entry, "https://") || strings.HasPrefix(e.entry, "http://") || strings.HasPrefix(e.entry, "file://")) {
+			src, err = e.loadModule(nil, urljoin.Join(e.entry, strings.TrimPrefix(key, "js/lib/")))
+			if err == nil {
+				return src, nil
+			}
+		}
+		return "", fmt.Errorf("drpy: 依赖 %s 加载失败，请在脚本目录提供真实的 %s：%w", name, key, err)
 	}
 	if strings.HasPrefix(name, "file://") {
 		b, err := os.ReadFile(strings.TrimPrefix(name, "file://"))
 		if err != nil {
 			return "", err
 		}
-		return asModule(string(b)), nil
+		return asModule(name, string(b)), nil
 	}
 	if strings.HasPrefix(name, "http://") || strings.HasPrefix(name, "https://") {
 		res, err := e.fetch(e.ctx, Request{URL: name, Method: http.MethodGet})
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("drpy: module %s: %w", name, err)
 		}
-		return asModule(res.Content), nil
+		contentType := ""
+		for k, v := range res.Headers {
+			if strings.EqualFold(k, "Content-Type") {
+				contentType = v
+				break
+			}
+		}
+		if res.Status != 0 && (res.Status < 200 || res.Status >= 300) {
+			return "", fmt.Errorf("drpy: module %s: HTTP %d (Content-Type %q)", name, res.Status, contentType)
+		}
+		// Raw file hosts also serve JavaScript as plain text or binary data.
+		mediaType := strings.ToLower(strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0]))
+		switch mediaType {
+		case "", "text/plain", "application/octet-stream",
+			"text/javascript", "application/javascript", "application/x-javascript",
+			"text/ecmascript", "application/ecmascript":
+		default:
+			return "", fmt.Errorf("drpy: module %s: HTTP %d: expected JavaScript, got Content-Type %q", name, res.Status, contentType)
+		}
+		if strings.HasPrefix(strings.TrimLeft(res.Content, "\ufeff \t\r\n"), "<") {
+			return "", fmt.Errorf("drpy: module %s: HTTP %d: expected JavaScript, got HTML/XML (Content-Type %q)", name, res.Status, contentType)
+		}
+		return asModule(name, res.Content), nil
 	}
 	return "", fmt.Errorf("drpy: cannot load module %s", name)
 }
 
 // asModule lets a classic script (crypto-js, jsencrypt) load as an ES module.
 // Files that already export are returned unchanged. Others get a module and
-// exports binding so their UMD wrapper can run, and CryptoJS is published
-// on globalThis when the script provides it.
-func asModule(src string) string {
+// exports binding so their UMD wrapper can run. Publish the browser globals
+// that drpy expects when those wrappers choose their CommonJS branch.
+func asModule(name, src string) string {
 	if isESModule(src) {
 		return src
 	}
-	return scriptPrelude + src + scriptFooter
+	footer := scriptFooter
+	u, _ := url.Parse(name)
+	if u != nil {
+		global := map[string]string{
+			"jinja.js": "jinja", "json5.js": "JSON5",
+			"pako.min.js": "pako", "pako.js": "pako",
+			"jsencrypt.js": "JSEncrypt", "jsencrypt.min.js": "JSEncrypt",
+			"node-rsa.js": "NodeRSA",
+		}[strings.ToLower(path.Base(u.Path))]
+		if global != "" {
+			footer += fmt.Sprintf("\nif(module.exports && (typeof module.exports === 'function' || Object.keys(module.exports).length)) globalThis[%q] = module.exports[%q] || module.exports.default || module.exports;\n", global, global)
+		}
+	}
+	return scriptPrelude + src + footer
 }
 
 func isESModule(src string) bool {
@@ -401,20 +599,55 @@ const scriptFooter = "\n;try{var __xiaomuOut=module.exports;if(__xiaomuOut&&__xi
 
 func (e *Engine) readAsset(key string) (string, error) {
 	key = strings.TrimPrefix(key, "/")
+	if !filepath.IsLocal(key) {
+		return "", fmt.Errorf("drpy: invalid asset path %q", key)
+	}
 	if e.assets != "" {
 		p := filepath.Join(e.assets, filepath.FromSlash(key))
 		if b, err := os.ReadFile(p); err == nil {
 			return string(b), nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
 		}
 		if b, err := os.ReadFile(filepath.Join(e.assets, filepath.Base(key))); err == nil {
 			return string(b), nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
 		}
 	}
-	b, err := embedded.ReadFile("assets/" + key)
-	if err != nil {
-		return "", fmt.Errorf("drpy: asset %s: %w", key, err)
+	return "", fmt.Errorf("drpy: asset %s: %w", key, os.ErrNotExist)
+}
+
+// readModuleOverrides keeps URL-specific replacements in the caller's assets
+// directory. Modules retain their original URL so relative imports still work.
+func readModuleOverrides(dir string) (map[string]string, error) {
+	modules := map[string]string{}
+	if dir == "" {
+		return modules, nil
 	}
-	return string(b), nil
+	manifest := filepath.Join(dir, "modules.json")
+	b, err := os.ReadFile(manifest)
+	if os.IsNotExist(err) {
+		return modules, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("drpy: module overrides %s: %w", manifest, err)
+	}
+	var files map[string]string
+	if err := json.Unmarshal(b, &files); err != nil {
+		return nil, fmt.Errorf("drpy: module overrides %s: %w", manifest, err)
+	}
+	for name, file := range files {
+		if !filepath.IsLocal(file) {
+			return nil, fmt.Errorf("drpy: module %s: override path %q must be relative to %s", name, file, dir)
+		}
+		src, err := os.ReadFile(filepath.Join(dir, file))
+		if err != nil {
+			return nil, fmt.Errorf("drpy: module %s: %w", name, err)
+		}
+		modules[name] = string(src)
+	}
+	return modules, nil
 }
 
 func httpFetch(ctx context.Context, req Request) (Result, error) {
@@ -433,7 +666,7 @@ func httpFetch(ctx context.Context, req Request) (Result, error) {
 	for k, v := range req.Headers {
 		httpReq.Header.Set(k, v)
 	}
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := &http.Client{Transport: netproxy.Transport(), Timeout: 20 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return Result{}, err

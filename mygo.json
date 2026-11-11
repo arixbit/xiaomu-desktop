@@ -2,6 +2,6 @@
   "name": "Xiaomu",
   "identifier": "dev.arixbit.xiaomu",
   "version": "0.1.0",
-  "main": "cmd/xiaomu",
+  "main": "./cmd/xiaomu",
   "out": "build"
 }
