@@ -30,19 +30,33 @@ type cmsSession struct {
 	client *http.Client
 }
 
-func openCMS(ctx context.Context, site config.Site) (*Session, []Category, error) {
+// OpenCMS opens a CMS session without fetching its optional category index.
+// Search and detail endpoints can work even when that index is unavailable.
+func OpenCMS(site config.Site) (*Session, error) {
+	if site.Kind != config.KindJSON && site.Kind != config.KindXML {
+		return nil, fmt.Errorf("站点不是 CMS 类型：%s", site.Kind)
+	}
 	u, err := url.Parse(site.API)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return nil, nil, fmt.Errorf("CMS 站点地址无效：%s", site.API)
+		return nil, fmt.Errorf("CMS 站点地址无效：%s", site.API)
 	}
 	c := &cmsSession{api: site.API, kind: site.Kind, client: &http.Client{
 		Transport: netproxy.Transport(), Timeout: 25 * time.Second,
 	}}
-	categories, err := c.categories(ctx)
+	return &Session{cms: c, kind: site.Kind}, nil
+}
+
+func openCMS(ctx context.Context, site config.Site) (*Session, []Category, error) {
+	s, err := OpenCMS(site)
 	if err != nil {
 		return nil, nil, err
 	}
-	return &Session{cms: c, kind: site.Kind}, categories, nil
+	categories, err := s.cms.categories(ctx)
+	if err != nil {
+		s.Close()
+		return nil, nil, err
+	}
+	return s, categories, nil
 }
 
 func (c *cmsSession) categories(ctx context.Context) ([]Category, error) {

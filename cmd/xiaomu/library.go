@@ -24,6 +24,7 @@ type libraryDocument struct {
 type libraryBrowser struct {
 	root             *config.Config
 	cached           map[string]*config.Config
+	searchCache      *library.SearchCache
 	documents        []libraryDocument
 	items            []library.Item
 	seen             map[string]bool
@@ -83,7 +84,10 @@ func (a *app) startLibraryScan(query string, more bool) {
 		return
 	}
 	a.stopLibraryScan()
-	options := library.Options{Assets: strings.TrimSpace(a.browser.assets), Query: query, Cached: maps.Clone(l.cached)}
+	if l.searchCache == nil {
+		l.searchCache = &library.SearchCache{}
+	}
+	options := library.Options{Assets: strings.TrimSpace(a.browser.assets), Query: query, Cached: maps.Clone(l.cached), SearchCache: l.searchCache}
 	if more {
 		options.More = append([]library.Target(nil), l.more...)
 		if len(options.More) == 0 {
@@ -128,6 +132,11 @@ func (a *app) startLibraryScan(query string, more bool) {
 	} else {
 		go work()
 	}
+}
+
+func (a *app) reloadLibrary() {
+	a.library.searchCache = &library.SearchCache{}
+	a.startLibraryScan(a.library.query, false)
 }
 
 func (a *app) applyLibraryEvent(event library.Event) {
@@ -212,6 +221,9 @@ func (a *app) librarySummary() string {
 	if l.progress.Failed > 0 {
 		text += fmt.Sprintf(" · %d 个请求未成功", l.progress.Failed)
 	}
+	if l.progress.Cooling > 0 {
+		text += fmt.Sprintf(" · %d 个站点稍后重试", l.progress.Cooling)
+	}
 	if l.progress.Skipped > 0 {
 		text += fmt.Sprintf(" · 已跳过 %d 个站点", l.progress.Skipped)
 	}
@@ -221,7 +233,7 @@ func (a *app) librarySummary() string {
 func (a *app) openLibraryItem(item library.Item) {
 	assets := strings.TrimSpace(a.browser.assets)
 	a.run("读取影片详情", func(ctx context.Context) (jobResult, error) {
-		session, categories, err := source.Open(ctx, item.Entry.Site, assets)
+		session, err := source.OpenContent(ctx, item.Entry.Site, assets)
 		if err != nil {
 			return jobResult{}, err
 		}
@@ -241,7 +253,7 @@ func (a *app) openLibraryItem(item library.Item) {
 			if b.session != nil {
 				b.session.Close()
 			}
-			b.session, b.categories = session, categories
+			b.session, b.categories = session, nil
 			b.doc, b.site, b.line = item.Entry.Config, item.Entry.Site.Name, item.Entry.Line
 			b.detail, b.sidebar = &detail, "library"
 			if a.library.query != "" {
@@ -298,7 +310,7 @@ func (a *app) libraryView(c *ui.Context) {
 					l.stopped = true
 				}
 			} else if ui.Button(c, "重新加载").Disabled(a.busy).Clicked() {
-				a.startLibraryScan(l.query, false)
+				a.reloadLibrary()
 			}
 		})
 		if a.browser.detail != nil {

@@ -82,7 +82,14 @@ func runSite(ctx context.Context, site config.Site, opt Options) Result {
 	siteCtx, cancel := context.WithTimeout(ctx, opt.Timeout)
 	defer cancel()
 
-	session, categories, err := source.Open(siteCtx, site, opt.AssetsDir)
+	var session source.Session
+	var categories []catalog.Category
+	var err error
+	if opt.Query == "" {
+		session, categories, err = source.Open(siteCtx, site, opt.AssetsDir)
+	} else {
+		session, err = source.OpenContent(siteCtx, site, opt.AssetsDir)
+	}
 	if err != nil {
 		return finish("FAIL", err.Error())
 	}
@@ -96,7 +103,9 @@ func runSite(ctx context.Context, site config.Site, opt Options) Result {
 		row.Home = "fail"
 		return finish("FAIL", "home: 没有分类")
 	}
-	row.Home = "ok"
+	if opt.Query == "" {
+		row.Home = "ok"
+	}
 
 	var page catalog.Page
 	if opt.Query != "" {

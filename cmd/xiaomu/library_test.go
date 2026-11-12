@@ -1,16 +1,81 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/config"
 	"github.com/egoist/mygo/ui"
 )
+
+func TestCMSSearchAndDetailIgnoreCategoryEndpoint(t *testing.T) {
+	for _, kind := range []config.Kind{config.KindJSON, config.KindXML} {
+		t.Run(string(kind), func(t *testing.T) {
+			var categories atomic.Int32
+			var srv *httptest.Server
+			srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				q := r.URL.Query()
+				if q.Get("wd") == "" && q.Get("ids") == "" {
+					categories.Add(1)
+					http.Error(w, "categories unavailable", http.StatusForbidden)
+					return
+				}
+				if q.Get("token") != "fixture" {
+					t.Error("API query parameters lost")
+				}
+				if q.Get("ids") == "7" {
+					if kind == config.KindJSON {
+						fmt.Fprintf(w, `{"list":[{"vod_name":"示例","vod_play_from":"HLS$$$MP4","vod_play_url":"正片$%s/clip.m3u8?token=fixture$$$正片$%s/clip.mp4"}]}`, srv.URL, srv.URL)
+					} else {
+						fmt.Fprint(w, `<rss><list><video><id>7</id><name>示例</name><dl><dd flag="HLS">正片$/clip.m3u8?token=fixture</dd><dd flag="MP4">正片$/clip.mp4</dd></dl></video></list></rss>`)
+					}
+					return
+				}
+				if q.Get("wd") != "示例" || q.Get("pg") != "1" {
+					t.Errorf("unexpected search query: %s", r.URL.RawQuery)
+				}
+				if kind == config.KindJSON {
+					fmt.Fprint(w, `{"pagecount":1,"list":[{"vod_id":"7","vod_name":"示例"}]}`)
+				} else {
+					fmt.Fprint(w, `<rss><list pagecount="1"><video><id>7</id><name>示例</name></video></list></rss>`)
+				}
+			}))
+			defer srv.Close()
+			a := &app{}
+			defer a.close()
+			a.library.root = &config.Config{URL: srv.URL, Sites: []config.Site{{Key: "demo", Kind: kind, API: srv.URL + "/api?token=fixture"}}}
+			a.library.cached = map[string]*config.Config{}
+			a.browser.query = "示例"
+			a.searchLibrary()
+			if len(a.library.items) != 1 {
+				t.Fatalf("search blocked by categories: results=%d progress=%+v", len(a.library.items), a.library.progress)
+			}
+			a.openLibraryItem(a.library.items[0])
+			if a.browser.detail == nil || len(a.browser.detail.Sources) != 2 {
+				t.Fatalf("detail failed or playback sources lost: %s", a.status)
+			}
+			for i, suffix := range []string{"/clip.m3u8?token=fixture", "/clip.mp4"} {
+				group := a.browser.detail.Sources[i]
+				if len(group.Episodes) != 1 {
+					t.Fatalf("episode lost: %+v", group)
+				}
+				play, err := a.browser.session.Play(context.Background(), group.Name, group.Episodes[0])
+				if err != nil || play.URL != srv.URL+suffix {
+					t.Fatalf("media URL changed: %+v, %v", play, err)
+				}
+			}
+			if categories.Load() != 0 {
+				t.Fatalf("unexpected category requests: %d", categories.Load())
+			}
+		})
+	}
+}
 
 func TestLibraryResultUsesItsOwnSiteAndParser(t *testing.T) {
 	var srv *httptest.Server
@@ -108,6 +173,51 @@ func TestLibraryResultUsesItsOwnSiteAndParser(t *testing.T) {
 	a.startLibraryScan("示例", true)
 	if len(a.library.items) != 4 || len(a.library.more) != 0 {
 		t.Fatalf("pagination results=%d more=%d", len(a.library.items), len(a.library.more))
+	}
+}
+
+func TestLibraryReloadRetriesFailedSourcesAndRefreshesResults(t *testing.T) {
+	var good, flaky atomic.Int32
+	var recovered atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var version int32
+		if r.URL.Path == "/good" {
+			version = good.Add(1)
+		} else {
+			version = flaky.Add(1)
+			if !recovered.Load() {
+				http.Error(w, "blocked", http.StatusForbidden)
+				return
+			}
+		}
+		fmt.Fprintf(w, `{"pagecount":1,"list":[{"vod_id":"7","vod_name":%q}]}`, fmt.Sprintf("%s-%d", r.URL.Path, version))
+	}))
+	defer srv.Close()
+	a := &app{}
+	defer a.close()
+	a.library.root = &config.Config{URL: srv.URL, Sites: []config.Site{
+		{Key: "good", Kind: config.KindJSON, API: srv.URL + "/good"},
+		{Key: "flaky", Kind: config.KindJSON, API: srv.URL + "/flaky"},
+	}}
+	a.library.cached = map[string]*config.Config{}
+	a.browser.query = "示例"
+	a.searchLibrary()
+	a.searchLibrary()
+	if len(a.library.items) != 1 || good.Load() != 1 || flaky.Load() != 1 || a.library.progress.Cooling != 1 {
+		t.Fatalf("repeated search: good=%d flaky=%d progress=%+v", good.Load(), flaky.Load(), a.library.progress)
+	}
+	recovered.Store(true)
+	tt := ui.NewTester(a.view, 960, 640)
+	if err := tt.Click("重新加载"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.library.items) != 2 || good.Load() != 2 || flaky.Load() != 2 || a.library.progress.Cooling != 0 {
+		t.Fatalf("manual reload: good=%d flaky=%d progress=%+v", good.Load(), flaky.Load(), a.library.progress)
+	}
+	for _, item := range a.library.items {
+		if !strings.HasSuffix(item.Video.Name, "-2") {
+			t.Fatalf("reload kept old results: %+v", item.Video)
+		}
 	}
 }
 

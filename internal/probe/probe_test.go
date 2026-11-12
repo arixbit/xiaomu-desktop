@@ -87,4 +87,25 @@ func TestProbeFixture(t *testing.T) {
 	}
 }
 
+func TestProbeSearchDoesNotRequireCMSCategories(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		switch {
+		case q.Get("ids") == "7":
+			fmt.Fprintf(w, `{"list":[{"vod_name":"示例","vod_play_from":"直链","vod_play_url":"正片$%s/clip.mp4"}]}`, srv.URL)
+		case q.Get("wd") == "示例":
+			fmt.Fprint(w, `{"pagecount":1,"list":[{"vod_id":"7","vod_name":"示例"}]}`)
+		default:
+			t.Error("search probe requested categories")
+			http.Error(w, "categories unavailable", http.StatusForbidden)
+		}
+	}))
+	defer srv.Close()
+	result := runSite(context.Background(), config.Site{Kind: config.KindJSON, API: srv.URL}, Options{Query: "示例", Timeout: time.Second})
+	if result.Status != "PASS" || result.Home != "-" || result.Category != "ok" || result.Detail != "ok" || result.Play != "ok" {
+		t.Fatalf("search probe: %+v", result)
+	}
+}
+
 func ioWrite(w http.ResponseWriter, s string) (int, error) { return fmt.Fprint(w, s) }

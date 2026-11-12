@@ -54,12 +54,13 @@ type Target struct {
 
 // Options controls a home/search scan. Cached documents are read-only snapshots.
 type Options struct {
-	Assets  string
-	Query   string
-	Cached  map[string]*config.Config
-	More    []Target
-	Fetch   config.Fetcher
-	Timeout time.Duration
+	Assets      string
+	Query       string
+	Cached      map[string]*config.Config
+	More        []Target
+	Fetch       config.Fetcher
+	Timeout     time.Duration
+	SearchCache *SearchCache
 }
 
 // Result is one site's completed page; failures do not discard other results.
@@ -75,6 +76,7 @@ type Event struct {
 	Result                            *Result
 	Err                               error
 	Completed, Total, Skipped, Failed int
+	Cooling                           int
 }
 
 type task struct {
@@ -84,10 +86,11 @@ type task struct {
 }
 
 type completion struct {
-	task task
-	doc  *config.Config
-	page catalog.Page
-	err  error
+	task    task
+	doc     *config.Config
+	page    catalog.Page
+	err     error
+	cooling bool
 }
 
 // Scan loads all lines in an imported depot and streams recommendations (empty
@@ -202,7 +205,9 @@ func Scan(ctx context.Context, root *config.Config, options Options, emit func(E
 			if done.task.target == nil {
 				runningDocs--
 			}
-			if done.err != nil {
+			if done.cooling {
+				progress.Cooling++
+			} else if done.err != nil {
 				progress.Failed++
 			}
 			if done.task.target != nil {
@@ -246,7 +251,31 @@ func execute(parent context.Context, work task, options Options) completion {
 		return out
 	}
 	target := work.target
-	session, categories, err := source.Open(ctx, target.Entry.Site, options.Assets)
+	if err := ctx.Err(); err != nil {
+		out.err = err
+		return out
+	}
+	if options.Query != "" && options.SearchCache != nil {
+		key := searchKey{origin: target.Entry.Key(), assets: options.Assets, kind: target.Entry.Site.Kind, query: options.Query, page: max(target.Page, 1)}
+		if page, err, ok := options.SearchCache.get(key); ok {
+			out.page, out.err, out.cooling = page, err, err != nil
+			return out
+		}
+		defer func() {
+			// Stopping or replacing a search must not mark its sources as failed.
+			if parent.Err() == nil {
+				options.SearchCache.put(key, out.page, out.err)
+			}
+		}()
+	}
+	var session source.Session
+	var categories []catalog.Category
+	var err error
+	if options.Query == "" {
+		session, categories, err = source.Open(ctx, target.Entry.Site, options.Assets)
+	} else {
+		session, err = source.OpenContent(ctx, target.Entry.Site, options.Assets)
+	}
 	if err != nil {
 		out.err = err
 		return out

@@ -44,6 +44,19 @@ func Home(ctx context.Context, session Session, categories []catalog.Category) (
 	return page, err
 }
 
+// OpenContent opens a site for search or detail without requesting optional
+// CMS categories. Script adapters still perform their normal initialization.
+func OpenContent(ctx context.Context, site config.Site, assets string) (Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if site.Kind == config.KindJSON || site.Kind == config.KindXML {
+		return catalog.OpenCMS(site)
+	}
+	session, _, err := Open(ctx, site, assets)
+	return session, err
+}
+
 // Open detects mislabeled type-3 scripts before choosing an adapter. Only
 // FongMi candidates are fetched for inspection; other sites retain their kind.
 func Open(ctx context.Context, site config.Site, assets string) (Session, []catalog.Category, error) {
