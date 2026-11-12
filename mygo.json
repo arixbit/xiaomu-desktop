@@ -3,5 +3,8 @@
   "identifier": "dev.arixbit.xiaomu",
   "version": "0.1.0",
   "main": "./cmd/xiaomu",
-  "out": "build"
+  "out": "build",
+  "macos": {
+    "minimumSystemVersion": "13.0"
+  }
 }

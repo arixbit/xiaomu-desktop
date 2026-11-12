@@ -6,10 +6,10 @@
 
 ## 下载与安装
 
-从 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest) 下载最新版本。首个公开版本为 **v0.1.0**，支持 macOS 12 及以上；Universal 安装包同时包含 Apple Silicon 和 Intel 版本，无需安装 Go。
+从 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest) 下载最新版本。首个公开版本为 **v0.1.0**，要求 macOS 13 及以上；Universal 安装包同时包含 Apple Silicon 和 Intel 版本，无需安装 Go。当前 Go 工具链的最低系统要求为 macOS 13，本版不支持 macOS 12。
 
 1. 下载 `xiaomu-0.1.0.dmg`，打开后将 `Xiaomu.app` 拖到“应用程序”。也可下载 ZIP，解压后移动 App。
-2. 本版使用本地签名，尚无 Developer ID 签名及 Apple 公证。首次打开如被系统拦截，请在确认下载来源后，到“系统设置 → 隐私与安全性”（旧版 macOS 为“系统偏好设置 → 安全性与隐私”）选择“仍要打开”。
+2. 本版使用本地签名，尚无 Developer ID 签名及 Apple 公证。首次打开如被系统拦截，请在确认下载来源后，到“系统设置 → 隐私与安全性”选择“仍要打开”。
 3. 打开小幕，点击“添加片源”，导入自己的配置地址；随后即可浏览推荐、搜索影片、选集播放，或进入“直播”导入 IPTV 列表。
 
 安装包附有 `SHA256SUMS` 校验文件。版本功能、验证范围和已知限制见 [v0.1.0 发布说明](docs/releases/v0.1.0.md)。
@@ -38,7 +38,7 @@ FongMi class 目前覆盖基础文本/JSON 请求与常见分类、详情、播�
 ## 环境
 
 - Go 1.27.3 或更新。`go.mod` 的 `go 1.27.3` 即工具链要求；Go 1.27 的 `go mod tidy` 会去掉与这一行相同的 `toolchain` 指令。
-- 播放窗口：macOS 12 及以上。MyGo 钉在 `v0.8.4-0.20261111083354-3f52033d99bb`（`video.OpenURL` / AVPlayer 在 v0.8.3 发布之后进入主线）。界面只用包 `ui`，没有网页前端。
+- 播放窗口：macOS 13 及以上。MyGo 钉在 `v0.8.4-0.20261111083354-3f52033d99bb`（`video.OpenURL` / AVPlayer 在 v0.8.3 发布之后进入主线）。界面只用包 `ui`，没有网页前端。
 - 探针在 Linux 和 macOS 上都能编译运行。
 
 ## 探针

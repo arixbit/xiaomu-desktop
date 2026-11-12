@@ -4,7 +4,7 @@
 
 ## 技术栈（已定，不要换）
 
-Go 1.27.3+。MyGo native 模板，只用 `ui` 包：无 Web 前端、无 Bun。无 cgo。JS 引擎 `modernc.org/quickjs`。播放用 `ui.Video`（AVPlayer）；`video.OpenURL` 不能设请求头，所以经 `127.0.0.1` 本地代理注入 Referer / UA。WebView 只留给以后的嗅探。目标 macOS 12+，darwin/universal。MyGo 版本以 `go.mod` 里的钉扎为准。
+Go 1.27.3+。MyGo native 模板，只用 `ui` 包：无 Web 前端、无 Bun。无 cgo。JS 引擎 `modernc.org/quickjs`。播放用 `ui.Video`（AVPlayer）；`video.OpenURL` 不能设请求头，所以经 `127.0.0.1` 本地代理注入 Referer / UA。WebView 只留给以后的嗅探。目标 macOS 13+，darwin/universal；Go 1.27.3 的最低系统要求为 macOS 13，App 声明需与可执行文件保持一致。MyGo 版本以 `go.mod` 里的钉扎为准。
 
 ## 目录
 
