@@ -52,11 +52,13 @@ type app struct {
 	panelTouched    bool
 	fullScreen      bool
 	playerOverlay   playerOverlayState
+	playerFocus     ui.Handle
 	autoNext        bool
 	autoNextPending bool
 }
 
 func (a *app) view(c *ui.Context) {
+	a.handleKeyboard(c)
 	if c.Vibrancy() {
 		c.Root().Background(ui.Transparent)
 	}

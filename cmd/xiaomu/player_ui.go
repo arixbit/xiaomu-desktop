@@ -77,7 +77,7 @@ func (a *app) playerScreen(c *ui.Context) {
 	screen.Children(func() {
 		ui.Row(c).Fill().Children(func() {
 			ui.Box(c).Grow(1).FillHeight().Clip().Children(func() {
-				ui.Video(c, p).Fill().Fit(ui.Contain).Label("视频画面")
+				ui.Video(c, p).Key(p).Fill().Fit(ui.Contain).Label("视频画面").Focusable().AutoFocus().Bind(&a.playerFocus)
 				a.playerState(c, p)
 				if showControls {
 					a.playerControls(c, p, hasEpisodes, compact)
@@ -222,11 +222,7 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 					playLabel = "播放"
 				}
 				if ui.Button(c, playLabel).Radius(16).Material(glass.Glass{Style: glass.Clear, Interactive: true}).TextColor(playerText).Clicked() {
-					if p.Playing() {
-						p.Pause()
-					} else {
-						p.Play()
-					}
+					togglePlayback(p)
 				}
 				if hasEpisodes && ui.Button(c, "下一集").Radius(16).Material(glass.Glass{Style: glass.Clear, Interactive: true}).TextColor(playerText).
 					Disabled(!current || episode+1 >= len(a.title.detail.Sources[source].Episodes)).Clicked() {
@@ -257,6 +253,7 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 					}
 					if ui.Button(c, fullLabel).Radius(16).Material(glass.Glass{Style: glass.Clear, Interactive: true}).TextColor(playerText).Clicked() {
 						a.window.ToggleFullScreen()
+						a.playerFocus.Focus(c)
 					}
 				}
 			})
