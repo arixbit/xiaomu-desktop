@@ -1,9 +1,14 @@
 {
   "name": "Xiaomu",
   "identifier": "dev.arixbit.xiaomu",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "main": "./cmd/xiaomu",
   "out": "build",
+  "updates": {
+    "publicKey": "+fHvmj1BfzANUNWPMbHUlnVPJkCBvcFZ26XuzcgYKUI=",
+    "github": "arixbit/xiaomu-desktop",
+    "deltas": 0
+  },
   "macos": {
     "icon": "xiaomu-icon/macos/AppIcon.icns",
     "minimumSystemVersion": "13.0"

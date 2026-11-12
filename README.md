@@ -6,13 +6,15 @@
 
 ## 下载与安装
 
-从 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest) 下载最新版本。当前版本为 **v0.2.0**，要求 macOS 13 及以上；Universal 安装包同时包含 Apple Silicon 和 Intel 版本，无需安装 Go。当前 Go 工具链的最低系统要求为 macOS 13，本版不支持 macOS 12。
+从 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest) 下载最新版本。当前版本为 **v0.3.0**，要求 macOS 13 及以上；Universal 安装包同时包含 Apple Silicon 和 Intel 版本，无需安装 Go。当前 Go 工具链的最低系统要求为 macOS 13，本版不支持 macOS 12。
 
-1. 下载 `xiaomu-0.2.0.dmg`，打开后将 `Xiaomu.app` 拖到“应用程序”。也可下载 ZIP，解压后移动 App。
+1. 下载 `xiaomu-0.3.0.dmg`，打开后将 `Xiaomu.app` 拖到“应用程序”。也可下载 ZIP，解压后移动 App。
 2. 本版使用本地签名，尚无 Developer ID 签名及 Apple 公证。首次打开如被系统拦截，请在确认下载来源后，到“系统设置 → 隐私与安全性”选择“仍要打开”。
 3. 打开小幕，在首页导入自己的配置地址；随后即可浏览推荐、搜索影片、选集播放，或进入“直播”导入 IPTV 列表。以后可在“片源”页管理配置。
 
-安装包附有 `SHA256SUMS` 校验文件。新导航、播放历史及验证范围见 [v0.2.0 发布说明](docs/releases/v0.2.0.md)。
+安装包附有 `SHA256SUMS` 校验文件。在线更新说明见 [v0.3.0 发布说明](docs/releases/v0.3.0.md)，新导航和播放历史见 [v0.2.0 发布说明](docs/releases/v0.2.0.md)。
+
+v0.3.0 起可从侧边栏或“小幕”菜单点“检查更新”。App 会在启动后及运行期间每天检查新版本，显示更新说明，由你选择安装、稍后提醒或跳过；默认不自动下载安装。安装后可重启生效，配置与播放历史继续保存在本机。请将 App 移到有写入权限的“应用程序”目录再更新。v0.2.0 及更早版本需手动安装一次 v0.3.0。
 
 ## 免责声明
 
@@ -74,6 +76,8 @@ go tool mygo dev
 ```sh
 go tool mygo build -platform darwin/universal
 ```
+
+对外发布使用 `sh scripts/build-release.sh`，它要求签名密钥并生成在线更新所需文件。密钥保管、发布步骤和更新附件见 [发布维护说明](docs/releasing.md)。开发模式不会自动检查更新。
 
 App 图标素材在 `xiaomu-icon/`。macOS 正式包使用其中的 `macos/AppIcon.icns`；开发运行使用 `resources/icon.png`，与图标集中已留边的 1024px 默认浅色版保持一致。深色及 Icon Composer 素材仅作设计源文件保留，当前不会随系统外观自动切换图标。
 

@@ -128,6 +128,7 @@ func playbackHeaders(referer, ua string) map[string]string {
 
 func main() {
 	a := &app{autoNext: true, persist: true}
+	a.initUpdates()
 	mygo.App.WhenReady(func() {
 		win := mygo.NewWindow(mygo.WindowOptions{
 			Title:         "小幕",

@@ -4,3 +4,4 @@
 mygo_windows_*.syso
 *.exe
 .DS_Store
+mygo-update.key
