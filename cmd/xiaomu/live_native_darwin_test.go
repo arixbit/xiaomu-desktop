@@ -62,7 +62,7 @@ func TestNativeIPTVHLS(t *testing.T) {
 	defer srv.Close()
 	a := &app{}
 	defer a.close()
-	a.loadConfig(srv.URL+"/channels.m3u", "")
+	a.loadConfig(srv.URL + "/channels.m3u")
 	if len(a.live.channels) != 1 {
 		t.Fatalf("no live channel: %s", a.status)
 	}

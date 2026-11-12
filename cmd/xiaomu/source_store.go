@@ -41,7 +41,12 @@ func readSavedSource(path string) (savedSource, error) {
 }
 
 func writeSavedSource(path string, source savedSource) error {
-	data, err := json.Marshal(source)
+	return writeJSONFile(path, source)
+}
+
+// writeJSONFile replaces path with v in one step, so a crash keeps the old file.
+func writeJSONFile(path string, v any) error {
+	data, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
@@ -108,8 +113,8 @@ func (a *app) restoreSavedSource() {
 	}
 	if source.URL != "" {
 		a.browser.configURL, a.browser.assets = source.URL, source.Assets
-		a.readConfig(source.URL, "", true)
+		a.readConfig(source.URL, true)
 	} else if source.LiveURL != "" {
-		a.showLive()
+		a.switchTab(routeLive)
 	}
 }

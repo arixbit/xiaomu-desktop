@@ -32,8 +32,8 @@ func (a *app) setLiveSources(sources []iptv.Source) {
 	a.live.group, a.live.query = "", ""
 }
 
+// showLive loads what the live tab needs when it comes on show.
 func (a *app) showLive() {
-	a.browser.sidebar = "live"
 	if a.live.restore {
 		a.importLive(a.live.url)
 	} else if a.live.selectedSource < 0 && len(a.live.sources) > 0 {
@@ -47,7 +47,7 @@ func (a *app) importLive(raw string) {
 		a.status = "请先粘贴直播列表地址"
 		return
 	}
-	a.run("导入直播", func(ctx context.Context) (jobResult, error) {
+	a.run(jobLive, "导入直播", func(ctx context.Context) (jobResult, error) {
 		doc, err := config.Load(ctx, raw, "", nil)
 		if err != nil {
 			return jobResult{}, err
@@ -55,18 +55,44 @@ func (a *app) importLive(raw string) {
 		if len(doc.Lives) == 0 {
 			return jobResult{}, fmt.Errorf("此配置没有 IPTV 直播，请导入 M3U、TXT 或含 lives 的配置")
 		}
-		return jobResult{apply: func() {
-			a.setLiveSources(doc.Lives)
-			a.live.url, a.live.input, a.live.restore = raw, raw, false
-			a.browser.sidebar = "live"
-			a.loadLiveSource(0)
-			if a.persist {
-				if err := a.saveLiveSource(raw); err != nil {
-					a.status += "；保存直播地址失败：" + err.Error()
-				}
-			}
-		}}, nil
-	})
+		return jobResult{apply: func() { a.applyLiveImport(raw, doc.Lives) }}, nil
+	}, nil)
+}
+
+// applyLiveImport makes a channel list the live source and shows it. A list
+// imported on its own takes priority over the lives of the film library.
+func (a *app) applyLiveImport(raw string, sources []iptv.Source) {
+	a.setLiveSources(sources)
+	a.live.url, a.live.input, a.live.restore, a.live.importOpen = raw, raw, false, false
+	a.switchTab(routeLive)
+	if a.persist {
+		if err := a.saveLiveSource(raw); err != nil {
+			a.status = "保存直播地址失败：" + err.Error()
+		}
+	}
+}
+
+// removeLive forgets the separately imported list; the lives of the film
+// library, if any, show again.
+func (a *app) removeLive() {
+	a.cancelJob(jobLive)
+	a.live.url, a.live.input, a.live.restore = "", "", false
+	var lives []iptv.Source
+	if root := a.library.root; root != nil {
+		lives = append(lives, root.Lives...)
+	}
+	for _, document := range a.library.documents {
+		if document.doc != a.library.root {
+			lives = append(lives, document.doc.Lives...)
+		}
+	}
+	a.setLiveSources(lives)
+	a.status = "已移除直播源"
+	if a.persist {
+		if err := a.saveLiveSource(""); err != nil {
+			a.status = "移除直播源失败：" + err.Error()
+		}
+	}
 }
 
 func (a *app) loadLiveSource(index int) {
@@ -74,7 +100,7 @@ func (a *app) loadLiveSource(index int) {
 		return
 	}
 	source := a.live.sources[index]
-	a.run("加载频道", func(ctx context.Context) (jobResult, error) {
+	a.run(jobLive, "加载频道", func(ctx context.Context) (jobResult, error) {
 		channels, err := config.LiveChannels(ctx, source, nil)
 		if err != nil {
 			return jobResult{}, err
@@ -82,9 +108,8 @@ func (a *app) loadLiveSource(index int) {
 		return jobResult{apply: func() {
 			a.live.channels, a.live.selectedSource = channels, index
 			a.live.group, a.live.query = "", ""
-			a.status = fmt.Sprintf("已加载 %d 个直播频道，选择频道即可播放", len(channels))
 		}}, nil
-	})
+	}, nil)
 }
 
 func (a *app) playLiveChannel(index, streamIndex int) {
@@ -110,9 +135,8 @@ func (a *app) startLiveChannel(index, streamIndex int) {
 			a.status = "此频道使用非 HTTP 直播协议；当前支持 HTTP/HTTPS 视频流，组播频道请使用 udpxy 转换后的地址"
 		} else {
 			a.live.started = time.Now()
-			a.playURL(stream.URL, stream.Headers)
-			if a.status == "正在播放" {
-				a.direct, a.playingLive = false, true
+			if a.playURL(stream.URL, stream.Headers) {
+				a.playingLive = true
 				return
 			}
 		}
@@ -121,81 +145,110 @@ func (a *app) startLiveChannel(index, streamIndex int) {
 
 }
 
+// listRow is a row of a plain list: a tab of the sidebar, a channel group.
+func listRow(c *ui.Context, label string, selected bool) ui.Element {
+	row := ui.Row(c).Key(label).FillWidth().Height(38).Padding(0, 12).Radius(11).
+		AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(label)
+	if selected {
+		row.Background(ui.RGBA(255, 255, 255, 0.16))
+	}
+	row.Children(func() {
+		text := ui.Text(c, label).SingleLine()
+		if !selected {
+			text.TextColor(textMuted)
+		}
+	})
+	return row
+}
+
 func (a *app) liveView(c *ui.Context) {
 	live := &a.live
-	ui.Column(c).Fill().Padding(28, 30).Gap(16).Children(func() {
-		ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "IPTV 直播").FontSize(26).Bold().Grow(1)
-			if ui.Button(c, "添加直播源").Disabled(a.busy).Clicked() {
+	if len(live.sources) == 0 {
+		ui.Column(c).Fill().Center().Gap(12).Children(func() {
+			ui.Text(c, "添加直播源，开始看电视").FontSize(24).Bold()
+			ui.Text(c, "支持 M3U、TXT 频道列表，以及 TVBox 配置中的直播。").TextColor(textMuted)
+			if primaryButton(c, "添加直播源").Clicked() {
 				live.importOpen = true
 			}
 		})
-		if len(live.sources) == 0 {
-			ui.Column(c).FillWidth().Grow(1).Center().Gap(12).Children(func() {
-				ui.Text(c, "添加直播源，开始看电视").FontSize(24).Bold()
-				ui.Text(c, "支持 M3U、TXT 频道列表，以及 TVBox 配置中的直播。")
-			})
-		} else {
-			ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
+		return
+	}
+	ui.Column(c).Fill().Gap(14).Children(func() {
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Grow(1).MinWidth(0).Wrap().Gap(8).Children(func() {
 				for i, source := range live.sources {
-					if ui.Button(c, source.Name).Key(fmt.Sprintf("live-source-%d", i)).
-						Selected(i == live.selectedSource).Disabled(a.busy).Clicked() {
+					if chip(c, source.Name, i == live.selectedSource).Key(fmt.Sprintf("live-source-%d", i)).Clicked() {
 						a.loadLiveSource(i)
 					}
 				}
 			})
-			ui.SearchField(c, &live.query).Label("频道搜索").Placeholder("搜索频道名称").FillWidth()
-			ui.Row(c).FillWidth().Wrap().Gap(6).Children(func() {
-				if ui.Button(c, "全部频道").Selected(live.group == "").Clicked() {
+			ui.SearchField(c, &live.query).Label("频道搜索").Placeholder("搜索频道").Width(240).Radius(20).Material(glassControl)
+		})
+		if len(live.channels) == 0 {
+			if a.running(jobLive) {
+				emptyState(c, "正在加载频道…", "频道读取后会显示在这里。")
+			} else {
+				emptyState(c, "这个直播来源没有频道", "换一个直播来源，或到片源页更换直播源。")
+			}
+			return
+		}
+		ui.Row(c).Grow(1).FillWidth().MinHeight(0).Gap(16).Children(func() {
+			ui.Scroll(c).Width(168).FillHeight().Gap(2).Children(func() {
+				if listRow(c, "全部频道", live.group == "").Clicked() {
 					live.group = ""
 				}
 				seen := map[string]bool{}
 				for _, channel := range live.channels {
-					if seen[channel.Group] {
+					if channel.Group == "" || seen[channel.Group] {
 						continue
 					}
 					seen[channel.Group] = true
-					if ui.Button(c, channel.Group).Key("live-group-" + channel.Group).Selected(live.group == channel.Group).Clicked() {
+					if listRow(c, channel.Group, live.group == channel.Group).Clicked() {
 						live.group = channel.Group
 					}
 				}
 			})
-			ui.Scroll(c).FillWidth().Grow(1).Gap(8).Children(func() {
-				visible := 0
+			ui.Scroll(c).Grow(1).MinWidth(0).FillHeight().Gap(8).Children(func() {
+				query, visible := strings.ToLower(strings.TrimSpace(live.query)), 0
 				for i, channel := range live.channels {
-					if live.group != "" && channel.Group != live.group || !strings.Contains(strings.ToLower(channel.Name), strings.ToLower(strings.TrimSpace(live.query))) {
+					if live.group != "" && channel.Group != live.group || !strings.Contains(strings.ToLower(channel.Name), query) {
 						continue
 					}
 					visible++
-					ui.Row(c).Key(fmt.Sprintf("live-channel-%d", i)).FillWidth().Padding(12).Gap(10).Radius(14).
-						Material(glass.Glass{Style: glass.Clear}).AlignItems(ui.Center).Children(func() {
-						ui.Column(c).Grow(1).Gap(4).Children(func() {
-							ui.Text(c, channel.Name).Bold()
-							ui.Text(c, fmt.Sprintf("%s · %d 条线路", channel.Group, len(channel.Streams))).FontSize(12)
-						})
-						if ui.Button(c, "播放").Label("播放 " + channel.Name).Disabled(a.busy).Clicked() {
-							a.playLiveChannel(i, 0)
-						}
+					row := ui.Row(c).Key(fmt.Sprintf("live-channel-%d", i)).FillWidth().Padding(12, 16).Gap(12).Radius(16).
+						AlignItems(ui.Center).Background(surface).Cursor(ui.CursorPointer).Label("播放 " + channel.Name)
+					row.Children(func() {
+						ui.Text(c, channel.Name).Bold().SingleLine()
+						ui.Text(c, fmt.Sprintf("%s · %d 条线路", channel.Group, len(channel.Streams))).FontSize(12).TextColor(textMuted).SingleLine()
 					})
+					if row.Clicked() {
+						a.playLiveChannel(i, 0)
+					}
 				}
-				if visible == 0 && !a.busy {
-					ui.Text(c, "没有找到频道，可换个关键词或重新选择直播来源。")
+				if visible == 0 {
+					ui.Text(c, "没有找到频道，可换个关键词或重新选择分组。").TextColor(textMuted)
 				}
 			})
-		}
+		})
 	})
+}
+
+func (a *app) liveDialog(c *ui.Context) {
+	live := &a.live
 	ui.DialogBase(c, &live.importOpen, func(backdrop, panel ui.Element) {
-		backdrop.Background(ui.RGBA(2, 8, 22, 170))
-		panel.Width(520).MaxWidth(520).Padding(26).Gap(16).Radius(22).Material(glass.Glass{Style: glass.Regular})
+		backdrop.Background(ui.RGBA(2, 8, 22, 0.67))
+		panel.Width(520).MaxWidth(520).Padding(26).Gap(14).Radius(26).Material(glass.Glass{})
 		ui.Text(c, "添加直播源").FontSize(24).Bold()
-		ui.Text(c, "粘贴 M3U、TXT 或 TVBox 直播配置地址。")
-		ui.TextInput(c, &live.input).Label("直播地址").Placeholder("https://example.com/channels.m3u").FillWidth().Disabled(a.busy)
+		ui.Text(c, "粘贴 M3U、TXT 或 TVBox 直播配置地址。").TextColor(textMuted)
+		ui.TextInput(c, &live.input).Label("直播地址").Placeholder("https://example.com/channels.m3u").FillWidth()
+		if a.status != "" {
+			ui.Text(c, a.status).TextColor(textMuted)
+		}
 		ui.Row(c).FillWidth().Gap(8).Justify(ui.End).Children(func() {
-			if ui.Button(c, "取消").Clicked() {
+			if glassButton(c, "取消").Clicked() {
 				live.importOpen = false
 			}
-			if ui.PrimaryButton(c, "导入直播").Disabled(a.busy).Clicked() {
-				live.importOpen = false
+			if primaryButton(c, "导入直播").Clicked() {
 				a.importLive(live.input)
 			}
 		})
@@ -204,7 +257,7 @@ func (a *app) liveView(c *ui.Context) {
 
 // advanceLive tries each alternative once when the player fails or never starts.
 func (a *app) advanceLive(p *ui.VideoPlayer) {
-	if !a.playingLive || a.busy || p == nil || a.live.playingChannel < 0 || a.live.playingChannel >= len(a.live.channels) {
+	if !a.playingLive || p == nil || a.live.playingChannel < 0 || a.live.playingChannel >= len(a.live.channels) {
 		return
 	}
 	if p.Err() == nil && (p.Ready() || time.Since(a.live.started) < 15*time.Second) {

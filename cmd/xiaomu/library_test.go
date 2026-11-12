@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -53,19 +54,20 @@ func TestCMSSearchAndDetailIgnoreCategoryEndpoint(t *testing.T) {
 			a.library.cached = map[string]*config.Config{}
 			a.browser.query = "示例"
 			a.searchLibrary()
-			if len(a.library.items) != 1 {
-				t.Fatalf("search blocked by categories: results=%d progress=%+v", len(a.library.items), a.library.progress)
+			search := &a.library.search
+			if len(search.items) != 1 {
+				t.Fatalf("search blocked by categories: results=%d progress=%+v", len(search.items), search.progress)
 			}
-			a.openLibraryItem(a.library.items[0])
-			if a.browser.detail == nil || len(a.browser.detail.Sources) != 2 {
+			a.openTitle("示例", "", search.items)
+			if a.title.detail == nil || len(a.title.detail.Sources) != 2 {
 				t.Fatalf("detail failed or playback sources lost: %s", a.status)
 			}
 			for i, suffix := range []string{"/clip.m3u8?token=fixture", "/clip.mp4"} {
-				group := a.browser.detail.Sources[i]
+				group := a.title.detail.Sources[i]
 				if len(group.Episodes) != 1 {
 					t.Fatalf("episode lost: %+v", group)
 				}
-				play, err := a.browser.session.Play(context.Background(), group.Name, group.Episodes[0])
+				play, err := a.title.session.Play(context.Background(), group.Name, group.Episodes[0])
 				if err != nil || play.URL != srv.URL+suffix {
 					t.Fatalf("media URL changed: %+v, %v", play, err)
 				}
@@ -120,40 +122,29 @@ func TestLibraryResultUsesItsOwnSiteAndParser(t *testing.T) {
 	defer srv.Close()
 	a := &app{}
 	defer a.close()
-	a.loadConfig(srv.URL+"/config", "")
+	a.loadConfig(srv.URL + "/config")
 	a.browser.query = "示例"
 	a.searchLibrary()
-	if len(a.library.items) != 2 {
-		t.Fatalf("search results=%d status=%s", len(a.library.items), a.status)
+	search := &a.library.search
+	if len(search.items) != 2 {
+		t.Fatalf("search results=%d status=%s", len(search.items), a.status)
 	}
-	if a.library.items[0].Video.Name != "示例" {
+	if search.items[0].Video.Name != "示例" {
 		t.Fatal("exact title match was not ranked first")
 	}
+	if len(search.groups) != 2 || search.groups[0].name != "示例" {
+		t.Fatalf("different titles were merged: %+v", search.groups)
+	}
 	tt := ui.NewTester(a.view, 960, 640)
-	if err := tt.Click("结果来源"); err != nil {
-		t.Fatal(err)
+	if _, ok := tt.Find("示例 · 来源乙"); !ok {
+		t.Fatalf("result does not name its only source: %v", tt.Texts())
 	}
-	if err := tt.Click("来源甲"); err != nil {
-		t.Fatal(err)
-	}
-	if a.library.filter != a.library.items[1].Entry.Key() {
-		t.Fatalf("source filter did not update: %q", a.library.filter)
-	}
-	if err := tt.Click("结果来源"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tt.Click("全部来源"); err != nil {
-		t.Fatal(err)
-	}
-	if a.library.filter != "" {
-		t.Fatal("source filter did not reset")
-	}
-	for _, item := range a.library.items {
+	for _, item := range search.items {
 		if item.Entry.Site.Key != "b" {
 			continue
 		}
-		a.openLibraryItem(item)
-		if a.browser.detail == nil || a.browser.detail.Name != "详情/b" || a.browser.doc != item.Entry.Config {
+		a.openTitle(item.Video.Name, "", []library.Item{item})
+		if a.title.detail == nil || a.title.detail.Name != "详情/b" || a.title.item.Entry.Config != item.Entry.Config {
 			t.Fatalf("wrong result origin: %s", a.status)
 		}
 		opened := false
@@ -164,15 +155,69 @@ func TestLibraryResultUsesItsOwnSiteAndParser(t *testing.T) {
 			opened = true
 			return nil, nil
 		}
-		a.playEpisode(a.browser.detail.Sources[0].Name, a.browser.detail.Sources[0].Episodes[0])
+		a.playEpisode(a.title.detail.Sources[0].Name, a.title.detail.Sources[0].Episodes[0])
 		if !opened {
 			t.Fatalf("configured parser was lost: %s", a.status)
 		}
 	}
-	a.browser.detail = nil
-	a.startLibraryScan("示例", true)
-	if len(a.library.items) != 4 || len(a.library.more) != 0 {
-		t.Fatalf("pagination results=%d more=%d", len(a.library.items), len(a.library.more))
+	a.startScan(search, "示例", true)
+	if len(search.items) != 4 || len(search.more) != 0 {
+		t.Fatalf("pagination results=%d more=%d", len(search.items), len(search.more))
+	}
+}
+
+// Sites that have the same title show as one result; a source that cannot be
+// read gives way to the next one without leaving the page.
+func TestSameTitleMergesAndFallsBackToNextSource(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/config" {
+			fmt.Fprint(w, `{"sites":[{"key":"a","name":"来源甲","type":1,"api":"/a"},{"key":"b","name":"来源乙","type":1,"api":"/b"}]}`)
+			return
+		}
+		query := r.URL.Query()
+		switch {
+		case query.Get("ac") == "list":
+			fmt.Fprint(w, `{"class":[{"type_id":1,"type_name":"电影"}]}`)
+		case query.Get("ids") != "" && r.URL.Path == "/a":
+			http.Error(w, "detail unavailable", http.StatusInternalServerError)
+		case query.Get("ids") != "":
+			fmt.Fprintf(w, `{"list":[{"vod_name":"示例","vod_play_from":"直连","vod_play_url":%q}]}`, "第1集$"+srv.URL+"/clip.mp4")
+		default:
+			fmt.Fprint(w, `{"pagecount":1,"list":[{"vod_id":"7","vod_name":"《示例》"}]}`)
+		}
+	}))
+	defer srv.Close()
+	a := &app{}
+	defer a.close()
+	a.loadConfig(srv.URL + "/config")
+	a.browser.query = "示例"
+	a.searchLibrary()
+	search := &a.library.search
+	if len(search.items) != 2 || len(search.groups) != 1 {
+		t.Fatalf("same title was not merged: items=%d groups=%d", len(search.items), len(search.groups))
+	}
+	tt := ui.NewTester(a.view, 960, 640)
+	if err := tt.Click("《示例》 · 2 个来源"); err != nil {
+		t.Fatalf("%v; texts %v", err, tt.Texts())
+	}
+	if a.title == nil || a.title.detail == nil || a.title.item.Entry.Site.Key != "b" {
+		t.Fatalf("title did not settle on the source that reads: status=%s title=%+v", a.status, a.title)
+	}
+	if err := tt.Click("来源 来源甲"); err != nil {
+		t.Fatalf("%v; texts %v", err, tt.Texts())
+	}
+	if a.title.item.Entry.Site.Key != "b" || !tt.HasText("读取失败") || !tt.HasText("当前来源") {
+		t.Fatalf("a failing source replaced the one on show: %v", tt.Texts())
+	}
+	if a.status != "" {
+		t.Fatalf("in-place failure also reached the status line: %q", a.status)
+	}
+	if err := tt.Click("返回"); err != nil {
+		t.Fatal(err)
+	}
+	if a.route() != routeSearch || len(search.items) != 2 || a.title != nil {
+		t.Fatal("back from a title did not return to its search results")
 	}
 }
 
@@ -203,18 +248,19 @@ func TestLibraryReloadRetriesFailedSourcesAndRefreshesResults(t *testing.T) {
 	a.browser.query = "示例"
 	a.searchLibrary()
 	a.searchLibrary()
-	if len(a.library.items) != 1 || good.Load() != 1 || flaky.Load() != 1 || a.library.progress.Cooling != 1 {
-		t.Fatalf("repeated search: good=%d flaky=%d progress=%+v", good.Load(), flaky.Load(), a.library.progress)
+	search := &a.library.search
+	if len(search.items) != 1 || good.Load() != 1 || flaky.Load() != 1 || search.progress.Cooling != 1 {
+		t.Fatalf("repeated search: good=%d flaky=%d progress=%+v", good.Load(), flaky.Load(), search.progress)
 	}
 	recovered.Store(true)
 	tt := ui.NewTester(a.view, 960, 640)
 	if err := tt.Click("重新加载"); err != nil {
 		t.Fatal(err)
 	}
-	if len(a.library.items) != 2 || good.Load() != 2 || flaky.Load() != 2 || a.library.progress.Cooling != 0 {
-		t.Fatalf("manual reload: good=%d flaky=%d progress=%+v", good.Load(), flaky.Load(), a.library.progress)
+	if len(search.items) != 2 || good.Load() != 2 || flaky.Load() != 2 || search.progress.Cooling != 0 {
+		t.Fatalf("manual reload: good=%d flaky=%d progress=%+v", good.Load(), flaky.Load(), search.progress)
 	}
-	for _, item := range a.library.items {
+	for _, item := range search.items {
 		if !strings.HasSuffix(item.Video.Name, "-2") {
 			t.Fatalf("reload kept old results: %+v", item.Video)
 		}
@@ -236,7 +282,8 @@ func TestNewLibrarySearchIgnoresQueuedOldReplies(t *testing.T) {
 	defer a.close()
 	a.library.root = &config.Config{URL: srv.URL, Sites: []config.Site{{Key: "demo", Kind: config.KindJSON, API: srv.URL + "/api"}}}
 	a.library.cached = map[string]*config.Config{}
-	a.startLibraryScan("旧关键词", false)
+	search := &a.library.search
+	a.startScan(search, "旧关键词", false)
 	// Keep the first generation's updates queued until the next search starts.
 	select {
 	case first := <-updates:
@@ -244,9 +291,9 @@ func TestNewLibrarySearchIgnoresQueuedOldReplies(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("no initial update")
 	}
-	a.startLibraryScan("新关键词", false)
+	a.startScan(search, "新关键词", false)
 	deadline := time.After(3 * time.Second)
-	for a.library.running {
+	for search.running {
 		select {
 		case update := <-updates:
 			update()
@@ -254,7 +301,7 @@ func TestNewLibrarySearchIgnoresQueuedOldReplies(t *testing.T) {
 			t.Fatal("new search did not finish")
 		}
 	}
-	if len(a.library.items) != 1 || a.library.items[0].Video.Name != "新关键词" {
-		t.Fatalf("stale search overwrote current results: %+v", a.library.items)
+	if len(search.items) != 1 || search.items[0].Video.Name != "新关键词" {
+		t.Fatalf("stale search overwrote current results: %+v", search.items)
 	}
 }

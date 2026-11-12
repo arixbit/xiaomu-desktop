@@ -75,11 +75,11 @@ func TestBrowserFlow(t *testing.T) {
 		return nil, nil
 	}
 	tt := ui.NewTester(a.view, 960, 640)
-	if !tt.HasText("你的片库，从这里开始") {
-		t.Fatalf("first launch should show the empty library: %v", tt.Texts())
+	if !tt.HasText("添加片源，开始观看") {
+		t.Fatalf("first launch should ask for a source: %v", tt.Texts())
 	}
-	if search, ok := tt.Find("片名"); !ok || search.Y < 50 {
-		t.Fatalf("sidebar search overlaps the macOS title bar: rect=%+v found=%v texts=%v", search, ok, tt.Texts())
+	if brand, ok := tt.Find("小幕"); !ok || brand.Y < 50 {
+		t.Fatalf("sidebar overlaps the macOS title bar: rect=%+v found=%v texts=%v", brand, ok, tt.Texts())
 	}
 	click := func(label string) {
 		t.Helper()
@@ -87,46 +87,76 @@ func TestBrowserFlow(t *testing.T) {
 			t.Fatalf("click %q: %v; status %s; texts %v", label, err, a.status, tt.Texts())
 		}
 	}
-	click("添加片源")
 	click("配置地址")
 	tt.Type(srv.URL + "/depot.json")
-	click("加载配置")
-	if len(a.library.items) != 1 || a.browser.session != nil {
-		t.Fatalf("import did not populate recommendations automatically: items=%d status=%s", len(a.library.items), a.status)
+	click("导入")
+	if len(a.library.feed.items) != 1 || a.browser.session != nil {
+		t.Fatalf("import did not populate recommendations automatically: items=%d status=%s", len(a.library.feed.items), a.status)
 	}
-	click("站点推荐")
+	click("最近更新")
 	click("示例甲 · 🚀演示线路 · 演示站点")
-	if a.browser.doc == nil || len(a.browser.doc.Parsers) != 2 || a.browser.doc.Parsers[1].Type != 1 {
+	if a.route() != routeDetail || a.title == nil || a.title.detail == nil {
+		t.Fatalf("title did not open from its only source: %s; texts %v", a.status, tt.Texts())
+	}
+	if parsers := entryParsers(a.title.item.Entry); len(parsers) != 2 || parsers[1].Type != 1 {
 		t.Fatalf("line with mixed parser types failed: %s", a.status)
 	}
 	click("1")
 	if !opened || a.status != "正在播放" {
 		t.Fatalf("opened %v, status %s", opened, a.status)
 	}
-	click("返回影片列表")
+	click("返回")
+	if a.route() != routeHome || a.title != nil {
+		t.Fatalf("back did not leave the title: route=%v", a.route())
+	}
 	click("片名")
 	tt.Type("甲")
-	click("全库搜索")
-	if len(a.library.items) != 1 || a.library.query != "甲" {
-		t.Fatalf("library search: query=%q results=%d status=%s", a.library.query, len(a.library.items), a.status)
+	tt.Key(0, ui.KeyEnter)
+	search := &a.library.search
+	if a.route() != routeSearch || len(search.items) != 1 || search.query != "甲" {
+		t.Fatalf("library search: route=%v query=%q results=%d status=%s", a.route(), search.query, len(search.items), a.status)
 	}
-	click("管理片库")
+	if len(a.library.feed.items) != 1 {
+		t.Fatal("searching discarded the home feed")
+	}
+	click("片源")
 	click("演示站点")
-	click("电影")
+	if a.route() != routeSite || a.browser.session == nil {
+		t.Fatalf("site did not open: %s; texts %v", a.status, tt.Texts())
+	}
 	click("下一页")
 	if len(a.browser.results.Videos) != 0 || !strings.Contains(a.status, "0 部影片") {
 		t.Fatal(a.status)
 	}
 	click("上一页")
-	click("查看详情")
-	click("返回影片列表")
+	click("示例甲")
+	if a.route() != routeDetail || a.title.detail == nil {
+		t.Fatalf("title did not open from the site: %s", a.status)
+	}
+	click("返回")
+	if a.route() != routeSite || a.browser.session == nil || a.title != nil {
+		t.Fatal("back from a title should return to its site")
+	}
+	click("返回")
+	if a.route() != routeSources || a.browser.session != nil {
+		t.Fatal("leaving the site did not release it")
+	}
 	click("添加片源")
 	click("加载配置")
-	if a.browser.session != nil || a.browser.detail != nil || len(a.browser.results.Videos) != 0 {
+	if a.browser.session != nil || a.title != nil || a.route() != routeHome {
 		t.Fatal("old site state survived config reload")
 	}
-	if len(a.library.items) != 1 {
+	if len(a.library.feed.items) != 1 {
 		t.Fatal("recommendations were not restored after reload")
+	}
+	click("片源")
+	click("移除片源")
+	if a.library.root != nil || len(a.library.feed.items) != 0 {
+		t.Fatal("removing the source kept its library")
+	}
+	click("首页")
+	if !tt.HasText("添加片源，开始观看") {
+		t.Fatalf("home did not return to the welcome: %v", tt.Texts())
 	}
 }
 
@@ -136,18 +166,17 @@ func TestCanceledJobDoesNotApply(t *testing.T) {
 			updates := make(chan func(), 1)
 			a := &app{dispatch: func(fn func()) { updates <- fn }}
 			applied, discarded := false, false
-			a.run("加载", func(ctx context.Context) (jobResult, error) {
+			a.run(jobSite, "加载", func(ctx context.Context) (jobResult, error) {
 				<-ctx.Done()
 				return jobResult{apply: func() { applied = true }, discard: func() { discarded = true }}, nil
-			})
-			if !a.busy {
+			}, nil)
+			if !a.running(jobSite) {
 				t.Fatal("job did not start asynchronously")
 			}
-			a.run("重叠请求", func(context.Context) (jobResult, error) { t.Error("overlapping job ran"); return jobResult{}, nil })
 			if closeWindow {
 				a.close()
 			} else {
-				a.cancel()
+				a.cancelJobs()
 			}
 			select {
 			case finish := <-updates:
@@ -155,9 +184,56 @@ func TestCanceledJobDoesNotApply(t *testing.T) {
 			case <-time.After(3 * time.Second):
 				t.Fatal("job did not stop")
 			}
-			if applied || !discarded || a.busy {
-				t.Fatalf("applied=%v discarded=%v busy=%v", applied, discarded, a.busy)
+			if applied || !discarded || a.busy() {
+				t.Fatalf("applied=%v discarded=%v busy=%v", applied, discarded, a.busy())
 			}
 		})
+	}
+}
+
+func TestNewJobReplacesOnlyTheOneInItsSlot(t *testing.T) {
+	updates := make(chan func(), 3)
+	a := &app{dispatch: func(fn func()) { updates <- fn }}
+	applied := map[string]bool{}
+	discarded := false
+	a.run(jobSite, "旧请求", func(ctx context.Context) (jobResult, error) {
+		<-ctx.Done()
+		return jobResult{apply: func() { applied["旧请求"] = true }, discard: func() { discarded = true }}, nil
+	}, nil)
+	for slot, label := range map[jobSlot]string{jobLive: "别处", jobSite: "新请求"} {
+		a.run(slot, label, func(context.Context) (jobResult, error) {
+			return jobResult{apply: func() { applied[label] = true }}, nil
+		}, nil)
+	}
+	for range 3 {
+		select {
+		case finish := <-updates:
+			finish()
+		case <-time.After(3 * time.Second):
+			t.Fatal("a job did not finish")
+		}
+	}
+	if applied["旧请求"] || !discarded {
+		t.Fatalf("replaced job applied=%v discarded=%v", applied["旧请求"], discarded)
+	}
+	if !applied["新请求"] || !applied["别处"] || a.busy() {
+		t.Fatalf("applied=%v busy=%v", applied, a.busy())
+	}
+}
+
+func TestFailedJobReportsInPlace(t *testing.T) {
+	a := &app{}
+	var inPlace error
+	a.run(jobTitle, "读取", func(context.Context) (jobResult, error) {
+		return jobResult{}, fmt.Errorf("fixture failure")
+	}, func(err error) { inPlace = err })
+	if inPlace == nil || strings.Contains(a.status, "fixture failure") {
+		t.Fatalf("in-place failure leaked to the status line: err=%v status=%q", inPlace, a.status)
+	}
+	a.run(jobTitle, "读取", func(context.Context) (jobResult, error) {
+		return jobResult{}, fmt.Errorf("fixture failure")
+	}, nil)
+	if a.status != "读取失败：fixture failure" {
+		t.Fatalf("status %q", a.status)
 	}
 }
