@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -88,6 +87,8 @@ func (a *app) run(label string, work func(context.Context) (jobResult, error)) {
 
 func (a *app) close() {
 	a.closed = true
+	a.stopLibraryScan()
+	a.stopDiscovery()
 	if a.cancel != nil {
 		a.cancel()
 	}
@@ -130,7 +131,7 @@ func (a *app) readConfig(raw, line string, restoring bool) {
 			if b.session != nil {
 				b.session.Close()
 			}
-			*b = browser{configURL: b.configURL, assets: b.assets, doc: doc, line: line}
+			*b = browser{configURL: raw, assets: b.assets, doc: doc, line: line}
 			b.selectedVideo = -1
 			if !restoring && len(doc.Sites) == 0 && len(doc.Lives) > 0 {
 				a.live.url, a.live.restore = "", false
@@ -138,11 +139,7 @@ func (a *app) readConfig(raw, line string, restoring bool) {
 			if a.live.url == "" {
 				a.setLiveSources(doc.Lives)
 			}
-			if len(doc.Lines) > 0 {
-				a.status = "请选择一条线路"
-			} else {
-				a.status = fmt.Sprintf("已加载 %d 个点播站点、%d 个直播来源", len(doc.Sites), len(doc.Lives))
-			}
+			a.resetLibrary(doc)
 			if a.persist && line == "" {
 				if err := a.saveImportedSource(raw); err != nil {
 					a.status += "；保存片源地址失败：" + err.Error()
@@ -156,6 +153,10 @@ func (a *app) readConfig(raw, line string, restoring bool) {
 }
 
 func (a *app) openSite(site config.Site) {
+	a.openSiteInConfig(site, a.browser.doc, a.browser.line)
+}
+
+func (a *app) openSiteInConfig(site config.Site, doc *config.Config, line string) {
 	if site.Kind.Unsupported() {
 		a.status = unsupported(site.Kind)
 		return
@@ -177,6 +178,7 @@ func (a *app) openSite(site config.Site) {
 				b.session.Close()
 			}
 			b.session, b.categories, b.site = session, categories, site.Name
+			b.doc, b.line, b.sidebar = doc, line, "site"
 			b.results, b.detail, b.page = first, nil, 0
 			b.category, b.query, b.search = "", "", ""
 			b.selectedVideo = -1
@@ -298,13 +300,12 @@ func (a *app) browserView(c *ui.Context) {
 					// HiddenInset places macOS window controls over this pane.
 					top := max(float32(58), c.TitleBar().Bottom+14)
 					ui.Column(c).Fill().Padding(top, 14, 16, 14).Gap(16).Children(func() {
-						if ui.SearchField(c, &b.query).Label("片名").Placeholder("搜索当前站点").
+						if ui.SearchField(c, &b.query).Label("片名").Placeholder("搜索整个片库").
 							FillWidth().Disabled(a.busy).Submitted() {
-							if b.session == nil {
-								a.status = "请先添加片源并选择站点"
-							} else {
-								a.loadPage("", b.query, 1)
-							}
+							a.searchLibrary()
+						}
+						if ui.Button(c, "全库搜索").FillWidth().Disabled(a.busy).Clicked() {
+							a.searchLibrary()
 						}
 						a.browserSidebar(c)
 						ui.Column(c).Gap(8).Children(func() {
@@ -341,32 +342,17 @@ func (a *app) browserSidebar(c *ui.Context) {
 	b := &a.browser
 	list := ui.Sidebar(c, &b.sidebar, func() {
 		ui.SidebarSection(c, "浏览", nil, func() {
-			ui.SidebarItem(c, "library", nil, "片库")
+			ui.SidebarItem(c, "library", nil, "首页")
+			if a.library.query != "" {
+				ui.SidebarItem(c, "search", nil, "搜索结果")
+			}
 			ui.SidebarItem(c, "live", nil, "直播")
+			if a.library.root != nil {
+				ui.SidebarItem(c, "sources", nil, "管理片库")
+			}
 		})
 		if b.doc == nil {
 			return
-		}
-		if len(b.doc.Lines) > 0 {
-			ui.SidebarSection(c, "线路", nil, func() {
-				for i, line := range b.doc.Lines {
-					ui.SidebarItem(c, fmt.Sprintf("line-%d", i), nil, line.Name)
-				}
-			})
-		}
-		if len(b.doc.Sites) > 0 {
-			ui.SidebarSection(c, "站点", nil, func() {
-				for i, site := range b.doc.Sites {
-					name := site.Name
-					if name == "" {
-						name = site.Key
-					}
-					if site.Kind.Unsupported() {
-						name += " · 暂不支持"
-					}
-					ui.SidebarItem(c, fmt.Sprintf("site-%d", i), nil, name)
-				}
-			})
 		}
 	}).Grow(1).FillWidth().Background(ui.Transparent)
 	if !list.Changed() || a.busy {
@@ -375,19 +361,14 @@ func (a *app) browserSidebar(c *ui.Context) {
 	switch {
 	case b.sidebar == "library":
 		b.detail = nil
+		if a.library.query != "" {
+			a.startLibraryScan("", false)
+		}
+		a.loadDiscoveryTab(false)
 	case b.sidebar == "live":
 		a.showLive()
-	case strings.HasPrefix(b.sidebar, "line-"):
-		i, err := strconv.Atoi(strings.TrimPrefix(b.sidebar, "line-"))
-		if err == nil && i >= 0 && i < len(b.doc.Lines) {
-			line := b.doc.Lines[i]
-			a.loadConfig(line.URL, line.Name)
-		}
-	case strings.HasPrefix(b.sidebar, "site-"):
-		i, err := strconv.Atoi(strings.TrimPrefix(b.sidebar, "site-"))
-		if err == nil && i >= 0 && i < len(b.doc.Sites) {
-			a.openSite(b.doc.Sites[i])
-		}
+	case b.sidebar == "search":
+		b.detail = nil
 	}
 }
 
@@ -398,7 +379,7 @@ func (a *app) importDialog(c *ui.Context) {
 		panel.Width(520).MaxWidth(520).Padding(26).Gap(16).Radius(22).
 			Material(glass.Glass{Style: glass.Regular})
 		ui.Text(c, "添加片源").FontSize(24).Bold()
-		ui.Text(c, "支持 TVBox 配置、M3U 和 TXT 直播列表，导入后可浏览点播或直播。").TextColor(c.Theme().TextMuted)
+		ui.Text(c, "导入后自动汇集影片推荐，可直接搜索整个片库。也支持 M3U 和 TXT 直播列表。").TextColor(c.Theme().TextMuted)
 		ui.TextInput(c, &b.configURL).Label("配置地址").Placeholder("https://example.com/config.json").FillWidth().Disabled(a.busy)
 		ui.TextInput(c, &b.assets).Label("脚本目录（可选）").Placeholder("本地依赖目录").FillWidth().Disabled(a.busy)
 		ui.Row(c).FillWidth().Gap(8).Justify(ui.End).Children(func() {
@@ -415,7 +396,7 @@ func (a *app) importDialog(c *ui.Context) {
 	})
 }
 
-func (a *app) catalogView(c *ui.Context) {
+func (a *app) siteCatalogView(c *ui.Context) {
 	b := &a.browser
 	if b.session == nil {
 		a.catalogEmpty(c)
@@ -428,7 +409,7 @@ func (a *app) catalogView(c *ui.Context) {
 				ui.Text(c, b.site).SingleLine().TextColor(ui.RGBA(255, 255, 255, 210))
 			}
 			if ui.Button(c, "搜索").Radius(18).Material(glass.Glass{Style: glass.Clear, Interactive: true}).Disabled(a.busy).Clicked() {
-				a.loadPage("", b.query, 1)
+				a.searchLibrary()
 			}
 		})
 		if b.detail != nil {
@@ -546,7 +527,7 @@ func (a *app) catalogEmpty(c *ui.Context) {
 				Background(ui.RGBA(248, 247, 250, 245)).Children(func() {
 				ui.Column(c).Fill().Padding(27, 44).Gap(10).Children(func() {
 					ui.Text(c, "片库").FontSize(21).Bold()
-					ui.Text(c, "你的影片来自你添加的片源。选好线路和站点后，就可以在这里浏览与播放。").
+					ui.Text(c, "添加片库后，直接搜索片名，或从首页推荐中选择影片播放。").
 						TextColor(c.Theme().TextMuted)
 				})
 			})
@@ -598,6 +579,7 @@ func (a *app) detailView(c *ui.Context) {
 			if ui.Button(c, "返回影片列表").Disabled(a.busy).Clicked() {
 				b.detail = nil
 				b.selectedVideo = -1
+				a.library.selected = -1
 				return
 			}
 			ui.Row(c).FillWidth().Gap(22).Children(func() {
@@ -628,7 +610,7 @@ func (a *app) detailView(c *ui.Context) {
 				ui.Text(c, name).Bold()
 				ui.Row(c).Key(fmt.Sprintf("source-%d", i)).FillWidth().Wrap().Gap(8).Children(func() {
 					for j, episode := range source.Episodes {
-						if ui.Button(c, episode.Name).Key(j).Disabled(a.busy).Clicked() {
+						if ui.Button(c, episodeButtonLabel(episode.Name)).Key(j).Disabled(a.busy).Clicked() {
 							a.playEpisode(source.Name, episode)
 						}
 					}

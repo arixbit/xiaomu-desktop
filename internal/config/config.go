@@ -58,13 +58,25 @@ type Line struct {
 
 // Site is one video site with paths already resolved.
 type Site struct {
-	Key  string `json:"key"`
-	Name string `json:"name"`
-	Type int    `json:"type"`
-	API  string `json:"api"`
-	Ext  string `json:"ext"`
-	Jar  string `json:"jar,omitempty"`
-	Kind Kind   `json:"kind"`
+	Key        string          `json:"key"`
+	Name       string          `json:"name"`
+	Type       int             `json:"type"`
+	API        string          `json:"api"`
+	Ext        string          `json:"ext"`
+	Jar        string          `json:"jar,omitempty"`
+	Kind       Kind            `json:"kind"`
+	Searchable json.RawMessage `json:"searchable,omitempty"`
+}
+
+// SearchEnabled honors TVBox's optional numeric, string or boolean search flag.
+// Omitted flags keep legacy sites searchable.
+func (s Site) SearchEnabled() bool {
+	value := strings.TrimSpace(string(s.Searchable))
+	var text string
+	if json.Unmarshal(s.Searchable, &text) == nil {
+		value = strings.TrimSpace(text)
+	}
+	return value != "0" && !strings.EqualFold(value, "false")
 }
 
 // Parser is a TVBox web (type 0) or JSON (type 1) playback resolver.
@@ -269,12 +281,13 @@ func buildConfig(base string, clean []byte, spider, notice string) (*Config, err
 		Flags   []string        `json:"flags"`
 		Lives   json.RawMessage `json:"lives"`
 		Sites   []struct {
-			Key  string          `json:"key"`
-			Name string          `json:"name"`
-			Type int             `json:"type"`
-			API  string          `json:"api"`
-			Ext  json.RawMessage `json:"ext"`
-			Jar  string          `json:"jar"`
+			Key        string          `json:"key"`
+			Name       string          `json:"name"`
+			Type       int             `json:"type"`
+			API        string          `json:"api"`
+			Ext        json.RawMessage `json:"ext"`
+			Jar        string          `json:"jar"`
+			Searchable json.RawMessage `json:"searchable"`
 		} `json:"sites"`
 	}
 	if err := json.Unmarshal(clean, &raw); err != nil {
@@ -299,13 +312,14 @@ func buildConfig(base string, clean []byte, spider, notice string) (*Config, err
 		ext := extString(base, s.Ext)
 		jar := resolveSpider(base, s.Jar)
 		cfg.Sites = append(cfg.Sites, Site{
-			Key:  s.Key,
-			Name: s.Name,
-			Type: s.Type,
-			API:  api,
-			Ext:  ext,
-			Jar:  jar,
-			Kind: Classify(s.Type, api, ext, ""),
+			Key:        s.Key,
+			Name:       s.Name,
+			Type:       s.Type,
+			API:        api,
+			Ext:        ext,
+			Jar:        jar,
+			Kind:       Classify(s.Type, api, ext, ""),
+			Searchable: s.Searchable,
 		})
 	}
 	return cfg, nil

@@ -92,10 +92,12 @@ func Open(ctx context.Context, site config.Site) (*Session, []catalog.Category, 
 			}
 		}
 	}
-	if len(categories) == 0 {
-		return nil, nil, fmt.Errorf("XBPQ 规则未提供分类")
-	}
 	return s, categories, nil
+}
+
+// Home reads the site's front-page list using its ordinary extraction rules.
+func (s *Session) Home(ctx context.Context) (catalog.Page, error) {
+	return s.list(ctx, s.home, false)
 }
 
 func (s *Session) Close() { s.client.CloseIdleConnections() }

@@ -25,7 +25,7 @@ func TestBrowserFlow(t *testing.T) {
 		case "/depot.json":
 			fmt.Fprint(w, `{"urls":[{"name":"🚀演示线路","url":"./config.json"}]}`)
 		case "/config.json":
-			fmt.Fprint(w, `{"sites":[{"key":"demo","name":"演示站点","type":3,"api":"./drpy2.js","ext":"./rule.js"},{"key":"jar","name":"安卓站点","type":3,"api":"csp_Test"}]}`)
+			fmt.Fprint(w, `{"sites":[{"key":"demo","name":"演示站点","type":3,"api":"./drpy2.js","ext":"./rule.js"},{"key":"jar","name":"安卓站点","type":3,"api":"csp_Test"}],"parses":[{"name":"数字类型","type":0,"url":"https://example.com/web?url="},{"name":"字符串类型","type":"1","url":"https://example.com/json?url="}]}`)
 		case "/drpy2.js":
 			w.Header().Set("Content-Type", "text/javascript")
 			w.Write(engine)
@@ -91,11 +91,26 @@ func TestBrowserFlow(t *testing.T) {
 	click("配置地址")
 	tt.Type(srv.URL + "/depot.json")
 	click("加载配置")
-	click("🚀演示线路")
-	click("安卓站点 · 暂不支持")
-	if !strings.Contains(a.status, "专用 Android 爬虫") {
-		t.Fatal(a.status)
+	if len(a.library.items) != 1 || a.browser.session != nil {
+		t.Fatalf("import did not populate recommendations automatically: items=%d status=%s", len(a.library.items), a.status)
 	}
+	click("站点推荐")
+	click("示例甲 · 🚀演示线路 · 演示站点")
+	if a.browser.doc == nil || len(a.browser.doc.Parsers) != 2 || a.browser.doc.Parsers[1].Type != 1 {
+		t.Fatalf("line with mixed parser types failed: %s", a.status)
+	}
+	click("1")
+	if !opened || a.status != "正在播放" {
+		t.Fatalf("opened %v, status %s", opened, a.status)
+	}
+	click("返回影片列表")
+	click("片名")
+	tt.Type("甲")
+	click("全库搜索")
+	if len(a.library.items) != 1 || a.library.query != "甲" {
+		t.Fatalf("library search: query=%q results=%d status=%s", a.library.query, len(a.library.items), a.status)
+	}
+	click("管理片库")
 	click("演示站点")
 	click("电影")
 	click("下一页")
@@ -104,21 +119,14 @@ func TestBrowserFlow(t *testing.T) {
 	}
 	click("上一页")
 	click("查看详情")
-	click("第1集")
-	if !opened || a.status != "正在播放" {
-		t.Fatalf("opened %v, status %s", opened, a.status)
-	}
 	click("返回影片列表")
-	click("片名")
-	tt.Type("甲")
-	click("搜索")
-	if len(a.browser.results.Videos) != 1 || a.browser.search != "甲" {
-		t.Fatalf("search %+v", a.browser)
-	}
 	click("添加片源")
 	click("加载配置")
 	if a.browser.session != nil || a.browser.detail != nil || len(a.browser.results.Videos) != 0 {
 		t.Fatal("old site state survived config reload")
+	}
+	if len(a.library.items) != 1 {
+		t.Fatal("recommendations were not restored after reload")
 	}
 }
 

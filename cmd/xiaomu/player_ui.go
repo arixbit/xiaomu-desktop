@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo/plugins/glass"
@@ -11,6 +13,42 @@ import (
 
 var playerInk = ui.RGB(9, 15, 31)
 var playerText = ui.RGB(248, 249, 255)
+
+const playerOverlayIdle = 3 * time.Second
+
+type playerOverlayState struct {
+	hideAt             time.Time
+	pointerX, pointerY float32
+	pointerOver        bool
+	keepVisible        bool
+}
+
+func (a *app) setFullScreen(full bool) {
+	a.fullScreen = full
+	a.playerOverlay = playerOverlayState{}
+	if full {
+		a.panelOpen, a.panelTouched = false, false
+	}
+}
+
+func (a *app) playerOverlaysVisible(c *ui.Context, screen ui.Element) bool {
+	s := &a.playerOverlay
+	x, y, over := screen.PointerPosition()
+	now := c.Now()
+	if s.hideAt.IsZero() || s.keepVisible || over && (!s.pointerOver || x != s.pointerX || y != s.pointerY) {
+		s.hideAt = now.Add(playerOverlayIdle)
+	}
+	s.pointerX, s.pointerY, s.pointerOver = x, y, over
+	s.keepVisible = false
+	if !a.fullScreen {
+		return true
+	}
+	if now.Before(s.hideAt) {
+		c.After(s.hideAt.Sub(now))
+		return true
+	}
+	return false
+}
 
 // playerScreen keeps the system video in one view and paints the controls
 // over it. All VideoPlayer calls stay on MyGo's UI thread.
@@ -23,24 +61,38 @@ func (a *app) playerScreen(c *ui.Context) {
 	a.advanceEpisode(p)
 	width, _ := c.Size()
 	compact := width < 900
+	overlayPanel := compact || a.fullScreen
 	hasEpisodes := !a.direct && !a.playingLive && a.browser.detail != nil && len(a.browser.detail.Sources) > 0
-	showPanel := hasEpisodes && a.panelOpen && (!compact || a.panelTouched)
-	ui.Box(c).Fill().Background(playerInk).Children(func() {
+	screen := ui.Box(c).Fill().Background(playerInk).ObserveInput(func(ev ui.InputEvent) {
+		a.playerOverlay.hideAt = ev.Time.Add(playerOverlayIdle)
+	})
+	showControls := a.playerOverlaysVisible(c, screen)
+	showPanel := hasEpisodes && a.panelOpen && (!compact || a.panelTouched) && showControls
+	if !showControls {
+		screen.Cursor(ui.CursorNone)
+	}
+	screen.Children(func() {
 		ui.Row(c).Fill().Children(func() {
 			ui.Box(c).Grow(1).FillHeight().Clip().Children(func() {
 				ui.Video(c, p).Fill().Fit(ui.Contain).Label("视频画面")
 				a.playerState(c, p)
-				a.playerControls(c, p, hasEpisodes, compact)
-				a.playerHeader(c, hasEpisodes, compact)
+				if showControls {
+					a.playerControls(c, p, hasEpisodes, compact)
+					a.playerHeader(c, hasEpisodes, compact)
+				}
 			})
-			if showPanel && !compact {
+			if showPanel && !overlayPanel {
 				ui.Box(c).Width(320).FillHeight().Padding(10, 10, 10, 0).Children(func() {
 					a.playerSources(c).Fill()
 				})
 			}
 		})
-		if showPanel && compact {
-			a.playerSources(c).Absolute().Top(70).Right(12).Bottom(12).Width(280)
+		if showPanel && overlayPanel {
+			bottom := float32(12)
+			if a.fullScreen {
+				bottom = 140
+			}
+			a.playerSources(c).Absolute().Top(70).Right(12).Bottom(bottom).Width(280)
 		}
 	})
 }
@@ -131,13 +183,25 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 				if duration > 0 && !a.playingLive {
 					ui.Text(c, playerClock(p.Position())).FontSize(12)
 					position := p.Position().Seconds()
-					if ui.Slider(c, &position, 0, duration.Seconds()).Label("播放进度").Grow(1).Changed() {
+					progress := ui.Slider(c, &position, 0, duration.Seconds()).Label("播放进度").Grow(1)
+					if progress.Pressed() {
+						a.playerOverlay.keepVisible = true
+					}
+					if progress.Changed() {
 						p.Seek(time.Duration(position * float64(time.Second)))
 					}
 					ui.Text(c, playerClock(duration)).FontSize(12)
 				} else {
-					ui.Text(c, "直播").FontSize(12)
+					ui.Text(c, "直播").FontSize(12).Grow(1)
 				}
+				w, h := p.Size()
+				resolution := "分辨率读取中…"
+				if w > 0 && h > 0 {
+					resolution = fmt.Sprintf("分辨率 %d×%d", w, h)
+				} else if p.Err() != nil {
+					resolution = "分辨率未知"
+				}
+				ui.Text(c, resolution).FontSize(12).SingleLine()
 			})
 			ui.Row(c).FillWidth().Wrap().Gap(8).AlignItems(ui.Center).Children(func() {
 				if a.playingLive {
@@ -165,7 +229,11 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 				}
 				ui.Text(c, "音量").FontSize(12)
 				volume := p.Volume()
-				if ui.Slider(c, &volume, 0, 1).Label("音量").Width(88).Changed() {
+				volumeControl := ui.Slider(c, &volume, 0, 1).Label("调节音量").Width(88)
+				if volumeControl.Pressed() {
+					a.playerOverlay.keepVisible = true
+				}
+				if volumeControl.Changed() {
 					p.SetVolume(volume)
 				}
 				ui.Spacer(c)
@@ -179,7 +247,7 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 				}
 				if a.window != nil {
 					fullLabel := "全屏"
-					if a.window.IsFullScreen() {
+					if a.fullScreen {
 						fullLabel = "退出全屏"
 					}
 					if ui.Button(c, fullLabel).Radius(16).Material(glass.Glass{Style: glass.Clear, Interactive: true}).TextColor(playerText).Clicked() {
@@ -196,6 +264,9 @@ func (a *app) playerSources(c *ui.Context) ui.Element {
 	panel := ui.Column(c).Padding(16).Gap(12).Radius(24).
 		Material(glass.Glass{Style: glass.Clear, Tint: ui.RGBA(40, 35, 70, 170)}).
 		TextColor(playerText)
+	if panel.Hovered() {
+		a.playerOverlay.keepVisible = true
+	}
 	panel.Children(func() {
 		ui.Text(c, "线路与选集").FontSize(18).Bold()
 		if detail == nil {
@@ -240,7 +311,7 @@ func (a *app) playerSources(c *ui.Context) ui.Element {
 			ui.Row(c).FillWidth().Wrap().Gap(6).Children(func() {
 				for i, episode := range selected.Episodes {
 					active := selected.Name == a.playingSource && episode.Name == a.playingEpisode
-					button := ui.Button(c, episode.Name).Key(fmt.Sprintf("player-episode-%d", i)).MinWidth(52).Radius(12)
+					button := ui.Button(c, episodeButtonLabel(episode.Name)).Key(fmt.Sprintf("player-episode-%d", i)).MinWidth(52).Radius(12)
 					if active {
 						button.Background(ui.RGB(255, 255, 255)).TextColor(playerInk)
 					} else {
@@ -302,7 +373,23 @@ func (a *app) leavePlayer() {
 		a.player = nil
 	}
 	a.playingLive = false
+	a.playerOverlay = playerOverlayState{}
 	a.status = ""
+}
+
+var episodeNumber = regexp.MustCompile(`^(?:第\s*)?([0-9]+)\s*集(?:\s*(?:已完结|完结))?$|^([0-9]+)$`)
+
+// Keep the original name for playback and matching between sources.
+func episodeButtonLabel(name string) string {
+	parts := episodeNumber.FindStringSubmatch(strings.TrimSpace(name))
+	if parts == nil {
+		return name
+	}
+	digits := parts[1] + parts[2]
+	if number, err := strconv.Atoi(digits); err == nil {
+		return strconv.Itoa(number)
+	}
+	return name
 }
 
 func (a *app) livePlayerControls(c *ui.Context) {

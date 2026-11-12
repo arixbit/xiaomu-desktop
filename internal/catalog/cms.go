@@ -75,7 +75,8 @@ func (c *cmsSession) categories(ctx context.Context) ([]Category, error) {
 			return categories, nil
 		}
 	}
-	return nil, fmt.Errorf("CMS 站点 %s 未返回分类", c.api)
+	// Search-only CMS APIs can return a valid list without a class table.
+	return nil, nil
 }
 
 func (s *Session) cmsPage(ctx context.Context, category, query string, page int) (Page, error) {

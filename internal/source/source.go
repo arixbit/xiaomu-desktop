@@ -17,11 +17,31 @@ import (
 
 // Session is the shared surface of the drpy2, CMS and FongMi adapters.
 type Session interface {
+	Home(context.Context) (catalog.Page, error)
 	Category(context.Context, string, int) (catalog.Page, error)
 	Search(context.Context, string, int) (catalog.Page, error)
 	Detail(context.Context, string) (catalog.Detail, error)
 	Play(context.Context, string, catalog.Episode) (catalog.Playback, error)
 	Close()
+}
+
+// Home reads a site's recommendations, falling back to its first categories
+// when the site does not provide a home feed. Search never needs this fallback.
+func Home(ctx context.Context, session Session, categories []catalog.Category) (catalog.Page, error) {
+	page, err := session.Home(ctx)
+	if len(page.Videos) > 0 {
+		return page, nil
+	}
+	for _, category := range categories[:min(3, len(categories))] {
+		if ctx.Err() != nil {
+			return catalog.Page{}, ctx.Err()
+		}
+		page, err = session.Category(ctx, string(category.ID), 1)
+		if len(page.Videos) > 0 {
+			return page, nil
+		}
+	}
+	return page, err
 }
 
 // Open detects mislabeled type-3 scripts before choosing an adapter. Only

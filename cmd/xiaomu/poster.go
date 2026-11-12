@@ -75,10 +75,41 @@ func (a *app) poster(raw string) ui.ImageSource {
 }
 
 func fetchPoster(ctx context.Context, raw string) (ui.ImageSource, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 	if err != nil {
 		return nil, err
 	}
+	// Douban's image CDN checks the referring page. Only apply these headers
+	// to its own hosts, leaving user-provided site poster requests unchanged.
+	host := strings.ToLower(req.URL.Hostname())
+	if host == "doubanio.com" || strings.HasSuffix(host, ".doubanio.com") || host == "douban.com" || strings.HasSuffix(host, ".douban.com") {
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+		req.Header.Set("Referer", "https://movie.douban.com/")
+	}
+	image, err := readPoster(req)
+	if err == nil || ctx.Err() != nil || req.URL.Port() != "" || !strings.HasPrefix(req.URL.Path, "/view/photo/") {
+		return image, err
+	}
+	// Douban serves the same public poster path on these image hosts. Some
+	// hosts return a verification page, so try one alternate within the same
+	// deadline and through the user's existing proxy settings.
+	switch host {
+	case "img1.doubanio.com":
+		host = "img3.doubanio.com"
+	case "img2.doubanio.com", "img3.doubanio.com", "img9.doubanio.com":
+		host = "img1.doubanio.com"
+	default:
+		return image, err
+	}
+	retry := req.Clone(ctx)
+	retry.URL.Host = host
+	retry.Host = host
+	return readPoster(retry)
+}
+
+func readPoster(req *http.Request) (ui.ImageSource, error) {
 	resp, err := posterClient.Do(req)
 	if err != nil {
 		return nil, err

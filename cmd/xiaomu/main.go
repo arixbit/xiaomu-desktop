@@ -28,6 +28,8 @@ type app struct {
 	proxy           *proxy.Proxy
 	open            func(string) (*ui.VideoPlayer, error)
 	browser         browser
+	library         libraryBrowser
+	discovery       discoveryBrowser
 	live            liveBrowser
 	playingLive     bool
 	direct          bool
@@ -41,6 +43,8 @@ type app struct {
 	panelSource     int
 	panelOpen       bool
 	panelTouched    bool
+	fullScreen      bool
+	playerOverlay   playerOverlayState
 	autoNext        bool
 	autoNextPending bool
 }
@@ -132,7 +136,8 @@ func (a *app) playURL(raw string, headers map[string]string) {
 	}
 	a.player = player
 	a.playingLive = false
-	a.panelOpen, a.panelTouched, a.panelSource = true, false, -1
+	a.panelOpen, a.panelTouched, a.panelSource = !a.fullScreen, false, -1
+	a.playerOverlay = playerOverlayState{}
 	a.autoNextPending = false
 	a.status = "正在播放"
 }
@@ -164,6 +169,10 @@ func main() {
 		})
 		a.window = win
 		a.dispatch = win.Update
+		a.initDiscovery()
+		a.setFullScreen(win.IsFullScreen())
+		win.OnEnterFullScreen(func() { win.Update(func() { a.setFullScreen(true) }) })
+		win.OnLeaveFullScreen(func() { win.Update(func() { a.setFullScreen(false) }) })
 		a.restoreSavedSource()
 		win.OnClosed(a.close)
 	})

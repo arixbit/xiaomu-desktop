@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
@@ -18,6 +19,7 @@ import (
 type Session struct {
 	mu     sync.Mutex
 	engine *drpy.Engine
+	home   catalog.Page
 }
 
 // Open loads a FongMi module, initializes its Spider subclass and reads categories.
@@ -69,7 +71,17 @@ func Open(ctx context.Context, site config.Site, assets string) (*Session, []cat
 		s.Close()
 		return nil, nil, fmt.Errorf("fongmi: categories %s: %w", site.API, err)
 	}
+	s.home, _ = readPage(raw, 1, nil) // A class spider may include home videos here.
 	return s, home.Categories, nil
+}
+
+// Home reads recommendations independently of category browsing.
+func (s *Session) Home(ctx context.Context) (catalog.Page, error) {
+	if len(s.home.Videos) > 0 {
+		return s.home, ctx.Err()
+	}
+	raw, err := s.call(ctx, "homeVod")
+	return readPage(raw, 1, err)
 }
 
 // Close releases the script runtime.
@@ -77,7 +89,9 @@ func (s *Session) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.engine != nil {
-		_, _ = s.engine.CallAwait(context.Background(), "destroy")
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_, _ = s.engine.CallAwait(ctx, "destroy")
+		cancel()
 		_ = s.engine.Close()
 		s.engine = nil
 	}
@@ -208,6 +222,7 @@ async function output(value) {
 export default {
   async init(ext) { await spider.init(ext); return ''; },
   async home(filter) { return output(spider.homeContent(filter)); },
+  async homeVod() { return output(spider.homeVideoContent()); },
   async category(id, page, filter, extend) { return output(spider.categoryContent(id, String(page), filter, extend)); },
   async search(query, quick, page) { return output(spider.searchContent(query, quick, String(page))); },
   async detail(id) { return output(spider.detailContent([id])); },

@@ -92,6 +92,7 @@ type Session struct {
 	engine *drpy.Engine
 	cms    *cmsSession
 	kind   config.Kind
+	home   Page
 }
 
 // Open initializes the chosen site and reads its available categories.
@@ -129,7 +130,20 @@ func Open(ctx context.Context, site config.Site, assets string) (*Session, []Cat
 		s.Close()
 		return nil, nil, fmt.Errorf("读取首页：%w", err)
 	}
+	s.home, _ = readPage(raw, 1, nil) // Some engines include videos with the categories.
 	return s, home.Categories, nil
+}
+
+// Home returns the site's own recommendations or the CMS latest updates.
+func (s *Session) Home(ctx context.Context) (Page, error) {
+	if s.kind == config.KindXML || s.kind == config.KindJSON {
+		return s.cmsPage(ctx, "", "", 1)
+	}
+	if len(s.home.Videos) > 0 {
+		return s.home, ctx.Err()
+	}
+	raw, err := s.call(ctx, "homeVod")
+	return readPage(raw, 1, err)
 }
 
 // Close releases the runtime after any current call finishes.

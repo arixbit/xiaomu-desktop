@@ -261,3 +261,34 @@ func TestReadHashCommentsPreservesStrings(t *testing.T) {
 		}
 	}
 }
+
+func TestParserTypeAcceptsNumberAndString(t *testing.T) {
+	for _, item := range []struct {
+		raw  string
+		want int
+	}{
+		{"0", 0}, {"1", 1}, {"\"0\"", 0}, {"\"1\"", 1}, {"\"2\"", 2}, {"\"3\"", 3}, {"null", 0},
+	} {
+		body := []byte("{\"sites\":[{\"key\":\"demo\",\"type\":1,\"api\":\"https://example.com/api\"}],\"parses\":[{\"name\":\"演示解析\",\"type\":" + item.raw + ",\"url\":\"./parse?url=\",\"ext\":{\"header\":{\"X-Test\":\"preserved\"}}}]}")
+		cfg, err := Read(context.Background(), "https://example.com/config.json", func(context.Context, string) (Response, error) { return Response{Status: 200, Body: body}, nil })
+		if err != nil {
+			t.Fatalf("type=%s: %v", item.raw, err)
+		}
+		if len(cfg.Sites) != 1 || len(cfg.Parsers) != 1 {
+			t.Fatalf("type=%s: %+v", item.raw, cfg)
+		}
+		p := cfg.Parsers[0]
+		if p.Type != item.want || p.Name != "演示解析" || p.URL != "https://example.com/parse?url=" || !strings.Contains(string(p.Ext), "preserved") {
+			t.Fatalf("type=%s: %+v", item.raw, p)
+		}
+	}
+}
+
+func TestParserTypeRejectsNonInteger(t *testing.T) {
+	for _, raw := range []string{"\"web\"", "true", "{}", "[]", "1.5", "\"1.5\"", "92233720368547758080"} {
+		var p Parser
+		if err := json.Unmarshal([]byte("{\"type\":"+raw+"}"), &p); err == nil {
+			t.Fatalf("invalid type %s silently became %d", raw, p.Type)
+		}
+	}
+}
