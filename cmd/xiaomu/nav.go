@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/egoist/mygo/plugins/glass"
+	"github.com/egoist/mygo/plugins/updater"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -190,6 +191,9 @@ func (a *app) sidebar(c *ui.Context) {
 		ui.Spacer(c)
 		if glassButton(c, "打开链接").FillWidth().Clicked() {
 			a.linkOpen = true
+		}
+		if glassButton(c, "检查更新").FillWidth().Clicked() {
+			updater.CheckForUpdates()
 		}
 	})
 }
