@@ -1,10 +1,11 @@
 {
   "name": "Xiaomu",
   "identifier": "dev.arixbit.xiaomu",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "main": "./cmd/xiaomu",
   "out": "build",
   "macos": {
+    "icon": "xiaomu-icon/macos/AppIcon.icns",
     "minimumSystemVersion": "13.0"
   }
 }
