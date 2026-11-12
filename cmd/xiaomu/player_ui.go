@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 )
@@ -58,11 +59,13 @@ func (a *app) playerScreen(c *ui.Context) {
 	if p == nil {
 		return
 	}
+	a.trackPlayback(c, p)
 	a.advanceEpisode(p)
 	width, _ := c.Size()
 	compact := width < 900
 	overlayPanel := compact || a.fullScreen
-	hasEpisodes := !a.direct && !a.playingLive && a.browser.detail != nil && len(a.browser.detail.Sources) > 0
+	// The panel holds a title's episodes and sources, or a live list's channels.
+	hasEpisodes := a.hasEpisodes() || (a.playingLive && len(a.live.channels) > 1)
 	screen := ui.Box(c).Fill().Background(playerInk).ObserveInput(func(ev ui.InputEvent) {
 		a.playerOverlay.hideAt = ev.Time.Add(playerOverlayIdle)
 	})
@@ -83,7 +86,7 @@ func (a *app) playerScreen(c *ui.Context) {
 			})
 			if showPanel && !overlayPanel {
 				ui.Box(c).Width(320).FillHeight().Padding(10, 10, 10, 0).Children(func() {
-					a.playerSources(c).Fill()
+					a.playerPanel(c).Fill()
 				})
 			}
 		})
@@ -92,18 +95,18 @@ func (a *app) playerScreen(c *ui.Context) {
 			if a.fullScreen {
 				bottom = 140
 			}
-			a.playerSources(c).Absolute().Top(70).Right(12).Bottom(bottom).Width(280)
+			a.playerPanel(c).Absolute().Top(70).Right(12).Bottom(bottom).Width(280)
 		}
 	})
 }
 
 func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 	name := "直链播放"
-	if !a.direct && a.browser.detail != nil && a.browser.detail.Name != "" {
-		name = a.browser.detail.Name
-	}
-	if !a.direct && a.playingEpisode != "" {
-		name += " · " + a.playingEpisode
+	if !a.playingDirect && a.title != nil {
+		name = a.title.name
+		if a.playingEpisode != "" {
+			name += " · " + a.playingEpisode
+		}
 	}
 	if a.playingLive && a.live.playingChannel < len(a.live.channels) {
 		name = "直播 · " + a.live.channels[a.live.playingChannel].Name
@@ -114,14 +117,8 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 	}
 	left := max(float32(88), c.TitleBar().Left+14)
 	ui.Row(c).Absolute().Top(top).Left(left).Right(16).Gap(10).AlignItems(ui.Center).Children(func() {
-		label := "返回片库"
-		if a.direct {
-			label = "返回直链播放"
-		} else if a.playingLive {
-			label = "返回直播"
-		}
 		ui.Row(c).Padding(5).Radius(18).Material(glass.Glass{Style: glass.Regular}).Children(func() {
-			if ui.Button(c, label).Radius(16).Material(glass.Glass{Style: glass.Clear}).TextColor(playerText).Clicked() {
+			if ui.Button(c, "返回").Radius(16).Material(glass.Glass{Style: glass.Clear}).TextColor(playerText).Clicked() {
 				a.leavePlayer()
 			}
 		})
@@ -129,9 +126,12 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 			ui.Text(c, name).SingleLine().TextColor(playerText).TextShadow(0, 1, 4, playerInk)
 		})
 		if hasEpisodes {
-			panelLabel := "线路与选集"
+			panelLabel, closeLabel := "线路与选集", "收起选集"
+			if a.playingLive {
+				panelLabel, closeLabel = "频道列表", "收起频道"
+			}
 			if a.panelOpen && (!compact || a.panelTouched) {
-				panelLabel = "收起选集"
+				panelLabel = closeLabel
 			}
 			ui.Row(c).Padding(5).Radius(18).Material(glass.Glass{Style: glass.Regular}).Children(func() {
 				if ui.Button(c, panelLabel).Radius(16).Material(glass.Glass{Style: glass.Clear}).TextColor(playerText).Clicked() {
@@ -151,6 +151,10 @@ func (a *app) playerState(c *ui.Context, p *ui.VideoPlayer) {
 	message := ""
 	switch {
 	case p.Err() != nil:
+		if a.hasEpisodes() && !a.running(jobPlay) {
+			a.playerFailure(c, p.Err())
+			return
+		}
 		message = "播放失败：" + p.Err().Error()
 	case !p.Ready():
 		message = "正在加载视频…"
@@ -159,7 +163,7 @@ func (a *app) playerState(c *ui.Context, p *ui.VideoPlayer) {
 		}
 	case p.Buffering():
 		message = "正在缓冲…"
-	case a.busy:
+	case a.running(jobPlay):
 		message = a.status
 	case a.status != "" && a.status != "正在播放":
 		message = a.status
@@ -176,7 +180,7 @@ func (a *app) playerState(c *ui.Context, p *ui.VideoPlayer) {
 func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, compact bool) {
 	ui.Row(c).Absolute().Left(18).Right(18).Bottom(18).Justify(ui.Center).Children(func() {
 		ui.Column(c).FillWidth().MaxWidth(900).Padding(10, 15).Gap(8).
-			Radius(24).Material(glass.Glass{Style: glass.Clear, Tint: ui.RGBA(9, 15, 31, 150)}).
+			Radius(24).Material(glass.Glass{Style: glass.Clear, Tint: ui.RGBA(9, 15, 31, 0.59)}).
 			TextColor(playerText).Children(func() {
 			duration := p.Duration()
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
@@ -207,10 +211,11 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 				if a.playingLive {
 					a.livePlayerControls(c)
 				}
+				hasEpisodes := a.hasEpisodes()
 				source, episode, current := a.currentEpisode()
 				if hasEpisodes && ui.Button(c, "上一集").Radius(16).Material(glass.Glass{Style: glass.Clear, Interactive: true}).TextColor(playerText).
-					Disabled(a.busy || !current || episode == 0).Clicked() {
-					a.playEpisode(a.browser.detail.Sources[source].Name, a.browser.detail.Sources[source].Episodes[episode-1])
+					Disabled(!current || episode == 0).Clicked() {
+					a.playEpisode(a.title.detail.Sources[source].Name, a.title.detail.Sources[source].Episodes[episode-1])
 				}
 				playLabel := "暂停"
 				if !p.Playing() {
@@ -224,8 +229,8 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 					}
 				}
 				if hasEpisodes && ui.Button(c, "下一集").Radius(16).Material(glass.Glass{Style: glass.Clear, Interactive: true}).TextColor(playerText).
-					Disabled(a.busy || !current || episode+1 >= len(a.browser.detail.Sources[source].Episodes)).Clicked() {
-					a.playEpisode(a.browser.detail.Sources[source].Name, a.browser.detail.Sources[source].Episodes[episode+1])
+					Disabled(!current || episode+1 >= len(a.title.detail.Sources[source].Episodes)).Clicked() {
+					a.playEpisode(a.title.detail.Sources[source].Name, a.title.detail.Sources[source].Episodes[episode+1])
 				}
 				ui.Text(c, "音量").FontSize(12)
 				volume := p.Volume()
@@ -259,99 +264,197 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 	})
 }
 
-func (a *app) playerSources(c *ui.Context) ui.Element {
-	detail := a.browser.detail
-	panel := ui.Column(c).Padding(16).Gap(12).Radius(24).
-		Material(glass.Glass{Style: glass.Clear, Tint: ui.RGBA(40, 35, 70, 170)}).
+// playerPanel floats beside the picture: a title's episodes and sources, or
+// a live list's channels.
+func (a *app) playerPanel(c *ui.Context) ui.Element {
+	panel := ui.Themed(c, ui.DarkTheme()).Padding(16).Gap(12).Radius(24).
+		Material(glass.Glass{Style: glass.Clear, Tint: ui.RGBA(40, 35, 70, 0.67)}).
 		TextColor(playerText)
 	if panel.Hovered() {
 		a.playerOverlay.keepVisible = true
 	}
 	panel.Children(func() {
-		ui.Text(c, "线路与选集").FontSize(18).Bold()
-		if detail == nil {
+		if a.playingLive {
+			a.panelChannels(c)
 			return
 		}
-		currentSource, _, playing := a.currentEpisode()
-		if a.panelSource < 0 || a.panelSource >= len(detail.Sources) {
-			if playing {
-				a.panelSource = currentSource
-			} else {
-				a.panelSource = 0
-			}
-		}
-		ui.Text(c, "线路").Bold()
-		for i, source := range detail.Sources {
-			name := source.Name
-			if name == "" {
-				name = fmt.Sprintf("线路 %d", i+1)
-			}
-			tint := ui.RGBA(55, 50, 92, 100)
-			if i == a.panelSource {
-				tint = ui.RGBA(102, 98, 143, 145)
-			}
-			if ui.Button(c, name).Key(fmt.Sprintf("player-source-%d", i)).FillWidth().Padding(10, 12).Radius(14).
-				Material(glass.Glass{Style: glass.Clear, Tint: tint, Interactive: true}).TextColor(playerText).
-				Disabled(a.busy).Clicked() {
-				a.panelSource = i
-				for _, candidate := range source.Episodes {
-					if candidate.Name == a.playingEpisode && a.playingEpisode != "" {
-						a.playEpisode(source.Name, candidate)
-						break
-					}
-				}
-			}
-		}
-		ui.Text(c, "选集").Bold()
-		if len(detail.Sources) == 0 {
+		if !a.hasEpisodes() { // the header left the player earlier in this frame
 			return
 		}
-		selected := detail.Sources[a.panelSource]
-		ui.Scroll(c).FillWidth().Grow(1).Children(func() {
-			ui.Row(c).FillWidth().Wrap().Gap(6).Children(func() {
-				for i, episode := range selected.Episodes {
-					active := selected.Name == a.playingSource && episode.Name == a.playingEpisode
-					button := ui.Button(c, episodeButtonLabel(episode.Name)).Key(fmt.Sprintf("player-episode-%d", i)).MinWidth(52).Radius(12)
-					if active {
-						button.Background(ui.RGB(255, 255, 255)).TextColor(playerInk)
-					} else {
-						button.Material(glass.Glass{Style: glass.Clear, Tint: ui.RGBA(55, 50, 92, 130), Interactive: true}).TextColor(playerText)
-					}
-					if button.Disabled(a.busy).Clicked() {
-						a.playEpisode(selected.Name, episode)
-					}
-				}
-			})
-		})
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "播完自动下一集").Grow(1)
-			ui.Switch(c, &a.autoNext).Label("播完自动下一集")
-		})
+		candidates := a.candidates()
+		if len(candidates) > 1 {
+			ui.Segmented(c, &a.panelTab, "选集", "换源").Label("面板内容")
+		} else {
+			a.panelTab = 0
+			ui.Text(c, "线路与选集").FontSize(18).Bold()
+		}
+		if a.panelTab == 1 {
+			a.panelSources(c, candidates)
+			return
+		}
+		a.panelEpisodes(c)
 	})
 	return panel
 }
 
+func panelButton(c *ui.Context, label string, selected bool) ui.Element {
+	tint := ui.RGBA(55, 50, 92, 0.39)
+	if selected {
+		tint = ui.RGBA(102, 98, 143, 0.57)
+	}
+	return ui.Button(c, label).FillWidth().Padding(10, 12).Radius(14).
+		Material(glass.Glass{Style: glass.Clear, Tint: tint, Interactive: true}).TextColor(playerText)
+}
+
+func (a *app) panelEpisodes(c *ui.Context) {
+	detail := a.title.detail
+	currentSource, _, playing := a.currentEpisode()
+	if a.panelSource < 0 || a.panelSource >= len(detail.Sources) {
+		a.panelSource = 0
+		if playing {
+			a.panelSource = currentSource
+		}
+	}
+	ui.Text(c, "线路").Bold()
+	for i, source := range detail.Sources {
+		name := source.Name
+		if name == "" {
+			name = fmt.Sprintf("线路 %d", i+1)
+		}
+		if panelButton(c, name, i == a.panelSource).Key(fmt.Sprintf("player-source-%d", i)).Clicked() {
+			a.panelSource = i
+			for _, candidate := range source.Episodes {
+				if candidate.Name == a.playingEpisode && a.playingEpisode != "" {
+					a.playEpisodeAt(source.Name, candidate, a.lastPosition)
+					break
+				}
+			}
+		}
+	}
+	ui.Text(c, "选集").Bold()
+	selected := detail.Sources[a.panelSource]
+	ui.Scroll(c).FillWidth().Grow(1).Children(func() {
+		ui.Row(c).FillWidth().Wrap().Gap(6).Children(func() {
+			for i, episode := range selected.Episodes {
+				active := selected.Name == a.playingSource && episode.Name == a.playingEpisode
+				button := ui.Button(c, episodeButtonLabel(episode.Name)).Key(fmt.Sprintf("player-episode-%d", i)).MinWidth(52).Radius(12)
+				if active {
+					button.Background(ui.RGB(255, 255, 255)).TextColor(playerInk)
+				} else {
+					button.Material(glass.Glass{Style: glass.Clear, Tint: ui.RGBA(55, 50, 92, 0.51), Interactive: true}).TextColor(playerText)
+				}
+				if button.Clicked() {
+					a.playEpisode(selected.Name, episode)
+				}
+			}
+		})
+	})
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "播完自动下一集").Grow(1)
+		ui.Switch(c, &a.autoNext).Label("播完自动下一集")
+	})
+}
+
+// panelSources lists the other sites that have the title; choosing one
+// keeps the episode and the position.
+func (a *app) panelSources(c *ui.Context, candidates []library.Item) {
+	ui.Text(c, "换来源后从当前集、当前进度继续播放").FontSize(12)
+	ui.Scroll(c).FillWidth().Grow(1).Gap(6).Children(func() {
+		for _, item := range candidates {
+			key := itemKey(item)
+			current := itemKey(a.title.item) == key
+			if panelButton(c, item.Entry.Label(), current).Key(key).Label("换到 "+item.Entry.Label()).Clicked() && !current {
+				a.switchSource(item)
+			}
+		}
+	})
+}
+
+// panelChannels changes the channel without leaving the player.
+func (a *app) panelChannels(c *ui.Context) {
+	live := &a.live
+	ui.Text(c, "频道").FontSize(18).Bold()
+	ui.Scroll(c).FillWidth().Grow(1).Gap(6).Children(func() {
+		for i, channel := range live.channels {
+			if live.group != "" && channel.Group != live.group {
+				continue
+			}
+			current := i == live.playingChannel
+			if panelButton(c, channel.Name, current).Key(fmt.Sprintf("panel-channel-%d", i)).Label("切换到 "+channel.Name).Clicked() && !current {
+				a.playLiveChannel(i, 0)
+			}
+		}
+	})
+}
+
+// playerFailure offers the ways out of an episode that does not play.
+func (a *app) playerFailure(c *ui.Context, err error) {
+	detail := a.title.detail
+	ui.Row(c).Absolute().Top(96).Left(24).Right(24).Center().Children(func() {
+		ui.Column(c).MaxWidth(460).Padding(22).Gap(14).Radius(26).Material(glass.Glass{}).TextColor(playerText).Children(func() {
+			ui.Text(c, "这条线路播不了").FontSize(18).Bold()
+			ui.Text(c, err.Error()).Selectable()
+			if a.status != "" && a.status != "正在播放" {
+				ui.Text(c, a.status)
+			}
+			ui.Row(c).Wrap().Gap(8).Children(func() {
+				if len(detail.Sources) > 1 && primaryButton(c, "换下一条线路").Clicked() {
+					a.playNextLine()
+				}
+				if len(a.candidates()) > 1 && glassButton(c, "换来源").TextColor(playerText).Clicked() {
+					a.panelTab, a.panelOpen, a.panelTouched = 1, true, true
+				}
+				if glassButton(c, "重试").TextColor(playerText).Clicked() {
+					if source, episode, ok := a.currentEpisode(); ok {
+						a.playEpisodeAt(detail.Sources[source].Name, detail.Sources[source].Episodes[episode], a.lastPosition)
+					}
+				}
+			})
+		})
+	})
+}
+
+// hasEpisodes reports whether what plays is an episode of the title on show.
+func (a *app) hasEpisodes() bool {
+	return !a.playingDirect && !a.playingLive && a.title != nil && a.title.detail != nil && len(a.title.detail.Sources) > 0
+}
+
+// trackPlayback seeks to where a resumed episode stopped, then keeps the
+// position for the play history and for changing line or source.
+func (a *app) trackPlayback(c *ui.Context, p *ui.VideoPlayer) {
+	if !p.Ready() || p.Err() != nil {
+		return
+	}
+	if a.resumeAt > 0 {
+		p.Seek(a.resumeAt)
+		a.lastPosition, a.resumeAt = a.resumeAt, 0
+		return
+	}
+	a.lastPosition = p.Position()
+	a.recordHistory(p, c.Now())
+}
+
 func (a *app) advanceEpisode(p *ui.VideoPlayer) {
-	if a.direct || a.playingLive || !a.autoNext || !p.Ended() || a.autoNextPending || a.busy {
+	if !a.hasEpisodes() || !a.autoNext || !p.Ended() || a.autoNextPending || a.running(jobPlay) {
 		return
 	}
 	source, episode, ok := a.currentEpisode()
 	if !ok {
 		return
 	}
-	episodes := a.browser.detail.Sources[source].Episodes
+	episodes := a.title.detail.Sources[source].Episodes
 	if episode+1 >= len(episodes) {
 		return
 	}
 	a.autoNextPending = true
-	a.playEpisode(a.browser.detail.Sources[source].Name, episodes[episode+1])
+	a.playEpisode(a.title.detail.Sources[source].Name, episodes[episode+1])
 }
 
 func (a *app) currentEpisode() (sourceIndex, episodeIndex int, ok bool) {
-	if a.browser.detail == nil || a.playingEpisode == "" {
+	if a.title == nil || a.title.detail == nil || a.playingEpisode == "" {
 		return 0, 0, false
 	}
-	for i, source := range a.browser.detail.Sources {
+	for i, source := range a.title.detail.Sources {
 		if source.Name != a.playingSource {
 			continue
 		}
@@ -365,16 +468,19 @@ func (a *app) currentEpisode() (sourceIndex, episodeIndex int, ok bool) {
 }
 
 func (a *app) leavePlayer() {
-	if a.busy && a.cancel != nil {
-		a.cancel()
-	}
+	a.cancelJob(jobPlay)
+	a.flushHistory()
 	if a.player != nil {
 		a.player.Close()
 		a.player = nil
 	}
-	a.playingLive = false
+	a.playingLive, a.playingDirect = false, false
 	a.playerOverlay = playerOverlayState{}
 	a.status = ""
+	// A title played from the history has no page to go back to.
+	if a.route() != routeDetail {
+		a.clearTitle()
+	}
 }
 
 var episodeNumber = regexp.MustCompile(`^(?:第\s*)?([0-9]+)\s*集(?:\s*(?:已完结|完结))?$|^([0-9]+)$`)
@@ -394,15 +500,15 @@ func episodeButtonLabel(name string) string {
 
 func (a *app) livePlayerControls(c *ui.Context) {
 	live := &a.live
-	if ui.Button(c, "上一频道").Disabled(a.busy || live.playingChannel <= 0).Clicked() {
+	if ui.Button(c, "上一频道").Disabled(live.playingChannel <= 0).Clicked() {
 		a.playLiveChannel(live.playingChannel-1, 0)
 	}
-	if ui.Button(c, "下一频道").Disabled(a.busy || live.playingChannel+1 >= len(live.channels)).Clicked() {
+	if ui.Button(c, "下一频道").Disabled(live.playingChannel+1 >= len(live.channels)).Clicked() {
 		a.playLiveChannel(live.playingChannel+1, 0)
 	}
 	if live.playingChannel >= 0 && live.playingChannel < len(live.channels) {
 		count := len(live.channels[live.playingChannel].Streams)
-		if count > 1 && ui.Button(c, fmt.Sprintf("切换线路 %d/%d", live.playingStream+1, count)).Disabled(a.busy).Clicked() {
+		if count > 1 && ui.Button(c, fmt.Sprintf("切换线路 %d/%d", live.playingStream+1, count)).Clicked() {
 			a.playLiveChannel(live.playingChannel, (live.playingStream+1)%count)
 		}
 	}

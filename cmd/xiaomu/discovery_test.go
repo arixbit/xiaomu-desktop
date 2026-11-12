@@ -84,7 +84,7 @@ func TestDoubanCardsSearchUserLibraryAndPlay(t *testing.T) {
 	a := &app{}
 	a.discovery.client = client
 	defer a.close()
-	a.loadConfig(raw+"/config", "")
+	a.loadConfig(raw + "/config")
 	tt := ui.NewTester(a.view, 960, 640)
 	click := func(label string) {
 		t.Helper()
@@ -92,22 +92,27 @@ func TestDoubanCardsSearchUserLibraryAndPlay(t *testing.T) {
 			t.Fatalf("click %q: %v; texts=%v", label, err, tt.Texts())
 		}
 	}
-	if !tt.HasText("豆瓣热播电影") || !tt.HasText("豆瓣 8.6") {
+	if !tt.HasText("演示电影") || !tt.HasText("豆瓣 8.6") {
 		t.Fatalf("missing Douban metadata: %v", tt.Texts())
 	}
 	click("热播剧集")
-	if !tt.HasText("豆瓣热播剧集") || !tt.HasText("演示剧集") {
+	if !tt.HasText("演示剧集") {
 		t.Fatal(tt.Texts())
 	}
 	click("热播电影")
 	if movies.Load() != 1 || series.Load() != 1 {
 		t.Fatal("switching tabs repeated fresh requests")
 	}
-	click("搜索影片 演示电影")
-	if a.library.query != "演示电影" || len(a.library.items) != 1 {
-		t.Fatalf("search=%q results=%d", a.library.query, len(a.library.items))
+	// A poster goes straight to the title: its sources are searched for and
+	// the first one opens without a results page in between.
+	click("查找影片 演示电影")
+	search := &a.library.search
+	if a.route() != routeDetail || search.query != "演示电影" || len(search.items) != 1 {
+		t.Fatalf("route=%v search=%q results=%d", a.route(), search.query, len(search.items))
 	}
-	click("演示电影 · 本地站点")
+	if a.title == nil || a.title.detail == nil {
+		t.Fatalf("the title's only source did not open: %s; texts=%v", a.status, tt.Texts())
+	}
 	opened := false
 	a.open = func(raw string) (*ui.VideoPlayer, error) {
 		response, err := http.Get(raw)
@@ -129,9 +134,8 @@ func TestDoubanCardsSearchUserLibraryAndPlay(t *testing.T) {
 	if !opened {
 		t.Fatal(a.status)
 	}
-	click("返回影片列表")
-	click("首页")
-	if !tt.HasText("豆瓣热播电影") || a.library.query != "" || movies.Load() != 1 {
+	click("返回")
+	if a.route() != routeHome || !tt.HasText("豆瓣 8.6") || movies.Load() != 1 {
 		t.Fatalf("home did not restore: %v", tt.Texts())
 	}
 	// A fresh app instance reuses the disk cache even with a failing network.

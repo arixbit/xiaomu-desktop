@@ -60,7 +60,7 @@ func TestViewPlay(t *testing.T) {
 		return nil, nil
 	}
 	tt := ui.NewTester(a.view, 960, 640)
-	if err := tt.Click("直链播放"); err != nil {
+	if err := tt.Click("打开链接"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tt.Click("播放"); err != nil {

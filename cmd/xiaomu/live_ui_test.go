@@ -23,7 +23,7 @@ func TestImportM3UShowsLiveChannels(t *testing.T) {
 	a := &app{}
 	a.live.url = "https://example.com/previous-list.m3u"
 	defer a.close()
-	a.loadConfig(srv.URL, "")
+	a.loadConfig(srv.URL)
 	tt := ui.NewTester(a.view, 960, 640)
 	if !tt.HasText("演示频道") {
 		t.Fatalf("导入 M3U 后没有频道：status=%s texts=%v", a.status, tt.Texts())
@@ -60,7 +60,8 @@ func TestLiveImportPlaybackAndChannelControls(t *testing.T) {
 	a := &app{autoNext: true}
 	defer a.close()
 	// Live playback must not expose the previously selected VOD's episodes.
-	a.browser.detail = &catalog.Detail{Name: "旧点播", Sources: []catalog.Source{{Name: "旧线路", Episodes: []catalog.Episode{{Name: "第1集"}}}}}
+	a.title = &titlePage{name: "旧点播", failed: map[string]string{}}
+	a.title.detail = &catalog.Detail{Name: "旧点播", Sources: []catalog.Source{{Name: "旧线路", Episodes: []catalog.Episode{{Name: "第1集"}}}}}
 	a.open = func(raw string) (*ui.VideoPlayer, error) {
 		response, err := http.Get(raw)
 		if err != nil {
@@ -109,9 +110,15 @@ func TestLiveImportPlaybackAndChannelControls(t *testing.T) {
 		t.Fatal(tt.Texts())
 	}
 	click("上一频道")
-	click("返回直播")
-	if a.player != nil || !tt.HasText("IPTV 直播") || a.browser.detail.Name != "旧点播" {
-		t.Fatalf("live import lost library state: %v", tt.Texts())
+	// The panel changes the channel without leaving the player.
+	click("切换到 体育频道")
+	if !tt.HasText("直播 · 体育频道") {
+		t.Fatal(tt.Texts())
+	}
+	click("切换到 演示频道")
+	click("返回")
+	if a.player != nil || a.route() != routeLive || !tt.HasText("体育频道") {
+		t.Fatalf("did not return to the live page: %v", tt.Texts())
 	}
 	click("体育")
 	if tt.HasText("演示频道") || !tt.HasText("体育频道") {
@@ -119,7 +126,7 @@ func TestLiveImportPlaybackAndChannelControls(t *testing.T) {
 	}
 	requestsMu.Lock()
 	defer requestsMu.Unlock()
-	if strings.Join(mediaRequests, ",") != "/one.m3u8,/backup.m3u8,/two.m3u8,/one.m3u8" {
+	if strings.Join(mediaRequests, ",") != "/one.m3u8,/backup.m3u8,/two.m3u8,/one.m3u8,/two.m3u8,/one.m3u8" {
 		t.Fatalf("media requests=%v", mediaRequests)
 	}
 }

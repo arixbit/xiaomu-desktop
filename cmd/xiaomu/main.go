@@ -1,46 +1,53 @@
-// Command xiaomu browses user-provided drpy2 sites and plays HTTP media.
+// Command xiaomu browses user-provided sources and plays HTTP media.
 package main
 
 import (
-	"context"
 	"log"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/video"
 
 	"github.com/arixbit/xiaomu-desktop/internal/proxy"
 )
 
-// app is the window state. open is nil in the real process and calls
-// video.OpenURL; tests replace it.
+// app is the window state; only the UI thread changes it. open is nil in the
+// real process and calls video.OpenURL; tests replace it.
 type app struct {
-	window          *mygo.Window
-	rawURL          string
-	referer         string
-	ua              string
-	status          string
-	player          *ui.VideoPlayer
-	posters         posterCache
-	proxy           *proxy.Proxy
-	open            func(string) (*ui.VideoPlayer, error)
-	browser         browser
-	library         libraryBrowser
-	discovery       discoveryBrowser
-	live            liveBrowser
+	window  *mygo.Window
+	rawURL  string
+	referer string
+	ua      string
+	status  string
+	player  *ui.VideoPlayer
+	posters posterCache
+	proxy   *proxy.Proxy
+	open    func(string) (*ui.VideoPlayer, error)
+
+	nav       []routeKind
+	jobs      [jobSlots]job
+	browser   browser
+	title     *titlePage
+	library   libraryBrowser
+	discovery discoveryBrowser
+	live      liveBrowser
+	history   historyStore
+	linkOpen  bool
+	closed    bool
+	persist   bool
+	dispatch  func(func())
+
 	playingLive     bool
-	direct          bool
-	busy            bool
-	closed          bool
-	persist         bool
-	cancel          context.CancelFunc
-	dispatch        func(func())
+	playingDirect   bool
 	playingSource   string
 	playingEpisode  string
+	resumeAt        time.Duration
+	lastPosition    time.Duration
 	panelSource     int
+	panelTab        int
 	panelOpen       bool
 	panelTouched    bool
 	fullScreen      bool
@@ -57,65 +64,29 @@ func (a *app) view(c *ui.Context) {
 		a.playerScreen(c)
 		return
 	}
-	ui.Box(c).Fill().Children(func() {
-		if a.direct {
-			ui.Column(c).Fill().Padding(28).Gap(14).Background(c.Theme().Background).Children(func() {
-				ui.Text(c, "直链播放").FontSize(26).Bold()
-				if ui.Button(c, "返回片库").Clicked() {
-					a.direct = false
-				}
-				a.directView(c)
-			})
-		} else {
-			a.browserView(c)
-		}
-		a.statusView(c)
-	})
-}
-
-func (a *app) statusView(c *ui.Context) {
-	if a.status == "" && !a.busy {
-		return
-	}
-	ui.Row(c).Absolute().Right(16).Bottom(16).MaxWidth(640).Padding(9, 13).Gap(10).
-		Radius(16).Material(glass.Glass{}).Children(func() {
-		if a.status != "" {
-			ui.Text(c, a.status).Selectable().Grow(1)
-		}
-		if a.busy && ui.Button(c, "取消加载").Clicked() {
-			a.cancel()
-		}
-	})
-}
-
-func (a *app) directView(c *ui.Context) {
-	ui.Scroll(c).FillWidth().Grow(1).Gap(10).Children(func() {
-		ui.Text(c, "粘贴 mp4 / m3u8 视频直链").TextColor(c.Theme().TextMuted)
-		ui.TextInput(c, &a.rawURL).Label("地址").Placeholder("https://example.com/video.mp4").FillWidth().MaxWidth(680)
-		ui.TextInput(c, &a.referer).Label("Referer").Placeholder("可选").FillWidth().MaxWidth(680)
-		ui.TextInput(c, &a.ua).Label("User-Agent").Placeholder("可选").FillWidth().MaxWidth(680)
-		if ui.PrimaryButton(c, "播放").Clicked() {
-			a.play()
-		}
-	})
+	a.shell(c)
 }
 
 func (a *app) play() {
-	a.playURL(a.rawURL, playbackHeaders(a.referer, a.ua))
+	if a.playURL(a.rawURL, playbackHeaders(a.referer, a.ua)) {
+		a.playingDirect, a.linkOpen = true, false
+	}
 }
 
-func (a *app) playURL(raw string, headers map[string]string) {
+// playURL hands an HTTP address to the player through the loopback proxy,
+// which adds the request headers. It reports whether the player opened.
+func (a *app) playURL(raw string, headers map[string]string) bool {
 	raw = strings.TrimSpace(raw)
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		a.status = "请输入 http 或 https 播放地址"
-		return
+		return false
 	}
 	if a.proxy == nil {
 		p, err := proxy.Start(nil)
 		if err != nil {
 			a.status = "代理启动失败: " + err.Error()
-			return
+			return false
 		}
 		a.proxy = p
 	}
@@ -132,14 +103,16 @@ func (a *app) playURL(raw string, headers map[string]string) {
 	player, err := opener(wrapped)
 	if err != nil {
 		a.status = "无法打开: " + err.Error()
-		return
+		return false
 	}
 	a.player = player
-	a.playingLive = false
-	a.panelOpen, a.panelTouched, a.panelSource = !a.fullScreen, false, -1
+	a.playingLive, a.playingDirect = false, false
+	a.resumeAt, a.lastPosition = 0, 0
+	a.panelOpen, a.panelTouched, a.panelSource, a.panelTab = !a.fullScreen, false, -1, 0
 	a.playerOverlay = playerOverlayState{}
 	a.autoNextPending = false
 	a.status = "正在播放"
+	return true
 }
 
 func playbackHeaders(referer, ua string) map[string]string {
@@ -170,6 +143,7 @@ func main() {
 		a.window = win
 		a.dispatch = win.Update
 		a.initDiscovery()
+		a.restoreHistory()
 		a.setFullScreen(win.IsFullScreen())
 		win.OnEnterFullScreen(func() { win.Update(func() { a.setFullScreen(true) }) })
 		win.OnLeaveFullScreen(func() { win.Update(func() { a.setFullScreen(false) }) })
