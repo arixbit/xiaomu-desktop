@@ -6,7 +6,7 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// routeKind names a page. The first four are the sidebar's tabs; the others
+// routeKind names a page. The first five are the sidebar's tabs; the others
 // are pushed above a tab and left with the back button.
 type routeKind int
 
@@ -14,6 +14,7 @@ const (
 	routeHome routeKind = iota
 	routeLive
 	routeHistory
+	routeFavorites
 	routeSources
 	routeSearch
 	routeDetail
@@ -27,6 +28,7 @@ var tabs = []struct {
 	{routeHome, "首页"},
 	{routeLive, "直播"},
 	{routeHistory, "播放历史"},
+	{routeFavorites, "收藏"},
 	{routeSources, "片源"},
 }
 
@@ -112,6 +114,7 @@ func (a *app) pop() {
 }
 
 func (a *app) switchTab(kind routeKind) {
+	a.cancelJob(jobTitle)
 	for len(a.nav) > 1 {
 		a.pop()
 	}
@@ -156,6 +159,8 @@ func (a *app) shell(c *ui.Context) {
 						a.liveView(c)
 					case routeHistory:
 						a.historyView(c)
+					case routeFavorites:
+						a.favoritesView(c)
 					case routeSources:
 						a.sourcesView(c)
 					case routeSearch:

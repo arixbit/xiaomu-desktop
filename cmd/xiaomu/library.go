@@ -87,6 +87,7 @@ func (a *app) searchLibrary() {
 		a.status = "请输入片名"
 		return
 	}
+	a.cancelJob(jobTitle)
 	for len(a.nav) > 1 {
 		a.pop()
 	}

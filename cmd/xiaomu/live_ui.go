@@ -137,6 +137,9 @@ func (a *app) startLiveChannel(index, streamIndex int) {
 			a.live.started = time.Now()
 			if a.playURL(stream.URL, stream.Headers) {
 				a.playingLive = true
+				if a.player != nil {
+					a.player.SetRate(1)
+				}
 				return
 			}
 		}

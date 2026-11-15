@@ -20,25 +20,31 @@ const episodeChunk = 50
 // titlePage is one title and the sites that have it. Its session belongs to
 // the source on show, and serves the player while an episode plays.
 type titlePage struct {
-	name, pic string
-	seeds     []library.Item    // sources known when the page opened
-	failed    map[string]string // source → why it could not be read
-	auto      bool              // open the first source that reads
-	pending   library.Item      // the source being read
-	item      library.Item      // the source on show
-	session   source.Session
-	detail    *catalog.Detail
-	line      int // chosen play line
-	chunk     int // chosen range of episodes
+	name, pic      string
+	seeds          []library.Item    // sources known when the page opened
+	failed         map[string]string // source → why it could not be read
+	auto           bool              // open the first source that reads
+	searchFallback bool              // a saved source may have disappeared
+	pending        library.Item      // the source being read
+	item           library.Item      // the source on show
+	session        source.Session
+	detail         *catalog.Detail
+	line           int // chosen play line
+	chunk          int // chosen range of episodes
 }
 
 // openTitle shows a title. Without seeds, its sources are searched for in
 // the library, and the first one that reads opens by itself.
 func (a *app) openTitle(name, pic string, seeds []library.Item) {
+	a.showTitle(name, pic, seeds, false)
+}
+
+func (a *app) showTitle(name, pic string, seeds []library.Item, searchFallback bool) {
 	a.clearTitle()
-	a.title = &titlePage{name: name, pic: pic, seeds: seeds, auto: true, failed: map[string]string{}}
+	a.title = &titlePage{name: name, pic: pic, seeds: seeds, auto: true, searchFallback: searchFallback, failed: map[string]string{}}
 	a.push(routeDetail)
 	if len(seeds) == 0 {
+		a.title.searchFallback = false
 		a.startScan(&a.library.search, name, false)
 		return
 	}
@@ -54,6 +60,8 @@ func (a *app) clearTitle() {
 		a.title = nil
 	}
 	a.playingSource, a.playingEpisode = "", ""
+	a.playFailure = nil
+	a.playbackWait = playbackWait{}
 }
 
 // candidates are the title's sources: its seeds, then the library search's
@@ -89,6 +97,10 @@ func (a *app) autoOpenTitle() {
 			return
 		}
 	}
+	if t.searchFallback {
+		t.searchFallback = false
+		a.startScan(&a.library.search, t.name, false)
+	}
 }
 
 // openItem reads a video's detail from its own site.
@@ -118,6 +130,7 @@ func (a *app) openCandidate(item library.Item) {
 		return
 	}
 	a.cancelJob(jobPlay)
+	a.playFailure = nil
 	t.pending = item
 	key := itemKey(item)
 	assets := strings.TrimSpace(a.browser.assets)
@@ -175,23 +188,32 @@ func (a *app) playEpisodeAt(line string, episode catalog.Episode, at time.Durati
 		return
 	}
 	session := t.session
+	a.playFailure = nil
+	a.playbackWait = playbackWait{}
 	resolver := resolve.Resolver{Sniff: a.sniffPage, Parsers: entryParsers(t.item.Entry)}
 	a.run(jobPlay, "解析分集", func(ctx context.Context) (jobResult, error) {
 		play, err := resolvePlay(ctx, session, resolver, line, episode)
 		if err != nil {
 			return jobResult{}, err
 		}
-		return jobResult{apply: func() { a.startEpisode(play, line, episode.Name, at) }}, nil
-	}, nil)
+		return jobResult{apply: func() { a.startEpisode(play, line, episode, at) }}, nil
+	}, func(err error) {
+		a.playFailure = &episodeFailure{line: line, episode: episode, at: at, err: fmt.Errorf("%s", jobError("解析分集", err))}
+		a.status = ""
+		if a.player != nil {
+			a.player.Pause()
+		}
+	})
 }
 
 // startEpisode opens resolved media as an episode of the title on show.
-func (a *app) startEpisode(play catalog.Playback, line, episode string, at time.Duration) {
+func (a *app) startEpisode(play catalog.Playback, line string, episode catalog.Episode, at time.Duration) {
 	a.flushHistory()
 	if !a.playURL(play.URL, play.Headers) {
+		a.playFailure = &episodeFailure{line: line, episode: episode, at: at, err: fmt.Errorf("%s", a.status)}
 		return
 	}
-	a.playingSource, a.playingEpisode, a.resumeAt = line, episode, at
+	a.playingSource, a.playingEpisode, a.resumeAt = line, episode.Name, at
 }
 
 // matchEpisode finds in detail the episode a viewer was watching elsewhere:
@@ -224,8 +246,11 @@ func (a *app) switchSource(item library.Item) {
 	if t == nil {
 		return
 	}
-	_, index, _ := a.currentEpisode()
-	name, at := a.playingEpisode, a.lastPosition
+	_, index, episode, at, ok := a.recoveryEpisode()
+	if !ok {
+		return
+	}
+	name := episode.Name
 	assets := strings.TrimSpace(a.browser.assets)
 	resolver := resolve.Resolver{Sniff: a.sniffPage, Parsers: entryParsers(item.Entry)}
 	a.cancelJob(jobTitle)
@@ -248,7 +273,7 @@ func (a *app) switchSource(item library.Item) {
 			a.closeSession(t.session)
 			t.session, t.detail, t.item, t.auto = session, &detail, item, false
 			t.line, t.chunk = line, 0
-			a.startEpisode(play, detail.Sources[line].Name, episode.Name, at)
+			a.startEpisode(play, detail.Sources[line].Name, episode, at)
 		}}, nil
 	}, nil)
 }
@@ -259,7 +284,7 @@ func (a *app) playNextLine() {
 	if t == nil || t.detail == nil {
 		return
 	}
-	current, index, ok := a.currentEpisode()
+	current, index, requested, at, ok := a.recoveryEpisode()
 	if !ok {
 		return
 	}
@@ -267,9 +292,9 @@ func (a *app) playNextLine() {
 	for step := 1; step < len(lines); step++ {
 		i := (current + step) % len(lines)
 		only := catalog.Detail{Sources: lines[i : i+1]}
-		if _, episode, found := matchEpisode(only, a.playingEpisode, index); found {
+		if _, episode, found := matchEpisode(only, requested.Name, index); found {
 			t.line = i
-			a.playEpisodeAt(lines[i].Name, episode, a.lastPosition)
+			a.playEpisodeAt(lines[i].Name, episode, at)
 			return
 		}
 	}
@@ -296,6 +321,7 @@ func (a *app) detailView(c *ui.Context) {
 			})
 			ui.Column(c).Grow(1).MinWidth(0).Gap(10).Children(func() {
 				ui.Text(c, t.name).FontSize(27).Bold()
+				a.favoriteButton(c)
 				if t.detail == nil {
 					return
 				}
@@ -312,6 +338,13 @@ func (a *app) detailView(c *ui.Context) {
 				}
 			})
 		})
+		if f := a.playFailure; f != nil && t.detail != nil && !a.running(jobPlay) {
+			ui.Column(c).FillWidth().Padding(16).Gap(10).Radius(18).Background(surface).Children(func() {
+				ui.Text(c, f.line+" · "+f.episode.Name).Bold()
+				ui.Text(c, f.err.Error()).Selectable()
+				a.recoveryActions(c)
+			})
+		}
 		a.sourceList(c, candidates)
 		if t.detail == nil {
 			return
