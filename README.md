@@ -2,19 +2,26 @@
 
 小幕：一个入口，聚合你的所有片源。简洁好用的桌面影视播放器。
 
-小幕是 macOS 原生影视聚合播放器，支持用户自备的 TVBox 配置、CMS 站点、IPTV 列表和视频直链。程序不内置片源、不内置配置、也不附带任何片源地址。播什么，由你在运行时提供的配置或直链决定。
+macOS 原生影视聚合播放器，支持你自备的 TVBox 配置、CMS 站点、IPTV 列表和视频直链。程序不内置片源、不内置配置、也不附带任何片源地址。播什么，由你在运行时提供的配置或直链决定。
+
+<!-- 截图位（待 YiYi 提供真实截图再填，不虚构）：首页一张、播放页一张，建议放 docs/screenshots/home.png、docs/screenshots/player.png -->
+<!-- ![首页](docs/screenshots/home.png) -->
+<!-- ![播放页](docs/screenshots/player.png) -->
 
 ## 下载与安装
 
-从 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest) 获取已发布版本。本分支版本为 **v0.4.0**，正式发布状态以 Releases 页面为准。要求 macOS 13 及以上；Universal 安装包同时包含 Apple Silicon 和 Intel 版本，无需安装 Go。当前 Go 工具链的最低系统要求为 macOS 13，本版不支持 macOS 12。
+从 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest) 下载最新版的 `.dmg`（也有 ZIP 可选）。要求 macOS 13 及以上；Universal 安装包同时包含 Apple Silicon 和 Intel 版本，无需安装 Go。安装包附有 `SHA256SUMS` 校验文件。
 
-1. 获取 `xiaomu-0.4.0.dmg`，打开后将 `Xiaomu.app` 拖到“应用程序”。也可使用 ZIP，解压后移动 App。
+1. 打开 `.dmg`，将 `Xiaomu.app` 拖到“应用程序”。也可使用 ZIP，解压后移动 App。
 2. 本版使用本地签名，尚无 Developer ID 签名及 Apple 公证。首次打开如被系统拦截，请在确认下载来源后，到“系统设置 → 隐私与安全性”选择“仍要打开”。也可以在终端执行 `xattr -d com.apple.quarantine /Applications/Xiaomu.app` 去掉隔离标记，之后双击即可打开；这会跳过 Gatekeeper 的首次检查，只在你信任下载来源时使用。
-3. 打开小幕，在首页导入自己的配置地址；随后即可浏览推荐、搜索影片、选集播放，或进入“直播”导入 IPTV 列表。以后可在“片源”页管理配置。
+3. 打开小幕，按下面“快速上手”走一遍就行。
 
-安装包附有 `SHA256SUMS` 校验文件。本版新增收藏、点播恢复和播放偏好，见 [v0.4.0 版本说明](docs/releases/v0.4.0.md)。键盘操作见 [v0.3.1 发布说明](docs/releases/v0.3.1.md)，在线更新说明见 [v0.3.0 发布说明](docs/releases/v0.3.0.md)。
+## 快速上手
 
-v0.3.0 起可从侧边栏或“小幕”菜单点“检查更新”。App 会在启动后及运行期间每天检查新版本，显示更新说明，由你选择安装、稍后提醒或跳过；默认不自动下载安装。安装后可重启生效，配置与播放历史继续保存在本机。请将 App 移到有写入权限的“应用程序”目录再更新。v0.2.0 及更早版本需手动安装一次最新版本。
+1. 在首页“配置地址”粘贴自己的配置 URL，点击“导入”。以后可在侧边栏“片源”页更换配置。
+2. 首页默认显示豆瓣热播电影，可切换热播剧集；“最近更新”会自动汇集各条线路的推荐。
+3. 点豆瓣影片海报即可全库搜索，或在顶部搜索框输入片名后按回车，无需先选线路、站点或分类；同名影片合并显示，进详情页选来源和分集播放。
+4. 看过的点播记在“播放历史”，点“继续播放”从上次的分集和进度接着看。想看直播，进侧边栏“直播”导入自己的 M3U、TXT 或含 `lives` 的 TVBox 配置地址。
 
 ## 免责声明
 
