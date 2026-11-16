@@ -27,24 +27,30 @@ type app struct {
 	proxy   *proxy.Proxy
 	open    func(string) (*ui.VideoPlayer, error)
 
-	nav       []routeKind
-	jobs      [jobSlots]job
-	browser   browser
-	title     *titlePage
-	library   libraryBrowser
-	discovery discoveryBrowser
-	live      liveBrowser
-	history   historyStore
-	linkOpen  bool
-	closed    bool
-	persist   bool
-	dispatch  func(func())
+	nav             []routeKind
+	jobs            [jobSlots]job
+	browser         browser
+	title           *titlePage
+	library         libraryBrowser
+	discovery       discoveryBrowser
+	live            liveBrowser
+	history         historyStore
+	favorites       favoriteStore
+	preferences     playerPreferences
+	preferencesPath string
+	playbackWait    playbackWait
+	playFailure     *episodeFailure
+	linkOpen        bool
+	closed          bool
+	persist         bool
+	dispatch        func(func())
 
 	playingLive     bool
 	playingDirect   bool
 	playingSource   string
 	playingEpisode  string
 	resumeAt        time.Duration
+	resumeIssued    bool
 	lastPosition    time.Duration
 	panelSource     int
 	panelTab        int
@@ -108,8 +114,12 @@ func (a *app) playURL(raw string, headers map[string]string) bool {
 		return false
 	}
 	a.player = player
+	a.applyPlayerPreferences(player)
+	a.playbackWait = playbackWait{}
+	a.playFailure = nil
 	a.playingLive, a.playingDirect = false, false
 	a.resumeAt, a.lastPosition = 0, 0
+	a.resumeIssued = false
 	a.panelOpen, a.panelTouched, a.panelSource, a.panelTab = !a.fullScreen, false, -1, 0
 	a.playerOverlay = playerOverlayState{}
 	a.autoNextPending = false
@@ -147,6 +157,8 @@ func main() {
 		a.dispatch = win.Update
 		a.initDiscovery()
 		a.restoreHistory()
+		a.restoreFavorites()
+		a.restorePreferences()
 		a.setFullScreen(win.IsFullScreen())
 		win.OnEnterFullScreen(func() { win.Update(func() { a.setFullScreen(true) }) })
 		win.OnLeaveFullScreen(func() { win.Update(func() { a.setFullScreen(false) }) })

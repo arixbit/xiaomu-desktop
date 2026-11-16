@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
@@ -60,6 +61,7 @@ func (a *app) playerScreen(c *ui.Context) {
 		return
 	}
 	a.trackPlayback(c, p)
+	a.checkPlayback(c, p)
 	a.advanceEpisode(p)
 	width, _ := c.Size()
 	compact := width < 900
@@ -150,6 +152,9 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 func (a *app) playerState(c *ui.Context, p *ui.VideoPlayer) {
 	message := ""
 	switch {
+	case a.playFailure != nil && a.hasEpisodes() && !a.running(jobPlay):
+		a.playerFailure(c, a.playFailure.err)
+		return
 	case p.Err() != nil:
 		if a.hasEpisodes() && !a.running(jobPlay) {
 			a.playerFailure(c, p.Err())
@@ -236,6 +241,9 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 				}
 				if volumeControl.Changed() {
 					p.SetVolume(volume)
+					a.ensurePreferences()
+					a.preferences.Volume = volume
+					a.savePreferences()
 				}
 				ui.Spacer(c)
 				rate := p.Rate()
@@ -244,7 +252,10 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 				}
 				if !a.playingLive && ui.Button(c, strconv.FormatFloat(rate, 'f', -1, 64)+"×").Label("播放速度").
 					Radius(16).Material(glass.Glass{Style: glass.Clear, Interactive: true}).TextColor(playerText).Clicked() {
-					p.SetRate(nextPlayerRate(rate))
+					a.ensurePreferences()
+					a.preferences.Rate = nextPlayerRate(rate)
+					p.SetRate(a.preferences.Rate)
+					a.savePreferences()
 				}
 				if a.window != nil {
 					fullLabel := "全屏"
@@ -319,13 +330,12 @@ func (a *app) panelEpisodes(c *ui.Context) {
 			name = fmt.Sprintf("线路 %d", i+1)
 		}
 		if panelButton(c, name, i == a.panelSource).Key(fmt.Sprintf("player-source-%d", i)).Clicked() {
-			a.panelSource = i
-			for _, candidate := range source.Episodes {
-				if candidate.Name == a.playingEpisode && a.playingEpisode != "" {
-					a.playEpisodeAt(source.Name, candidate, a.lastPosition)
-					break
+			if _, index, requested, at, ok := a.recoveryEpisode(); ok {
+				if _, candidate, found := matchEpisode(catalog.Detail{Sources: detail.Sources[i : i+1]}, requested.Name, index); found {
+					a.playEpisodeAt(source.Name, candidate, at)
 				}
 			}
+			a.panelSource = i
 		}
 	}
 	ui.Text(c, "选集").Bold()
@@ -348,7 +358,9 @@ func (a *app) panelEpisodes(c *ui.Context) {
 	})
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "播完自动下一集").Grow(1)
-		ui.Switch(c, &a.autoNext).Label("播完自动下一集")
+		if ui.Switch(c, &a.autoNext).Label("自动下一集").Changed() {
+			a.savePreferences()
+		}
 	})
 }
 
@@ -386,27 +398,17 @@ func (a *app) panelChannels(c *ui.Context) {
 
 // playerFailure offers the ways out of an episode that does not play.
 func (a *app) playerFailure(c *ui.Context, err error) {
-	detail := a.title.detail
 	ui.Row(c).Absolute().Top(96).Left(24).Right(24).Center().Children(func() {
 		ui.Column(c).MaxWidth(460).Padding(22).Gap(14).Radius(26).Material(glass.Glass{}).TextColor(playerText).Children(func() {
 			ui.Text(c, "这条线路播不了").FontSize(18).Bold()
+			if f := a.playFailure; f != nil {
+				ui.Text(c, f.line+" · "+f.episode.Name).FontSize(13)
+			}
 			ui.Text(c, err.Error()).Selectable()
 			if a.status != "" && a.status != "正在播放" {
 				ui.Text(c, a.status)
 			}
-			ui.Row(c).Wrap().Gap(8).Children(func() {
-				if len(detail.Sources) > 1 && primaryButton(c, "换下一条线路").Clicked() {
-					a.playNextLine()
-				}
-				if len(a.candidates()) > 1 && glassButton(c, "换来源").TextColor(playerText).Clicked() {
-					a.panelTab, a.panelOpen, a.panelTouched = 1, true, true
-				}
-				if glassButton(c, "重试").TextColor(playerText).Clicked() {
-					if source, episode, ok := a.currentEpisode(); ok {
-						a.playEpisodeAt(detail.Sources[source].Name, detail.Sources[source].Episodes[episode], a.lastPosition)
-					}
-				}
-			})
+			a.recoveryActions(c)
 		})
 	})
 }
@@ -419,20 +421,31 @@ func (a *app) hasEpisodes() bool {
 // trackPlayback seeks to where a resumed episode stopped, then keeps the
 // position for the play history and for changing line or source.
 func (a *app) trackPlayback(c *ui.Context, p *ui.VideoPlayer) {
-	if !p.Ready() || p.Err() != nil {
+	if !p.Ready() || p.Err() != nil || a.playFailure != nil {
 		return
 	}
 	if a.resumeAt > 0 {
-		p.Seek(a.resumeAt)
-		a.lastPosition, a.resumeAt = a.resumeAt, 0
-		return
+		if !a.resumeIssued {
+			if duration := p.Duration(); duration > 0 {
+				a.resumeAt = min(a.resumeAt, max(0, duration-time.Second))
+			}
+			p.Seek(a.resumeAt)
+			a.lastPosition, a.resumeIssued = a.resumeAt, true
+			return
+		}
+		// AVPlayer seeks asynchronously. Keep the intended position until it
+		// arrives, so a second line switch cannot accidentally resume at zero.
+		if p.Position() < a.resumeAt-time.Second {
+			return
+		}
+		a.resumeAt, a.resumeIssued = 0, false
 	}
 	a.lastPosition = p.Position()
 	a.recordHistory(p, c.Now())
 }
 
 func (a *app) advanceEpisode(p *ui.VideoPlayer) {
-	if !a.hasEpisodes() || !a.autoNext || !p.Ended() || a.autoNextPending || a.running(jobPlay) {
+	if !a.hasEpisodes() || !a.autoNext || !p.Ended() || a.autoNextPending || a.running(jobPlay) || a.playFailure != nil {
 		return
 	}
 	source, episode, ok := a.currentEpisode()
@@ -473,6 +486,8 @@ func (a *app) leavePlayer() {
 	}
 	a.playingLive, a.playingDirect = false, false
 	a.playerOverlay = playerOverlayState{}
+	a.playbackWait = playbackWait{}
+	a.playFailure = nil
 	a.status = ""
 	// A title played from the history has no page to go back to.
 	if a.route() != routeDetail {

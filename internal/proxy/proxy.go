@@ -17,12 +17,16 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/urljoin"
 	"github.com/egoist/mygo/netproxy"
 )
 
 const playlistLimit = 8 << 20
+const upstreamIdleTimeout = 30 * time.Second
+
+var errUpstreamTimeout = errors.New("媒体服务器超过 30 秒未响应")
 
 var uriAttr = regexp.MustCompile(`URI="([^"]*)"`)
 
@@ -32,9 +36,10 @@ type Proxy struct {
 	srv  *http.Server
 	ln   net.Listener
 
-	mu      sync.RWMutex
-	headers map[string]string
-	client  *http.Client
+	mu          sync.RWMutex
+	headers     map[string]string
+	client      *http.Client
+	readTimeout time.Duration
 }
 
 // Start listens on 127.0.0.1 and a free port.
@@ -124,7 +129,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if rg := r.Header.Get("Range"); rg != "" && !playlist("", u.Path) {
 		req.Header.Set("Range", rg)
 	}
-	resp, err := p.client.Do(req)
+	resp, err := p.do(req)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return
@@ -150,16 +155,20 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if playlist(resp.Header.Get("Content-Type"), base.Path) {
-		p.writePlaylist(w, resp, base.String())
+		p.writePlaylist(w, resp, base.String(), r.Context())
 		return
 	}
 	// Sniff a short prefix so a playlist without a useful content type
 	// still has its segment URLs rewritten.
 	buf := make([]byte, 64)
-	n, _ := io.ReadFull(resp.Body, buf)
+	n, readErr := io.ReadFull(resp.Body, buf)
+	if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
+		http.Error(w, readErr.Error(), http.StatusBadGateway)
+		return
+	}
 	if n > 0 && bytes.HasPrefix(bytes.TrimSpace(buf[:n]), []byte("#EXTM3U")) {
 		if resp.StatusCode == http.StatusPartialContent {
-			p.writePlaylist(w, resp, base.String())
+			p.writePlaylist(w, resp, base.String(), r.Context())
 			return
 		}
 		rest, err := io.ReadAll(io.LimitReader(resp.Body, playlistLimit))
@@ -179,14 +188,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
-func (p *Proxy) writePlaylist(w http.ResponseWriter, resp *http.Response, playlistURL string) {
+func (p *Proxy) writePlaylist(w http.ResponseWriter, resp *http.Response, playlistURL string, ctx context.Context) {
 	if resp.StatusCode == http.StatusPartialContent {
 		// Extensionless playlist endpoints can only be identified after the
 		// response. Retry without the player's range before rewriting.
-		req := resp.Request.Clone(resp.Request.Context())
+		req := resp.Request.Clone(ctx)
 		req.Header.Del("Range")
 		_ = resp.Body.Close()
-		full, err := p.client.Do(req)
+		full, err := p.do(req)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return

@@ -189,15 +189,19 @@ func entryKey(entry library.Entry) string {
 
 // historyAvailable reports whether the entry's source is still imported.
 func (a *app) historyAvailable(e historyEntry) bool {
+	return a.configAvailable(e.ConfigURL)
+}
+
+func (a *app) configAvailable(raw string) bool {
 	root := a.library.root
-	if root == nil || e.ConfigURL == "" {
+	if root == nil || raw == "" {
 		return false
 	}
-	if root.URL == e.ConfigURL || a.library.cached[e.ConfigURL] != nil {
+	if root.URL == raw || a.library.cached[raw] != nil {
 		return true
 	}
 	for _, line := range root.Lines {
-		if line.URL == e.ConfigURL {
+		if line.URL == raw {
 			return true
 		}
 	}
@@ -207,13 +211,17 @@ func (a *app) historyAvailable(e historyEntry) bool {
 // findEntry locates the entry's site in its configuration: the same site as
 // recorded, or after a refresh changed its address, the one with its key.
 func findEntry(doc *config.Config, e historyEntry) (library.Entry, bool) {
+	return findSite(doc, e.EntryKey, e.SiteKey)
+}
+
+func findSite(doc *config.Config, entryKey, siteKey string) (library.Entry, bool) {
 	var byKey *library.Entry
 	for _, site := range doc.Sites {
 		entry := library.Entry{Site: site, Config: doc, Line: doc.Line}
-		if entry.Key() == e.EntryKey {
+		if entry.Key() == entryKey {
 			return entry, true
 		}
-		if byKey == nil && site.Key == e.SiteKey {
+		if byKey == nil && site.Key == siteKey {
 			byKey = &entry
 		}
 	}
@@ -295,7 +303,7 @@ func (a *app) resume(e historyEntry) {
 			a.clearTitle()
 			a.title = &titlePage{name: e.Name, pic: e.Pic, seeds: []library.Item{item}, failed: map[string]string{},
 				item: item, session: session, detail: &detail, line: line}
-			a.startEpisode(play, detail.Sources[line].Name, episode.Name, at)
+			a.startEpisode(play, detail.Sources[line].Name, episode, at)
 			if a.player == nil && a.route() != routeDetail {
 				a.clearTitle()
 			}
