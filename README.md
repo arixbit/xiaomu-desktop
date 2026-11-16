@@ -9,7 +9,7 @@
 从 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest) 获取已发布版本。本分支版本为 **v0.4.0**，正式发布状态以 Releases 页面为准。要求 macOS 13 及以上；Universal 安装包同时包含 Apple Silicon 和 Intel 版本，无需安装 Go。当前 Go 工具链的最低系统要求为 macOS 13，本版不支持 macOS 12。
 
 1. 获取 `xiaomu-0.4.0.dmg`，打开后将 `Xiaomu.app` 拖到“应用程序”。也可使用 ZIP，解压后移动 App。
-2. 本版使用本地签名，尚无 Developer ID 签名及 Apple 公证。首次打开如被系统拦截，请在确认下载来源后，到“系统设置 → 隐私与安全性”选择“仍要打开”。
+2. 本版使用本地签名，尚无 Developer ID 签名及 Apple 公证。首次打开如被系统拦截，请在确认下载来源后，到“系统设置 → 隐私与安全性”选择“仍要打开”。也可以在终端执行 `xattr -d com.apple.quarantine /Applications/Xiaomu.app` 去掉隔离标记，之后双击即可打开；这会跳过 Gatekeeper 的首次检查，只在你信任下载来源时使用。
 3. 打开小幕，在首页导入自己的配置地址；随后即可浏览推荐、搜索影片、选集播放，或进入“直播”导入 IPTV 列表。以后可在“片源”页管理配置。
 
 安装包附有 `SHA256SUMS` 校验文件。本版新增收藏、点播恢复和播放偏好，见 [v0.4.0 版本说明](docs/releases/v0.4.0.md)。键盘操作见 [v0.3.1 发布说明](docs/releases/v0.3.1.md)，在线更新说明见 [v0.3.0 发布说明](docs/releases/v0.3.0.md)。
