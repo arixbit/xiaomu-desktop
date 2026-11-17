@@ -37,6 +37,7 @@ type app struct {
 	history         historyStore
 	favorites       favoriteStore
 	searchHistory   searchHistoryStore
+	searchFocused   bool
 	latency         latencyStore
 	focusSearchGrid bool
 	preferences     playerPreferences
