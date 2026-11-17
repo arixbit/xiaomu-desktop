@@ -168,6 +168,7 @@ func (a *app) closeSession(s source.Session) {
 
 func (a *app) close() {
 	a.closed = true
+	a.cancelFollowingRefresh()
 	a.stopScan(&a.library.feed)
 	a.stopScan(&a.library.search)
 	a.stopDiscovery()

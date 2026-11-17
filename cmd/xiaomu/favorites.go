@@ -17,19 +17,26 @@ import (
 // Favorites store a title and an optional site reference, never resolved media.
 // A title can be saved before its sources finish loading.
 type favoriteEntry struct {
-	Name      string    `json:"name"`
-	Pic       string    `json:"pic,omitempty"`
-	ConfigURL string    `json:"config_url,omitempty"`
-	EntryKey  string    `json:"entry_key,omitempty"`
-	SiteKey   string    `json:"site_key,omitempty"`
-	VideoID   string    `json:"video_id,omitempty"`
-	Added     time.Time `json:"added"`
+	Name          string    `json:"name"`
+	Pic           string    `json:"pic,omitempty"`
+	ConfigURL     string    `json:"config_url,omitempty"`
+	EntryKey      string    `json:"entry_key,omitempty"`
+	SiteKey       string    `json:"site_key,omitempty"`
+	VideoID       string    `json:"video_id,omitempty"`
+	Added         time.Time `json:"added"`
+	EpisodeCount  int       `json:"episode_count,omitempty"`
+	LatestEpisode string    `json:"latest_episode,omitempty"`
+	Checked       time.Time `json:"checked,omitempty"`
 }
 
 type favoriteStore struct {
-	entries []favoriteEntry
-	path    string
-	readErr error
+	entries           []favoriteEntry
+	path              string
+	readErr           error
+	refreshCancel     context.CancelFunc
+	refreshGeneration uint64
+	refreshing        bool
+	refreshErrors     map[string]string
 }
 
 func (f *favoriteStore) contains(name string) bool {
@@ -114,6 +121,10 @@ func (a *app) toggleFavorite() {
 	if item.Entry.Config != nil {
 		e.ConfigURL, e.EntryKey, e.SiteKey, e.VideoID = configURL(item.Entry), entryKey(item.Entry), item.Entry.Site.Key, string(item.Video.ID)
 	}
+	if t.detail != nil {
+		e.EpisodeCount, e.LatestEpisode = followingEpisodes(*t.detail)
+		e.Checked = time.Now()
+	}
 	entries := append([]favoriteEntry{e}, a.favorites.entries...)
 	if err := a.favorites.replace(entries); err != nil {
 		a.status = "保存收藏失败：" + err.Error()
@@ -121,9 +132,9 @@ func (a *app) toggleFavorite() {
 }
 
 func (a *app) favoriteButton(c *ui.Context) {
-	label := "加入想看"
+	label := "加入追剧"
 	if a.favorites.contains(a.title.name) {
-		label = "已收藏 · 取消"
+		label = "已追剧 · 取消"
 	}
 	if glassButton(c, label).AlignSelf(ui.Start).Clicked() {
 		a.toggleFavorite()
@@ -171,16 +182,17 @@ func (a *app) favoritesStrip(c *ui.Context) {
 	}
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "我的收藏").FontSize(16).Bold()
+			ui.Text(c, "我的追剧").FontSize(16).Bold()
 			ui.Spacer(c)
-			if glassButton(c, "全部收藏").Clicked() {
+			a.followingRefreshButton(c)
+			if glassButton(c, "全部追剧").Clicked() {
 				a.switchTab(routeFavorites)
 			}
 		})
 		ui.ScrollHorizontal(c).FillWidth().Gap(12).Children(func() {
 			for _, e := range a.favorites.entries {
-				card := ui.Column(c).Key("favstrip-" + titleKey(e.Name)).Width(96).Gap(6).
-					Cursor(ui.CursorPointer).Label("打开收藏 " + e.Name)
+				card := ui.Column(c).Key("favstrip-" + titleKey(e.Name)).Width(144).Gap(6).
+					Cursor(ui.CursorPointer).Label("打开追剧 " + e.Name)
 				card.Children(func() {
 					ui.Box(c).Size(96, 144).Radius(12).Clip().Background(ui.Hex("#24242c")).Children(func() {
 						if poster := a.poster(e.Pic); poster != nil {
@@ -188,9 +200,13 @@ func (a *app) favoritesStrip(c *ui.Context) {
 						}
 					})
 					ui.Text(c, e.Name).FontSize(13).SingleLine()
+					ui.Text(c, a.followingProgress(e)).FontSize(11).TextColor(textMuted).SingleLine()
+					if a.followingHasNew(e) {
+						ui.Text(c, "有新集").FontSize(11).Bold()
+					}
 				})
 				if card.Clicked() {
-					a.openFavorite(e)
+					a.openFollowing(e)
 				}
 			}
 		})
@@ -199,15 +215,18 @@ func (a *app) favoritesStrip(c *ui.Context) {
 
 func (a *app) favoritesView(c *ui.Context) {
 	if a.favorites.readErr != nil {
-		emptyState(c, "收藏暂时无法读取", a.favorites.readErr.Error())
+		emptyState(c, "追剧暂时无法读取", a.favorites.readErr.Error())
 		return
 	}
 	if len(a.favorites.entries) == 0 {
-		emptyState(c, "还没有收藏", "在影片详情页点“加入想看”，下次从这里打开。")
+		emptyState(c, "还没有追剧", "在影片详情页点“加入追剧”，这里会显示观看进度和更新。")
 		return
 	}
 	ui.Column(c).Fill().Gap(14).Children(func() {
-		ui.Text(c, "想看的影片 · 只保存在这台 Mac 上").FontSize(13).TextColor(textMuted)
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "追剧和进度 · 只保存在这台 Mac 上").FontSize(13).TextColor(textMuted).Grow(1)
+			a.followingRefreshButton(c)
+		})
 		ui.Scroll(c).Grow(1).FillWidth().Gap(8).Children(func() {
 			for _, e := range a.favorites.entries {
 				ui.Row(c).Key(titleKey(e.Name)).FillWidth().Padding(10).Gap(12).Radius(18).AlignItems(ui.Center).Background(surface).Children(func() {
@@ -218,17 +237,28 @@ func (a *app) favoritesView(c *ui.Context) {
 					})
 					ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
 						ui.Text(c, e.Name).Bold().SingleLine()
-						ui.Text(c, e.Added.Local().Format("2006-01-02")+" 加入想看").FontSize(12).TextColor(textMuted)
+						ui.Text(c, a.followingProgress(e)).FontSize(12).TextColor(textMuted).SingleLine()
+						if a.followingHasNew(e) {
+							ui.Text(c, "有新集").FontSize(12).Bold()
+						}
+						if message := a.favorites.refreshErrors[titleKey(e.Name)]; message != "" {
+							ui.Text(c, message).FontSize(11).TextColor(textMuted).SingleLine()
+						}
 						if a.library.root == nil {
 							ui.Text(c, "添加片源后可选集播放").FontSize(12).TextColor(textMuted)
 						}
 					})
-					if primaryButton(c, "打开").Label("打开收藏 " + e.Name).Clicked() {
-						a.openFavorite(e)
-					}
-					if glassButton(c, "移除").Label("移除收藏 " + e.Name).Clicked() {
-						a.removeFavorite(e.Name)
-					}
+					ui.Column(c).Width(108).Gap(5).Children(func() {
+						if primaryButton(c, a.followingAction(e)).FillWidth().Label("打开追剧 " + e.Name).Clicked() {
+							a.openFollowing(e)
+						}
+						if glassButton(c, "详情").FillWidth().Label("追剧详情 " + e.Name).Clicked() {
+							a.openFavorite(e)
+						}
+						if glassButton(c, "移除").FillWidth().Label("移除追剧 " + e.Name).Clicked() {
+							a.removeFavorite(e.Name)
+						}
+					})
 				})
 			}
 		})

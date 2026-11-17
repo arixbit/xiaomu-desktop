@@ -108,7 +108,7 @@ func TestDetailHeaderShowsPlayButtonAboveSources(t *testing.T) {
 	}
 	// The play button is a normal-sized button beside the favourite
 	// button, not a full-width bar.
-	fav, ok := tt.Find("加入想看")
+	fav, ok := tt.Find("加入追剧")
 	if !ok {
 		t.Fatal("favourite button is missing")
 	}
@@ -123,7 +123,7 @@ func TestDetailHeaderShortSynopsisLeavesNoHole(t *testing.T) {
 	tt := ui.NewTester(a.view, 1120, 760)
 	tt.SetTitleBar(dragBar)
 	tt.Frame()
-	if !tt.HasText("简介只有一句。") || !tt.HasText("立即播放") || !tt.HasText("加入想看") {
+	if !tt.HasText("简介只有一句。") || !tt.HasText("立即播放") || !tt.HasText("加入追剧") {
 		t.Fatalf("short-synopsis header missing: %v", tt.Texts())
 	}
 	// The header's height is driven by the poster (240), not by the

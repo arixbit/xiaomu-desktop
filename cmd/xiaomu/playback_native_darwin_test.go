@@ -7,10 +7,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
+	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -120,4 +123,64 @@ func TestNativeVODRecoveryAndPreferences(t *testing.T) {
 			a.playNextLine()
 		}
 	}
+}
+
+func TestNativeSeriesSkipAndSourceMemory(t *testing.T) {
+	dir := os.Getenv("XIAOMU_NATIVE_MEDIA_DIR")
+	if dir == "" {
+		t.Skip("set XIAOMU_NATIVE_MEDIA_DIR to generated h264.mp4 fixture")
+	}
+	srv := httptest.NewServer(http.FileServer(http.Dir(dir)))
+	defer srv.Close()
+	doc := &config.Config{URL: "https://example.com/config"}
+	item := library.Item{Entry: library.Entry{Config: doc, Site: config.Site{Key: "local"}}, Video: catalog.Video{ID: "fixture", Name: "本地跳过验证"}}
+	a := &app{autoNext: true, preferences: playerPreferences{Rate: 1, Volume: 0}}
+	defer a.close()
+	a.sourceMemory.path = filepath.Join(t.TempDir(), "source-playback.json")
+	a.title = &titlePage{name: item.Video.Name, item: item, failed: map[string]string{}, detail: &catalog.Detail{Sources: []catalog.Source{{Name: "本地线路", Episodes: []catalog.Episode{
+		{Name: "第1集", ID: srv.URL + "/h264.mp4"},
+		{Name: "第2集", ID: srv.URL + "/h264.mp4"},
+	}}}}}
+	a.title.session = &recoverySession{play: func(_ context.Context, _ string, e catalog.Episode) (catalog.Playback, error) {
+		return catalog.Playback{URL: e.ID}, nil
+	}}
+	_ = a.seriesSkips.set(a.title.name, seriesSkipRule{Enabled: true, Opening: 2, Ending: 2})
+	a.playEpisode("本地线路", a.title.detail.Sources[0].Episodes[0])
+	if a.player == nil {
+		t.Fatal(a.status)
+	}
+	p := a.player
+	tt := ui.NewTester(a.view, 1120, 760)
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		tt.Frame()
+		if err := p.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if p.Position() >= 2*time.Second && a.sourceAttempt.succeeded && a.resumeAt == 0 {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if p.Position() < 2*time.Second || !a.sourceAttempt.succeeded || a.resumeAt != 0 {
+		t.Fatalf("native opening/actual playback: position=%s success=%v resume=%s", p.Position(), a.sourceAttempt.succeeded, a.resumeAt)
+	}
+	p.Seek(p.Duration() - time.Second)
+	deadline = time.Now().Add(5 * time.Second)
+	for a.playingEpisode != "第2集" && time.Now().Before(deadline) {
+		tt.Frame()
+		time.Sleep(25 * time.Millisecond)
+	}
+	if a.playingEpisode != "第2集" || len(a.history.entries) != 1 || a.history.entries[0].Episode != "第1集" || !a.history.entries[0].finished() {
+		t.Fatalf("native credits did not advance with completion: episode=%s history=%+v", a.playingEpisode, a.history.entries)
+	}
+	entries, err := readSourceMemory(a.sourceMemory.path)
+	if err != nil || !entries[titleKey(item.Video.Name)].Preferred.matches(item) {
+		t.Fatalf("native playback source not saved: %+v, %v", entries, err)
+	}
+	data, err := os.ReadFile(a.sourceMemory.path)
+	if err != nil || strings.Contains(string(data), "h264.mp4") {
+		t.Fatal("source memory persisted media URL")
+	}
+	t.Log("AVPlayer skipped opening, recorded actual playback, skipped credits and started episode 2")
 }

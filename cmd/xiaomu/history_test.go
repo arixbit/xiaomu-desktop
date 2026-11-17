@@ -109,10 +109,10 @@ func TestResumePoint(t *testing.T) {
 		{"same episode", historyEntry{Line: "线路一", Episode: "第2集", Position: 30, Duration: 600}, 0, "第2集", 30 * time.Second, true},
 		{"other line", historyEntry{Line: "线路二", Episode: "02", Position: 30}, 1, "02", 30 * time.Second, true},
 		{"finished moves on", historyEntry{Line: "线路一", Episode: "第2集", Position: 598, Duration: 600}, 0, "第3集", 0, true},
-		{"finished last stays", historyEntry{Line: "线路一", Episode: "第3集", Position: 600, Duration: 600}, 0, "第3集", 0, true},
+		{"finished last has no next", historyEntry{Line: "线路一", Episode: "第3集", Position: 600, Duration: 600}, 0, "", 0, false},
 		{"line renamed", historyEntry{Line: "旧线路", Episode: "第2集", Position: 30}, 0, "第2集", 30 * time.Second, true},
 		{"episode renamed", historyEntry{Line: "旧线路", Episode: "2", Position: 30}, 0, "第2集", 30 * time.Second, true},
-		{"nothing matches", historyEntry{Line: "旧线路", Episode: "正片", Position: 30}, 0, "第1集", 30 * time.Second, true},
+		{"nothing matches", historyEntry{Line: "旧线路", Episode: "正片", Position: 30}, 0, "", 0, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

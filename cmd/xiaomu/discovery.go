@@ -125,10 +125,15 @@ var homeTabs = []string{string(douban.Movie), string(douban.TV), "sites"}
 // homeView is the first page: the welcome before a source is imported, then
 // what is popular on Douban and the sites' latest updates.
 func (a *app) homeView(c *ui.Context) {
-	if a.library.root == nil {
+	if a.library.root == nil && len(continueWatchingEntries(a.history.entries)) == 0 && len(a.favorites.entries) == 0 {
 		a.welcomeView(c)
 		return
 	}
+	// Shortcut rows keep their natural height. The page can scroll even in a
+	// small window, while the recommendation grid retains a bounded viewport
+	// for its own virtual scrolling.
+	_, height := c.Size()
+	recommendationHeight := max(float32(300), height-180)
 	d := &a.discovery
 	tab := 0
 	for i, key := range homeTabs {
@@ -136,8 +141,19 @@ func (a *app) homeView(c *ui.Context) {
 			tab = i
 		}
 	}
-	ui.Column(c).Fill().Gap(14).Children(func() {
+	ui.Scroll(c).Key("home-scroll").Label("首页内容").Fill().Gap(14).Children(func() {
+		a.continueWatchingStrip(c)
 		a.favoritesStrip(c)
+		if a.library.root == nil {
+			ui.Column(c).FillWidth().Padding(20).Gap(12).Radius(22).Material(glassPane).Children(func() {
+				ui.Text(c, "添加片源，继续观看").FontSize(22).Bold()
+				ui.Text(c, "观看记录和追剧仍保存在这台 Mac 上。重新添加片源后即可继续播放。").TextColor(textMuted)
+				if primaryButton(c, "添加片源").AlignSelf(ui.Start).Clicked() {
+					a.browser.importOpen = true
+				}
+			})
+			return
+		}
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 			if ui.Segmented(c, &tab, "热播电影", "热播剧集", "最近更新").Label("榜单").Changed() {
 				d.tab = homeTabs[tab]
@@ -155,11 +171,13 @@ func (a *app) homeView(c *ui.Context) {
 				a.loadDiscoveryTab(true)
 			}
 		})
-		if d.tab == "sites" {
-			a.feedView(c)
-		} else {
-			a.discoveryView(c)
-		}
+		ui.Column(c).Label("首页推荐").FillWidth().Height(recommendationHeight).MinHeight(recommendationHeight).Gap(14).Children(func() {
+			if d.tab == "sites" {
+				a.feedView(c)
+			} else {
+				a.discoveryView(c)
+			}
+		})
 	})
 }
 

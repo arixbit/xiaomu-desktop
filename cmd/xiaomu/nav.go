@@ -28,7 +28,7 @@ var tabs = []struct {
 	{routeHome, "首页"},
 	{routeLive, "直播"},
 	{routeHistory, "播放历史"},
-	{routeFavorites, "收藏"},
+	{routeFavorites, "追剧"},
 	{routeSources, "片源"},
 }
 
@@ -119,6 +119,7 @@ func (a *app) pop() {
 
 func (a *app) switchTab(kind routeKind) {
 	a.cancelJob(jobTitle)
+	a.cancelJob(jobPlay)
 	for len(a.nav) > 1 {
 		a.pop()
 	}

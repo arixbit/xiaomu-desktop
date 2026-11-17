@@ -42,9 +42,24 @@ func (a *app) openTitle(name, pic string, seeds []library.Item) {
 
 func (a *app) showTitle(name, pic string, seeds []library.Item, searchFallback bool) {
 	a.clearTitle()
+	if saved, ok := a.rememberedCandidate(name, pic); ok {
+		known := false
+		for _, item := range seeds {
+			known = known || sourceMemoryItemKey(item) == sourceMemoryItemKey(saved)
+		}
+		if !known {
+			seeds = append([]library.Item{saved}, seeds...)
+			searchFallback = true
+		}
+	}
 	a.title = &titlePage{name: name, pic: pic, seeds: seeds, auto: true, searchFallback: searchFallback, failed: map[string]string{}}
 	a.push(routeDetail)
-	if len(seeds) == 0 {
+	preferred := a.sourceMemory.entries[titleKey(name)].Preferred
+	knownPreferred := false
+	for _, item := range seeds {
+		knownPreferred = knownPreferred || preferred.matches(item)
+	}
+	if len(seeds) == 0 || preferred.VideoID != "" && a.configAvailable(preferred.ConfigURL) && !knownPreferred {
 		a.title.searchFallback = false
 		a.startScan(&a.library.search, name, false)
 		return
@@ -63,13 +78,11 @@ func (a *app) clearTitle() {
 	a.playingSource, a.playingEpisode = "", ""
 	a.playFailure = nil
 	a.playbackWait = playbackWait{}
+	a.sourceAttempt = sourcePlaybackAttempt{}
 }
 
-// candidates are the title's sources: its seeds, then the library search's
-// videos of the same title, fastest first. Measured sources sort by their
-// last latency, then unmeasured ones in their original order, and sources
-// that failed for this title last — so the auto-open below, which tries
-// them in order, reaches for the fastest known-good source first.
+// candidates prefer the last source that actually played this title. Failed
+// reads stay last; playback observations and interface timing order the rest.
 func (a *app) candidates() []library.Item {
 	t := a.title
 	if t == nil {
@@ -93,13 +106,26 @@ func (a *app) candidates() []library.Item {
 	return out
 }
 
-// candidateLess orders two sources of one title: failed last, measured
-// before unmeasured, measured by latency ascending. Equal sources keep
-// their original order, which is what the stable sort guarantees.
+// Equal sources keep their original order, as guaranteed by the stable sort.
 func (a *app) candidateLess(t *titlePage, x, y library.Item) bool {
 	fx, fy := t.failed[itemKey(x)] != "", t.failed[itemKey(y)] != ""
 	if fx != fy {
 		return fy
+	}
+	memory := a.sourceMemory.entries[titleKey(t.name)]
+	px, py := memory.Preferred.matches(x), memory.Preferred.matches(y)
+	if px != py {
+		return px
+	}
+	rx, ry := memory.Records[sourceMemoryItemKey(x)], memory.Records[sourceMemoryItemKey(y)]
+	if rx.ConsecutiveFailures != ry.ConsecutiveFailures {
+		return rx.ConsecutiveFailures < ry.ConsecutiveFailures
+	}
+	if (rx.Successes > 0) != (ry.Successes > 0) {
+		return rx.Successes > 0
+	}
+	if rx.Successes > 0 && ry.Successes > 0 && rx.StartMS != ry.StartMS {
+		return rx.StartMS < ry.StartMS
 	}
 	dx, okx := a.latency.get(x.Entry.Key())
 	dy, oky := a.latency.get(y.Entry.Key())
@@ -117,7 +143,24 @@ func (a *app) autoOpenTitle() {
 	if t == nil || !t.auto || t.detail != nil || a.running(jobTitle) {
 		return
 	}
-	for _, item := range a.candidates() {
+	candidates := a.candidates()
+	preferred := a.sourceMemory.entries[titleKey(t.name)].Preferred
+	preferredSeen := false
+	for _, item := range candidates {
+		if preferred.matches(item) {
+			preferredSeen = true
+			if t.failed[itemKey(item)] == "" {
+				a.openCandidate(item)
+				return
+			}
+		}
+	}
+	// Library replies arrive out of order. Give the saved source its chance
+	// before auto-opening a quicker search response from another site.
+	if !preferredSeen && preferred.VideoID != "" && a.configAvailable(preferred.ConfigURL) && a.library.search.running && titleKey(a.library.search.query) == titleKey(t.name) {
+		return
+	}
+	for _, item := range candidates {
 		if _, bad := t.failed[itemKey(item)]; !bad {
 			a.openCandidate(item)
 			return
@@ -187,6 +230,7 @@ func (a *app) openCandidate(item library.Item) {
 	a.playFailure = nil
 	t.pending = item
 	key := itemKey(item)
+	isRemembered := a.sourceMemory.entries[titleKey(t.name)].Preferred.matches(item)
 	assets := strings.TrimSpace(a.browser.assets)
 	a.run(jobTitle, "读取影片详情", func(ctx context.Context) (jobResult, error) {
 		start := time.Now()
@@ -195,14 +239,19 @@ func (a *app) openCandidate(item library.Item) {
 		if err != nil {
 			return jobResult{}, err
 		}
+		if isRemembered && titleKey(detail.Name) != titleKey(t.name) {
+			session.Close()
+			return jobResult{}, fmt.Errorf("上次的影片编号已变更，重新查找来源")
+		}
 		return jobResult{discard: session.Close, apply: func() {
 			a.closeSession(t.session)
 			t.session, t.detail, t.item = session, &detail, item
-			t.line, t.chunk = 0, 0
+			t.line, t.chunk = a.preferredLine(t.name, item, detail), 0
 			delete(t.failed, key)
 			// The detail read is the freshest measurement of this
 			// site's speed; a failed read records nothing.
 			_ = a.latency.record(item.Entry.Key(), elapsed)
+			a.updateFollowedTitle()
 		}}, nil
 	}, func(err error) {
 		// The page shows the failure beside its source and tries the next one.
@@ -249,6 +298,7 @@ func (a *app) playEpisodeAt(line string, episode catalog.Episode, at time.Durati
 	session := t.session
 	a.playFailure = nil
 	a.playbackWait = playbackWait{}
+	a.beginSourceAttempt(t.item, line, episode.Name)
 	resolver := resolve.Resolver{Sniff: a.sniffPage, Parsers: entryParsers(t.item.Entry)}
 	a.run(jobPlay, "解析分集", func(ctx context.Context) (jobResult, error) {
 		play, err := resolvePlay(ctx, session, resolver, line, episode)
@@ -257,6 +307,7 @@ func (a *app) playEpisodeAt(line string, episode catalog.Episode, at time.Durati
 		}
 		return jobResult{apply: func() { a.startEpisode(play, line, episode, at) }}, nil
 	}, func(err error) {
+		a.failSourceAttempt()
 		a.playFailure = &episodeFailure{line: line, episode: episode, at: at, err: fmt.Errorf("%s", jobError("解析分集", err))}
 		a.status = ""
 		if a.player != nil {
@@ -267,12 +318,24 @@ func (a *app) playEpisodeAt(line string, episode catalog.Episode, at time.Durati
 
 // startEpisode opens resolved media as an episode of the title on show.
 func (a *app) startEpisode(play catalog.Playback, line string, episode catalog.Episode, at time.Duration) {
+	t := a.title
+	if t == nil {
+		return
+	}
+	if a.sourceAttempt.title != t || sourceMemoryItemKey(a.sourceAttempt.item) != sourceMemoryItemKey(t.item) || a.sourceAttempt.player != nil {
+		a.beginSourceAttempt(t.item, line, episode.Name)
+	}
+	a.sourceAttempt.line, a.sourceAttempt.episode = line, episode.Name
 	a.flushHistory()
 	if !a.playURL(play.URL, play.Headers) {
+		a.failSourceAttempt()
 		a.playFailure = &episodeFailure{line: line, episode: episode, at: at, err: fmt.Errorf("%s", a.status)}
 		return
 	}
 	a.playingSource, a.playingEpisode, a.resumeAt = line, episode.Name, at
+	a.sourceAttempt.player = a.player
+	a.revealContinueWatching(t.name)
+	a.updateFollowedTitle()
 }
 
 // matchEpisode finds in detail the episode a viewer was watching elsewhere:
@@ -313,6 +376,7 @@ func (a *app) switchSource(item library.Item) {
 	assets := strings.TrimSpace(a.browser.assets)
 	resolver := resolve.Resolver{Sniff: a.sniffPage, Parsers: entryParsers(item.Entry)}
 	a.cancelJob(jobTitle)
+	a.beginSourceAttempt(item, "", name)
 	a.run(jobPlay, "切换来源", func(ctx context.Context) (jobResult, error) {
 		start := time.Now()
 		session, detail, err := openItem(ctx, item, assets)
@@ -337,7 +401,10 @@ func (a *app) switchSource(item library.Item) {
 			_ = a.latency.record(item.Entry.Key(), elapsed)
 			a.startEpisode(play, detail.Sources[line].Name, episode, at)
 		}}, nil
-	}, nil)
+	}, func(err error) {
+		a.failSourceAttempt()
+		a.status = jobError("切换来源", err)
+	})
 }
 
 // playNextLine retries the episode on the title's next play line.
