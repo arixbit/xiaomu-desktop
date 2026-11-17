@@ -99,7 +99,22 @@ func (a *app) playerScreen(c *ui.Context) {
 			}
 			a.playerPanel(c).Absolute().Top(70).Right(12).Bottom(bottom).Width(280)
 		}
+		playerDragStrip(c)
 	})
+}
+
+// playerDragStrip is the same title bar band as the shell's drag strip,
+// floating over the video: the player has no toolbar of its own to drag
+// by, and the video fills the window. It sits above the header, whose
+// top already clears the traffic lights.
+func playerDragStrip(c *ui.Context) {
+	height := dragStripHeight(c)
+	if height == 0 {
+		return
+	}
+	bar := c.TitleBar()
+	ui.Row(c).Absolute().Top(0).Left(0).Right(0).Height(height).
+		Padding(0, bar.Right, 0, bar.Left).Label("拖动窗口").DragWindow()
 }
 
 func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {

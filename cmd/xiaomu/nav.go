@@ -145,10 +145,36 @@ func (a *app) pageTitle() string {
 	return ""
 }
 
+// dragStripHeight is the height of the title bar band the shell draws
+// above the content, or 0 in full screen, where the window has no title
+// bar and cannot be dragged.
+func dragStripHeight(c *ui.Context) float32 {
+	bar := c.TitleBar()
+	if bar == (ui.TitleBar{}) {
+		return 0
+	}
+	return max(bar.Height, 32)
+}
+
+// dragStrip is the window's title bar: a plain row across the top that
+// moves the window. It must stay free of buttons and fields: MyGo only
+// starts a drag when the pressed element carries no other interactive
+// flags, and a double click on it maximizes the window.
+func dragStrip(c *ui.Context) {
+	height := dragStripHeight(c)
+	if height == 0 {
+		return
+	}
+	bar := c.TitleBar()
+	ui.Row(c).FillWidth().Height(height).Padding(0, bar.Right, 0, bar.Left).
+		Label("拖动窗口").DragWindow()
+}
+
 // shell is every page but the player: the backdrop, the floating sidebar,
 // the toolbar and the page on show.
 func (a *app) shell(c *ui.Context) {
 	ui.Themed(c, ui.DarkTheme()).Fill().LinearGradient(backdrop).Children(func() {
+		dragStrip(c)
 		ui.Row(c).Fill().Padding(10).Gap(10).Children(func() {
 			a.sidebar(c)
 			ui.Column(c).Grow(1).FillHeight().MinWidth(0).Padding(4, 8, 8, 8).Gap(14).Children(func() {
@@ -183,8 +209,13 @@ func (a *app) shell(c *ui.Context) {
 }
 
 func (a *app) sidebar(c *ui.Context) {
-	// HiddenInset places macOS window controls over this pane.
-	top := max(float32(52), c.TitleBar().Bottom+14)
+	// HiddenInset places macOS window controls over this pane. The drag
+	// strip above already clears them, so the pane keeps only the gap
+	// the title had before the strip.
+	top := max(float32(52), c.TitleBar().Bottom+14) - dragStripHeight(c)
+	if top < 12 {
+		top = 12
+	}
 	ui.Column(c).Width(204).FillHeight().Radius(22).Padding(top, 10, 10, 10).Gap(4).
 		Material(glassPane).Children(func() {
 		ui.Text(c, "小幕").FontSize(20).Bold().Padding(0, 12, 12, 12)
