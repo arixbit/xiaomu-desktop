@@ -30,9 +30,8 @@ type titlePage struct {
 	item           library.Item      // the source on show
 	session        source.Session
 	detail         *catalog.Detail
-	line           int            // chosen play line
-	chunk          int            // chosen range of episodes
-	sourcesScroll  ui.ScrollState // where the sources box is scrolled
+	line           int // chosen play line
+	chunk          int // chosen range of episodes
 }
 
 // openTitle shows a title. Without seeds, its sources are searched for in
@@ -371,9 +370,8 @@ func (a *app) detailView(c *ui.Context) {
 		return
 	}
 	candidates := a.candidates()
-	// The header stays put while the rest scrolls: the sources box
-	// scrolls inside itself, so the play button never leaves the
-	// screen however far down the sources go.
+	// The header stays put while the rest scrolls, so the play button
+	// never leaves the screen however far down the sources go.
 	ui.Column(c).Fill().Gap(20).Children(func() {
 		a.detailHeader(c, t)
 		ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Gap(20).Children(func() {
@@ -384,65 +382,47 @@ func (a *app) detailView(c *ui.Context) {
 					a.recoveryActions(c)
 				})
 			}
-			a.sourceList(c, candidates)
-			if t.detail == nil {
-				return
-			}
-			if len(t.detail.Sources) == 0 {
-				ui.Text(c, "这个站点没有提供可播放分集，换一个来源试试。").TextColor(textMuted)
-				return
-			}
-			if len(t.detail.Sources) > 1 {
-				ui.Text(c, "播放线路").FontSize(19).Bold()
-				ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
-					for i, line := range t.detail.Sources {
-						name := line.Name
-						if name == "" {
-							name = fmt.Sprintf("线路 %d", i+1)
-						}
-						if chip(c, name, i == t.line).Key(fmt.Sprintf("line-%d", i)).Clicked() {
-							t.line, t.chunk = i, 0
-						}
-					}
-				})
-			}
-			a.episodeList(c)
+			a.sourceAccordion(c, candidates)
 		})
 	})
 }
 
 // detailHeader is the title's poster and information. It is fixed above
-// the scrolling body, so the play button is always visible.
+// the scrolling body, so the play button is always visible. The header
+// is compact and its height is driven by the poster: the synopsis just
+// sits in the column as plain text, so a short synopsis leaves no hole
+// and the buttons never float up.
 func (a *app) detailHeader(c *ui.Context, t *titlePage) {
 	ui.Row(c).FillWidth().Gap(22).AlignItems(ui.Start).Children(func() {
 		pic := t.pic
 		if t.detail != nil && t.detail.Pic != "" {
 			pic = t.detail.Pic
 		}
-		ui.Box(c).Size(220, 310).Radius(16).Clip().Background(ui.Hex("#24242c")).Children(func() {
+		ui.Box(c).Size(170, 240).Radius(16).Clip().Background(ui.Hex("#24242c")).Children(func() {
 			if poster := a.poster(pic); poster != nil {
 				ui.Image(c, poster).Fill().Fit(ui.Cover)
 			}
 		})
 		ui.Column(c).Grow(1).MinWidth(0).Gap(10).Children(func() {
 			ui.Text(c, t.name).FontSize(27).Bold()
-			a.favoriteButton(c)
 			if t.detail == nil {
+				a.favoriteButton(c)
 				return
 			}
 			if meta := videoMeta(t.detail.Year, t.detail.Type, ""); meta != "" {
 				ui.Text(c, meta).TextColor(textMuted)
 			}
 			if t.detail.Content != "" {
-				ui.Column(c).FillWidth().Padding(12, 14).Radius(14).Background(surface).Children(func() {
-					ui.Text(c, t.detail.Content).MaxHeight(132).Clip()
-				})
+				ui.Text(c, t.detail.Content).TextColor(textMuted).MaxLines(3)
 			}
-			if line, ok := t.currentLine(); ok && len(line.Episodes) > 0 {
-				if primaryButton(c, "立即播放").FillWidth().Clicked() {
-					a.playEpisode(line.Name, line.Episodes[0])
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+				if line, ok := t.currentLine(); ok && len(line.Episodes) > 0 {
+					if primaryButton(c, "立即播放").Clicked() {
+						a.playEpisode(line.Name, line.Episodes[0])
+					}
 				}
-			}
+				a.favoriteButton(c)
+			})
 		})
 	})
 }
@@ -468,17 +448,13 @@ func (t *titlePage) currentFailed() bool {
 	return t.detail != nil && t.item.Entry.Config != nil && t.failed[itemKey(t.item)] != ""
 }
 
-// sourceCardHeight is the height of one source card; sourceBoxHeight
-// is the most the sources box grows to: three rows of cards (nine
-// cards) and a peek of the next row, so the box reads as scrollable
-// when there are more sources below. With fewer sources the box stays
-// as tall as its cards, so the episodes below it stay on screen.
-const sourceCardHeight = 56
-const sourceGridRows = 3
-const sourceBoxHeight = sourceGridRows*sourceCardHeight + (sourceGridRows-1)*8 + 16
-
-// sourceList is every site that has the title; choosing one shows it there.
-func (a *app) sourceList(c *ui.Context, candidates []library.Item) {
+// sourceAccordion is every site that has the title, as one list where
+// the source on show is expanded and the rest are one-liners. A source,
+// its lines and the line's episodes are one hierarchy, so they live in
+// one place instead of three stacked sections: the expanded row holds
+// the lines and the episodes, and the rows are compact enough that no
+// separate scroll box is needed.
+func (a *app) sourceAccordion(c *ui.Context, candidates []library.Item) {
 	t, search := a.title, &a.library.search
 	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "来源").FontSize(19).Bold()
@@ -499,25 +475,11 @@ func (a *app) sourceList(c *ui.Context, candidates []library.Item) {
 			}
 		}
 	})
-	if len(candidates) > 0 {
-		// The grid scrolls inside its own box, so the header — and its
-		// play button — never scroll away with it.
-		ui.Scroll(c).FillWidth().MaxHeight(sourceBoxHeight).TrackScroll(&t.sourcesScroll).
-			Label("来源列表").Children(func() {
-			ui.Grid(c).Columns(3).Gap(8).Children(func() {
-				for _, item := range candidates {
-					a.sourceCard(c, item)
-				}
-			})
-		})
-		if len(candidates) > sourceGridRows*3 {
-			if t.sourcesScroll.MaxY > 0 && t.sourcesScroll.Y >= t.sourcesScroll.MaxY {
-				ui.Text(c, fmt.Sprintf("已显示全部 %d 个来源", len(candidates))).FontSize(13).TextColor(textMuted)
-			} else {
-				ui.Text(c, "下滑查看更多").FontSize(13).TextColor(textMuted)
-			}
+	ui.Column(c).FillWidth().Gap(8).Children(func() {
+		for _, item := range candidates {
+			a.sourceRow(c, item)
 		}
-	}
+	})
 	searching := search.running && titleKey(search.query) == titleKey(t.name)
 	switch {
 	case searching:
@@ -532,10 +494,12 @@ func (a *app) sourceList(c *ui.Context, candidates []library.Item) {
 	}
 }
 
-// sourceCard is one site that has the title, in the sources grid. The
-// dot says which one is on show (green), which one is still being read
-// (no dot, "正在读取…") and which one failed (grey, with the reason).
-func (a *app) sourceCard(c *ui.Context, item library.Item) {
+// sourceRow is one site that has the title. The source on show is
+// expanded: its lines and episodes live inside it. The rest are
+// one-liners; choosing one loads its detail, and once it is on show
+// it expands in turn. The dot says which one is on show (green) and
+// which one failed (grey, with the reason).
+func (a *app) sourceRow(c *ui.Context, item library.Item) {
 	t := a.title
 	key := itemKey(item)
 	current := t.isCurrent(item)
@@ -551,35 +515,75 @@ func (a *app) sourceCard(c *ui.Context, item library.Item) {
 		state = t.failed[key]
 		dot = "#8a8f9e"
 	}
-	card := ui.Column(c).Key(key).Height(sourceCardHeight).Padding(8, 14).Gap(2).Radius(14).
-		Background(surface).Cursor(ui.CursorPointer).Label("来源 " + item.Entry.Label())
-	card.Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			if dot != "" {
-				ui.Box(c).Size(8, 8).Radius(4).Background(ui.Hex(dot))
-			}
-			ui.Text(c, item.Entry.Label()).Bold().SingleLine().Grow(1).MinWidth(0)
+	if !current {
+		row := ui.Row(c).Key(key).FillWidth().Padding(12, 16).Gap(12).Radius(16).AlignItems(ui.Center).
+			Background(surface).Cursor(ui.CursorPointer).Label("来源 " + item.Entry.Label())
+		row.Children(func() {
+			a.sourceRowContent(c, item, dot, state)
 		})
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			if item.Video.Remarks != "" {
-				ui.Text(c, item.Video.Remarks).FontSize(13).TextColor(textMuted).SingleLine().Grow(1).MinWidth(0)
-			} else {
-				ui.Spacer(c)
-			}
-			// A measured latency shows here; an unmeasured source
-			// shows nothing, never a made-up number.
-			if d, ok := a.latency.get(item.Entry.Key()); ok {
-				ui.Text(c, formatLatency(d)).FontSize(13).TextColor(textMuted).SingleLine()
-			}
-			if state != "" {
-				ui.Text(c, state).FontSize(13).TextColor(textMuted).SingleLine()
-			}
-		})
-	})
-	if card.Clicked() && !current {
-		t.auto = false
-		a.openCandidate(item)
+		if row.Clicked() {
+			t.auto = false
+			a.openCandidate(item)
+		}
+		return
 	}
+	ui.Column(c).Key(key).FillWidth().Padding(12, 16).Gap(10).Radius(16).
+		Background(surface).Label("来源 " + item.Entry.Label()).Children(func() {
+		ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
+			a.sourceRowContent(c, item, dot, state)
+		})
+		if t.detail == nil {
+			return
+		}
+		if len(t.detail.Sources) == 0 {
+			ui.Text(c, "这个站点没有提供可播放分集，换一个来源试试。").TextColor(textMuted)
+			return
+		}
+		a.lineChips(c)
+		a.episodeList(c)
+	})
+}
+
+// sourceRowContent is the one line every source row shows: its name,
+// its remarks, its measured latency if one was ever recorded, and its
+// state. A measured latency shows here; an unmeasured source shows
+// nothing, never a made-up number.
+func (a *app) sourceRowContent(c *ui.Context, item library.Item, dot, state string) {
+	if dot != "" {
+		ui.Box(c).Size(8, 8).Radius(4).Background(ui.Hex(dot))
+	}
+	ui.Text(c, item.Entry.Label()).Bold().SingleLine()
+	if item.Video.Remarks != "" {
+		ui.Text(c, item.Video.Remarks).FontSize(13).TextColor(textMuted).SingleLine()
+	}
+	ui.Spacer(c)
+	if d, ok := a.latency.get(item.Entry.Key()); ok {
+		ui.Text(c, formatLatency(d)).FontSize(13).TextColor(textMuted).SingleLine()
+	}
+	if state != "" {
+		ui.Text(c, state).FontSize(13).TextColor(textMuted).SingleLine()
+	}
+}
+
+// lineChips is the current source's play lines, shown inside its
+// expanded row. With one line there is nothing to choose.
+func (a *app) lineChips(c *ui.Context) {
+	t := a.title
+	if len(t.detail.Sources) <= 1 {
+		return
+	}
+	ui.Text(c, "播放线路").FontSize(19).Bold()
+	ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
+		for i, line := range t.detail.Sources {
+			name := line.Name
+			if name == "" {
+				name = fmt.Sprintf("线路 %d", i+1)
+			}
+			if chip(c, name, i == t.line).Key(fmt.Sprintf("line-%d", i)).Clicked() {
+				t.line, t.chunk = i, 0
+			}
+		}
+	})
 }
 
 func (a *app) episodeList(c *ui.Context) {
