@@ -10,44 +10,65 @@ import (
 // window has, matching a hidden-title-bar window on macOS.
 var dragBar = ui.TitleBar{Height: 28, Left: 78, Right: 0, Bottom: 28}
 
-func TestShellDragStrip(t *testing.T) {
+func TestShellDragHandles(t *testing.T) {
 	_, doc := suggestionTestServer(t)
 	a := newSuggestionTestApp(t, doc)
 	tt := ui.NewTester(a.view, 1120, 760)
 	tt.SetTitleBar(dragBar)
 	tt.Frame()
-	strip, ok := tt.Find("拖动窗口")
+	// The toolbar row itself is a drag handle, and it sits where the
+	// toolbar was before any drag handle existed: no extra band was
+	// added above it, so the layout is back to its old geometry.
+	bar, ok := tt.Find("拖动窗口")
 	if !ok {
-		t.Fatal("shell has no window drag strip")
+		t.Fatal("toolbar has no window drag handle")
 	}
-	if strip.Y != 0 || strip.H != 32 || strip.W != 1120 {
-		t.Fatalf("drag strip is not the top band: %+v", strip)
+	if bar.X != 232 || bar.Y != 14 || bar.W != 870 || bar.H != 44 {
+		t.Fatalf("toolbar drag handle is not the toolbar: %+v", bar)
 	}
-	// The strip must not cover the toolbar search field, which sits
-	// below it.
+	// The search field still sits inside the toolbar, so it keeps
+	// working instead of dragging.
 	search, ok := tt.Find("片名")
 	if !ok {
 		t.Fatal("toolbar search field is missing")
 	}
-	if search.Y < strip.Y+strip.H {
-		t.Fatalf("drag strip covers the search field: strip=%+v search=%+v", strip, search)
+	if search.Y < bar.Y || search.Y+search.H > bar.Y+bar.H {
+		t.Fatalf("search field is not inside the toolbar: bar=%+v search=%+v", bar, search)
 	}
-	// The sidebar title stays where it was before the strip: the strip
-	// takes 32px at the top and the sidebar gives 32px of its top
-	// padding back.
+	// The sidebar pane is a drag handle too, and its title stays where
+	// it was before any drag handle existed.
+	side, ok := tt.Find("拖动窗口（侧边栏）")
+	if !ok {
+		t.Fatal("sidebar has no window drag handle")
+	}
+	if side.X != 10 || side.Y != 10 || side.W != 204 || side.H != 740 {
+		t.Fatalf("sidebar drag handle is not the sidebar pane: %+v", side)
+	}
 	title, ok := tt.Find("小幕")
 	if !ok {
 		t.Fatal("sidebar title is missing")
 	}
 	if title.Y != 62 {
-		t.Fatalf("sidebar title moved with the strip: y=%v want 62", title.Y)
+		t.Fatalf("sidebar title moved: y=%v want 62", title.Y)
 	}
-	// In full screen there is no title bar, so the strip is gone and
-	// the sidebar keeps its old top padding: the title stays put.
+	// The bottom buttons are fully visible again: nothing is pushed
+	// past the window's bottom edge.
+	update, ok := tt.Find("检查更新")
+	if !ok {
+		t.Fatal("sidebar update button is missing")
+	}
+	if update.Y+update.H > 760 {
+		t.Fatalf("update button is cut off at the bottom: %+v", update)
+	}
+	// In full screen there is no title bar, so there are no drag
+	// handles at all — but the sidebar title stays put.
 	tt.SetTitleBar(ui.TitleBar{})
 	tt.Frame()
 	if _, ok := tt.Find("拖动窗口"); ok {
-		t.Fatal("drag strip is drawn in full screen, where it cannot drag")
+		t.Fatal("toolbar drag handle is drawn in full screen, where it cannot drag")
+	}
+	if _, ok := tt.Find("拖动窗口（侧边栏）"); ok {
+		t.Fatal("sidebar drag handle is drawn in full screen, where it cannot drag")
 	}
 	title, ok = tt.Find("小幕")
 	if !ok || title.Y != 62 {
@@ -55,24 +76,28 @@ func TestShellDragStrip(t *testing.T) {
 	}
 }
 
-func TestPlayerDragStrip(t *testing.T) {
+func TestPlayerDragHandle(t *testing.T) {
 	a := newPlayerTestApp(t)
 	tt := ui.NewTester(a.view, 1120, 760)
 	tt.SetTitleBar(dragBar)
 	tt.Frame()
-	strip, ok := tt.Find("拖动窗口")
+	// The header's title is the drag handle: it sits beside the back
+	// button, below the traffic-light band, not in a band above it.
+	title, ok := tt.Find("拖动窗口")
 	if !ok {
-		t.Fatal("player has no window drag strip")
+		t.Fatal("player header has no window drag handle")
 	}
-	if strip.Y != 0 || strip.H != 32 || strip.W != 1120 {
-		t.Fatalf("player drag strip is not the top band: %+v", strip)
-	}
-	// The strip must not cover the header's back button.
 	back, ok := tt.Find("返回")
 	if !ok {
 		t.Fatal("player header is missing")
 	}
-	if back.Y < strip.Y+strip.H {
-		t.Fatalf("drag strip covers the player header: strip=%+v back=%+v", strip, back)
+	if title.Y < dragBar.Bottom || title.X <= back.X+back.W {
+		t.Fatalf("player drag handle is not the header title: title=%+v back=%+v", title, back)
+	}
+	// In full screen there is no title bar, so there is no drag handle.
+	tt.SetTitleBar(ui.TitleBar{})
+	tt.Frame()
+	if _, ok := tt.Find("拖动窗口"); ok {
+		t.Fatal("player drag handle is drawn in full screen, where it cannot drag")
 	}
 }

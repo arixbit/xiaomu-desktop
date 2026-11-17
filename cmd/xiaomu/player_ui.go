@@ -99,22 +99,7 @@ func (a *app) playerScreen(c *ui.Context) {
 			}
 			a.playerPanel(c).Absolute().Top(70).Right(12).Bottom(bottom).Width(280)
 		}
-		playerDragStrip(c)
 	})
-}
-
-// playerDragStrip is the same title bar band as the shell's drag strip,
-// floating over the video: the player has no toolbar of its own to drag
-// by, and the video fills the window. It sits above the header, whose
-// top already clears the traffic lights.
-func playerDragStrip(c *ui.Context) {
-	height := dragStripHeight(c)
-	if height == 0 {
-		return
-	}
-	bar := c.TitleBar()
-	ui.Row(c).Absolute().Top(0).Left(0).Right(0).Height(height).
-		Padding(0, bar.Right, 0, bar.Left).Label("拖动窗口").DragWindow()
 }
 
 func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
@@ -139,7 +124,15 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 				a.leavePlayer()
 			}
 		})
-		ui.Row(c).Padding(8, 14).Radius(20).Material(glass.Glass{Style: glass.Clear}).Grow(1).Children(func() {
+		// The title takes the wide middle of the header: it is the
+		// player's drag handle. The back and panel buttons on either side
+		// keep working, and only the title area drags; a double click on
+		// it maximizes the window.
+		title := ui.Row(c).Padding(8, 14).Radius(20).Material(glass.Glass{Style: glass.Clear}).Grow(1)
+		if dragStripHeight(c) > 0 {
+			title.DragWindow().Label("拖动窗口")
+		}
+		title.Children(func() {
 			ui.Text(c, name).SingleLine().TextColor(playerText).TextShadow(0, 1, 4, playerInk)
 		})
 		if hasEpisodes {
