@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -66,7 +67,10 @@ func (a *app) clearTitle() {
 }
 
 // candidates are the title's sources: its seeds, then the library search's
-// videos of the same title.
+// videos of the same title, fastest first. Measured sources sort by their
+// last latency, then unmeasured ones in their original order, and sources
+// that failed for this title last — so the auto-open below, which tries
+// them in order, reaches for the fastest known-good source first.
 func (a *app) candidates() []library.Item {
 	t := a.title
 	if t == nil {
@@ -84,7 +88,29 @@ func (a *app) candidates() []library.Item {
 			out = append(out, item)
 		}
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return a.candidateLess(t, out[i], out[j])
+	})
 	return out
+}
+
+// candidateLess orders two sources of one title: failed last, measured
+// before unmeasured, measured by latency ascending. Equal sources keep
+// their original order, which is what the stable sort guarantees.
+func (a *app) candidateLess(t *titlePage, x, y library.Item) bool {
+	fx, fy := t.failed[itemKey(x)] != "", t.failed[itemKey(y)] != ""
+	if fx != fy {
+		return fy
+	}
+	dx, okx := a.latency.get(x.Entry.Key())
+	dy, oky := a.latency.get(y.Entry.Key())
+	if okx != oky {
+		return okx
+	}
+	if okx && oky && dx != dy {
+		return dx < dy
+	}
+	return false
 }
 
 func (a *app) autoOpenTitle() {
@@ -164,7 +190,9 @@ func (a *app) openCandidate(item library.Item) {
 	key := itemKey(item)
 	assets := strings.TrimSpace(a.browser.assets)
 	a.run(jobTitle, "读取影片详情", func(ctx context.Context) (jobResult, error) {
+		start := time.Now()
 		session, detail, err := openItem(ctx, item, assets)
+		elapsed := time.Since(start)
 		if err != nil {
 			return jobResult{}, err
 		}
@@ -173,6 +201,9 @@ func (a *app) openCandidate(item library.Item) {
 			t.session, t.detail, t.item = session, &detail, item
 			t.line, t.chunk = 0, 0
 			delete(t.failed, key)
+			// The detail read is the freshest measurement of this
+			// site's speed; a failed read records nothing.
+			_ = a.latency.record(item.Entry.Key(), elapsed)
 		}}, nil
 	}, func(err error) {
 		// The page shows the failure beside its source and tries the next one.
@@ -284,7 +315,9 @@ func (a *app) switchSource(item library.Item) {
 	resolver := resolve.Resolver{Sniff: a.sniffPage, Parsers: entryParsers(item.Entry)}
 	a.cancelJob(jobTitle)
 	a.run(jobPlay, "切换来源", func(ctx context.Context) (jobResult, error) {
+		start := time.Now()
 		session, detail, err := openItem(ctx, item, assets)
+		elapsed := time.Since(start)
 		if err != nil {
 			return jobResult{}, err
 		}
@@ -302,6 +335,7 @@ func (a *app) switchSource(item library.Item) {
 			a.closeSession(t.session)
 			t.session, t.detail, t.item, t.auto = session, &detail, item, false
 			t.line, t.chunk = line, 0
+			_ = a.latency.record(item.Entry.Key(), elapsed)
 			a.startEpisode(play, detail.Sources[line].Name, episode, at)
 		}}, nil
 	}, nil)
@@ -531,6 +565,11 @@ func (a *app) sourceCard(c *ui.Context, item library.Item) {
 				ui.Text(c, item.Video.Remarks).FontSize(13).TextColor(textMuted).SingleLine().Grow(1).MinWidth(0)
 			} else {
 				ui.Spacer(c)
+			}
+			// A measured latency shows here; an unmeasured source
+			// shows nothing, never a made-up number.
+			if d, ok := a.latency.get(item.Entry.Key()); ok {
+				ui.Text(c, formatLatency(d)).FontSize(13).TextColor(textMuted).SingleLine()
 			}
 			if state != "" {
 				ui.Text(c, state).FontSize(13).TextColor(textMuted).SingleLine()

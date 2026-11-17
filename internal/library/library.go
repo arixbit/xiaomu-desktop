@@ -70,11 +70,15 @@ type Result struct {
 }
 
 // Event is delivered serially as configurations and site requests complete.
+// Duration is how long the site's own request took, when the event carries
+// a site result; a reply served from the search cache has no duration,
+// because no network happened and there is nothing to measure.
 type Event struct {
 	Document                          *config.Config
 	URL, Line                         string
 	Result                            *Result
 	Err                               error
+	Duration                          time.Duration
 	Completed, Total, Skipped, Failed int
 	Cooling                           int
 }
@@ -86,11 +90,13 @@ type task struct {
 }
 
 type completion struct {
-	task    task
-	doc     *config.Config
-	page    catalog.Page
-	err     error
-	cooling bool
+	task     task
+	doc      *config.Config
+	page     catalog.Page
+	err      error
+	cooling  bool
+	duration time.Duration
+	cached   bool
 }
 
 // Scan loads all lines in an imported depot and streams recommendations (empty
@@ -220,6 +226,9 @@ func Scan(ctx context.Context, root *config.Config, options Options, emit func(E
 			event.Document, event.URL, event.Line = done.doc, done.task.url, done.task.line
 			if done.task.target != nil {
 				event.Result = &Result{Target: *done.task.target, Page: done.page}
+				if !done.cached {
+					event.Duration = done.duration
+				}
 			}
 			emit(event)
 		}
@@ -234,10 +243,12 @@ func taskPriority(work task) int {
 	return 1
 }
 
-func execute(parent context.Context, work task, options Options) completion {
+func execute(parent context.Context, work task, options Options) (out completion) {
 	ctx, cancel := context.WithTimeout(parent, options.Timeout)
 	defer cancel()
-	out := completion{task: work}
+	out = completion{task: work}
+	start := time.Now()
+	defer func() { out.duration = time.Since(start) }()
 	if work.target == nil {
 		if work.depth > 4 {
 			out.err = fmt.Errorf("配置仓库嵌套超过 4 层")
@@ -258,7 +269,7 @@ func execute(parent context.Context, work task, options Options) completion {
 	if options.Query != "" && options.SearchCache != nil {
 		key := searchKey{origin: target.Entry.Key(), assets: options.Assets, kind: target.Entry.Site.Kind, query: options.Query, page: max(target.Page, 1)}
 		if page, err, ok := options.SearchCache.get(key); ok {
-			out.page, out.err, out.cooling = page, err, err != nil
+			out.page, out.err, out.cooling, out.cached = page, err, err != nil, true
 			return out
 		}
 		defer func() {

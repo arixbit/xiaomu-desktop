@@ -109,6 +109,41 @@ func TestSearchStreamsBeforeSlowSiteTimesOut(t *testing.T) {
 	}
 }
 
+func TestSearchEventsCarrySiteDuration(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("ac") == "list" {
+			fmt.Fprint(w, `{"class":[{"type_id":1,"type_name":"电影"}]}`)
+			return
+		}
+		// A slow site, so its measured duration is unmistakably positive.
+		time.Sleep(25 * time.Millisecond)
+		fmt.Fprint(w, `{"pagecount":1,"list":[{"vod_id":"9","vod_name":"示例"}]}`)
+	}))
+	defer srv.Close()
+	root := &config.Config{URL: srv.URL, Sites: []config.Site{{Key: "only", Kind: config.KindJSON, API: srv.URL + "/a"}}}
+	cache := &SearchCache{}
+	var live, cached []time.Duration
+	run := func(into *[]time.Duration) {
+		if err := Scan(context.Background(), root, Options{Query: "示例", SearchCache: cache}, func(e Event) {
+			if e.Result != nil {
+				*into = append(*into, e.Duration)
+			}
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run(&live)
+	if len(live) != 1 || live[0] <= 0 {
+		t.Fatalf("live search durations = %v, want one positive value", live)
+	}
+	// The same search again is served from the cache: no network
+	// happened, so there is no duration to report.
+	run(&cached)
+	if len(cached) != 1 || cached[0] != 0 {
+		t.Fatalf("cached search durations = %v, want one zero value", cached)
+	}
+}
+
 func TestCancelSearchReleasesBoundedWorkers(t *testing.T) {
 	started := make(chan struct{}, 20)
 	var active, peak atomic.Int32
