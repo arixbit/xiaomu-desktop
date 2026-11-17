@@ -188,6 +188,14 @@ func (a *app) applyLibraryEvent(s *libraryScan, event library.Event) {
 	if result == nil {
 		return
 	}
+	// A site just answered: how long it took is its measured speed,
+	// whether the page came back or the request failed. A cached reply
+	// carries no duration, because no network happened.
+	if event.Duration > 0 {
+		// The store is best-effort: a failed save must not disturb
+		// the scan, and the next measurement overwrites it anyway.
+		_ = a.latency.record(result.Target.Entry.Key(), event.Duration)
+	}
 	if event.Err != nil {
 		// A failed later page can be retried without repeating successful pages.
 		if result.Target.Page > 1 {
