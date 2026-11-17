@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/arixbit/xiaomu-desktop/internal/catalog"
+	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -94,7 +97,13 @@ func TestBrowserFlow(t *testing.T) {
 		t.Fatalf("import did not populate recommendations automatically: items=%d status=%s", len(a.library.feed.items), a.status)
 	}
 	click("最近更新")
-	click("示例甲 · 🚀演示线路 · 演示站点")
+	// By coordinates: the poster image covers the card, so a label click
+	// would land on the image rather than the card behind it.
+	poster, ok := tt.Find("示例甲 · 🚀演示线路 · 演示站点")
+	if !ok {
+		t.Fatalf("feed card label missing: %v", tt.Texts())
+	}
+	tt.ClickAt(poster.X+poster.W/2, poster.Y+poster.H/2)
 	if a.route() != routeDetail || a.title == nil || a.title.detail == nil {
 		t.Fatalf("title did not open from its only source: %s; texts %v", a.status, tt.Texts())
 	}
@@ -129,7 +138,13 @@ func TestBrowserFlow(t *testing.T) {
 		t.Fatal(a.status)
 	}
 	click("上一页")
-	click("示例甲")
+	// By coordinates: the poster image covers the card, so a label click
+	// would land on the image rather than the card behind it.
+	sitePoster, ok := tt.Find("示例甲")
+	if !ok {
+		t.Fatalf("site card label missing: %v", tt.Texts())
+	}
+	tt.ClickAt(sitePoster.X+sitePoster.W/2, sitePoster.Y+sitePoster.H/2)
 	if a.route() != routeDetail || a.title.detail == nil {
 		t.Fatalf("title did not open from the site: %s", a.status)
 	}
@@ -235,5 +250,62 @@ func TestFailedJobReportsInPlace(t *testing.T) {
 	}, nil)
 	if a.status != "读取失败：fixture failure" {
 		t.Fatalf("status %q", a.status)
+	}
+}
+
+// stubSession is a site that never returns anything, for driving the site
+// view without a real source behind it.
+type stubSession struct{}
+
+func (stubSession) Home(context.Context) (catalog.Page, error) {
+	return catalog.Page{}, nil
+}
+
+func (stubSession) Category(context.Context, string, int) (catalog.Page, error) {
+	return catalog.Page{}, nil
+}
+
+func (stubSession) Search(context.Context, string, int) (catalog.Page, error) {
+	return catalog.Page{}, nil
+}
+
+func (stubSession) Detail(context.Context, string) (catalog.Detail, error) {
+	return catalog.Detail{}, nil
+}
+
+func (stubSession) Play(context.Context, string, catalog.Episode) (catalog.Playback, error) {
+	return catalog.Playback{}, nil
+}
+
+func (stubSession) Close() {}
+
+func TestSiteGridArrowsMoveWithoutOpening(t *testing.T) {
+	a := &app{}
+	a.browser.site = library.Entry{Site: config.Site{Key: "demo", Name: "演示站点"}, Config: &config.Config{URL: "https://example.com/config"}}
+	a.browser.session = stubSession{}
+	a.browser.results = catalog.Page{Videos: []catalog.Video{
+		{ID: "1", Name: "影片一"},
+		{ID: "2", Name: "影片二"},
+	}}
+	defer a.close()
+	a.push(routeSite)
+	tt := ui.NewTester(a.view, 960, 640)
+	if a.route() != routeSite || !tt.HasText("影片一") {
+		t.Fatalf("site did not render: route=%v texts=%v", a.route(), tt.Texts())
+	}
+	a.browser.grid.Handle.Focus()
+	tt.Frame()
+	tt.Key(0, ui.KeyDown)
+	if a.browser.selected != 0 || a.route() != routeSite {
+		t.Fatalf("Down did not move the choice: selected=%d route=%v", a.browser.selected, a.route())
+	}
+	// Down moves a whole row, Right moves to the next poster in the row.
+	tt.Key(0, ui.KeyRight)
+	if a.browser.selected != 1 {
+		t.Fatalf("Right did not move the choice: selected=%d", a.browser.selected)
+	}
+	tt.Key(0, ui.KeyEnter)
+	if a.route() != routeDetail || a.title == nil {
+		t.Fatalf("Enter did not open the choice: route=%v title=%+v", a.route(), a.title)
 	}
 }

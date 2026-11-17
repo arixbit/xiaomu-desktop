@@ -373,9 +373,15 @@ func (a *app) siteView(c *ui.Context) {
 		b.grid.Selected = &b.selected
 		b.grid.Label = func(i int) string { return videoTitle(b.results.Videos[i]) }
 		b.grid.Key = func(i int) any { return string(b.results.Videos[i].ID) }
-		if ui.GridView(c, &b.grid, len(b.results.Videos), 152, 252, func(i int) {
-			a.videoCard(c, b.results.Videos[i], "", false)
-		}).Gap(14).Grow(1).FillWidth().Changed() && b.selected >= 0 && b.selected < len(b.results.Videos) {
+		grid := ui.GridView(c, &b.grid, len(b.results.Videos), 152, 252, func(i int) {
+			card := a.videoCard(c, b.results.Videos[i], "", false)
+			if card.Clicked() {
+				video := b.results.Videos[i]
+				a.openTitle(videoTitle(video), video.Pic, []library.Item{{Entry: b.site, Video: video}})
+			}
+		}).Gap(14).Grow(1).FillWidth()
+		// Arrows move the choice without opening it; a click or Enter opens it.
+		if grid.Submitted() && b.selected >= 0 && b.selected < len(b.results.Videos) {
 			video := b.results.Videos[b.selected]
 			b.selected = -1
 			a.openTitle(videoTitle(video), video.Pic, []library.Item{{Entry: b.site, Video: video}})
@@ -434,8 +440,8 @@ func (a *app) importDialog(c *ui.Context) {
 
 // videoCard is a poster with its title over it. badge, when set, says where
 // the video comes from; a strong badge marks an exact match.
-func (a *app) videoCard(c *ui.Context, video catalog.Video, badge string, strong bool) {
-	ui.Box(c).Fill().Radius(14).Clip().Background(ui.Hex("#24242c")).Children(func() {
+func (a *app) videoCard(c *ui.Context, video catalog.Video, badge string, strong bool) ui.Element {
+	return ui.Box(c).Fill().Radius(14).Clip().Background(ui.Hex("#24242c")).Children(func() {
 		if poster := a.poster(video.Pic); poster != nil {
 			ui.Image(c, poster).Fill().Fit(ui.Cover)
 		}

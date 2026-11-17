@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/arixbit/xiaomu-desktop/internal/config"
 	"github.com/arixbit/xiaomu-desktop/internal/douban"
 	"github.com/egoist/mygo/ui"
 )
@@ -38,6 +39,36 @@ func metadataTestClient(t *testing.T, handler http.HandlerFunc) (*douban.Client,
 	c := douban.New(t.TempDir())
 	c.HTTP = &http.Client{Transport: metadataTestTransport{u, srv.Client().Transport}}
 	return c, srv.URL
+}
+
+func TestDiscoveryGridArrowsMoveWithoutOpening(t *testing.T) {
+	a := &app{}
+	a.library.root = &config.Config{URL: "https://example.com/config"}
+	a.library.cached = map[string]*config.Config{}
+	a.discovery.movie.feed = douban.Feed{Subjects: []douban.Subject{
+		{ID: "1", Title: "影片一"},
+		{ID: "2", Title: "影片二"},
+	}}
+	defer a.close()
+	tt := ui.NewTester(a.view, 960, 640)
+	if !tt.HasText("影片一") || !tt.HasText("影片二") {
+		t.Fatalf("home feed did not render: %v", tt.Texts())
+	}
+	a.discovery.movie.grid.Handle.Focus()
+	tt.Frame()
+	tt.Key(0, ui.KeyDown)
+	if a.discovery.movie.selected != 0 || a.route() != routeHome {
+		t.Fatalf("Down did not move the choice: selected=%d route=%v", a.discovery.movie.selected, a.route())
+	}
+	// Down moves a whole row, Right moves to the next poster in the row.
+	tt.Key(0, ui.KeyRight)
+	if a.discovery.movie.selected != 1 {
+		t.Fatalf("Right did not move the choice: selected=%d", a.discovery.movie.selected)
+	}
+	tt.Key(0, ui.KeyEnter)
+	if a.route() != routeDetail || a.title == nil {
+		t.Fatalf("Enter did not open the choice: route=%v title=%+v", a.route(), a.title)
+	}
 }
 
 func TestDoubanCardsSearchUserLibraryAndPlay(t *testing.T) {
@@ -104,8 +135,14 @@ func TestDoubanCardsSearchUserLibraryAndPlay(t *testing.T) {
 		t.Fatal("switching tabs repeated fresh requests")
 	}
 	// A poster goes straight to the title: its sources are searched for and
-	// the first one opens without a results page in between.
-	click("查找影片 演示电影")
+	// the first one opens without a results page in between. The click goes
+	// by coordinates: the poster image covers the card, so a label click
+	// would land on the image rather than the card behind it.
+	poster, ok := tt.Find("查找影片 演示电影")
+	if !ok {
+		t.Fatalf("poster label missing: %v", tt.Texts())
+	}
+	tt.ClickAt(poster.X+poster.W/2, poster.Y+poster.H/2)
 	search := &a.library.search
 	if a.route() != routeDetail || search.query != "演示电影" || len(search.items) != 1 {
 		t.Fatalf("route=%v search=%q results=%d", a.route(), search.query, len(search.items))

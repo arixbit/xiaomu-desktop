@@ -212,7 +212,11 @@ func (a *app) toolbar(c *ui.Context) {
 		if a.library.root == nil {
 			return
 		}
-		if ui.SearchField(c, &a.browser.query).Label("片名").Placeholder("搜索整个片库").
+		// Autocomplete suggests the viewer's recent searches and the Douban
+		// hot titles already cached for the home page, while Enter still
+		// searches exactly what was typed; Down or a click takes a
+		// suggestion, and Enter after that searches it.
+		if ui.Autocomplete(c, &a.browser.query, a.searchSuggestions()).Label("片名").Placeholder("搜索整个片库").
 			Width(300).Radius(20).Material(glassControl).Submitted() {
 			a.searchLibrary()
 		}

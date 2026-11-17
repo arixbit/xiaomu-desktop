@@ -36,6 +36,8 @@ type app struct {
 	live            liveBrowser
 	history         historyStore
 	favorites       favoriteStore
+	searchHistory   searchHistoryStore
+	focusSearchGrid bool
 	preferences     playerPreferences
 	preferencesPath string
 	playbackWait    playbackWait
@@ -158,6 +160,7 @@ func main() {
 		a.initDiscovery()
 		a.restoreHistory()
 		a.restoreFavorites()
+		a.restoreSearchHistory()
 		a.restorePreferences()
 		a.setFullScreen(win.IsFullScreen())
 		win.OnEnterFullScreen(func() { win.Update(func() { a.setFullScreen(true) }) })
