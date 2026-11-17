@@ -162,6 +162,41 @@ func (a *app) openFavorite(e favoriteEntry) {
 	}, func(error) { a.openTitle(e.Name, e.Pic, nil) })
 }
 
+// favoritesStrip is the home page's shortcut to saved titles: one row above
+// the hot lists, so a common title opens in two steps instead of a trip to
+// the sidebar. It shows only when there is something saved.
+func (a *app) favoritesStrip(c *ui.Context) {
+	if len(a.favorites.entries) == 0 {
+		return
+	}
+	ui.Column(c).FillWidth().Gap(8).Children(func() {
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "我的收藏").FontSize(16).Bold()
+			ui.Spacer(c)
+			if glassButton(c, "全部收藏").Clicked() {
+				a.switchTab(routeFavorites)
+			}
+		})
+		ui.ScrollHorizontal(c).FillWidth().Gap(12).Children(func() {
+			for _, e := range a.favorites.entries {
+				card := ui.Column(c).Key("favstrip-" + titleKey(e.Name)).Width(96).Gap(6).
+					Cursor(ui.CursorPointer).Label("打开收藏 " + e.Name)
+				card.Children(func() {
+					ui.Box(c).Size(96, 144).Radius(12).Clip().Background(ui.Hex("#24242c")).Children(func() {
+						if poster := a.poster(e.Pic); poster != nil {
+							ui.Image(c, poster).Fill().Fit(ui.Cover)
+						}
+					})
+					ui.Text(c, e.Name).FontSize(13).SingleLine()
+				})
+				if card.Clicked() {
+					a.openFavorite(e)
+				}
+			}
+		})
+	})
+}
+
 func (a *app) favoritesView(c *ui.Context) {
 	if a.favorites.readErr != nil {
 		emptyState(c, "收藏暂时无法读取", a.favorites.readErr.Error())

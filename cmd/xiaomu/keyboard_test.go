@@ -127,6 +127,69 @@ func TestKeyboardEscapeLeavesFullscreenWithoutStoppingPlayback(t *testing.T) {
 	}
 }
 
+func TestKeyboardEscapeGoesBackFromSearchAndDetail(t *testing.T) {
+	a := &app{nav: []routeKind{routeHome, routeSearch}}
+	a.library.search.query = "示例"
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.Key(0, ui.KeyEscape)
+	if a.route() != routeHome {
+		t.Fatalf("Escape did not leave the search page: route=%v", a.route())
+	}
+	a.nav = []routeKind{routeHome, routeDetail}
+	a.title = &titlePage{name: "示例"}
+	tt.Key(0, ui.KeyEscape)
+	if a.route() != routeHome || a.title != nil {
+		t.Fatalf("Escape did not leave the detail page: route=%v title=%+v", a.route(), a.title)
+	}
+}
+
+func TestKeyboardEscapeStaysOnHome(t *testing.T) {
+	a := &app{nav: []routeKind{routeHome}}
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.Key(0, ui.KeyEscape)
+	if a.route() != routeHome {
+		t.Fatalf("Escape left the home page: route=%v", a.route())
+	}
+}
+
+func TestKeyboardEscapeDismissesDialogBeforeGoingBack(t *testing.T) {
+	a := &app{nav: []routeKind{routeHome, routeSearch}}
+	a.library.search.query = "示例"
+	open := true
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.view(c)
+		ui.DialogBase(c, &open, func(backdrop, panel ui.Element) {
+			panel.Size(240, 120)
+			ui.Text(c, "对话框")
+		})
+	}, 1120, 760)
+	tt.Key(0, ui.KeyEscape)
+	if !open && a.route() != routeSearch {
+		t.Fatalf("Escape went back instead of dismissing the dialog: route=%v", a.route())
+	}
+	if open {
+		t.Fatal("Escape did not dismiss the dialog")
+	}
+	tt.Key(0, ui.KeyEscape)
+	if a.route() != routeHome {
+		t.Fatalf("second Escape did not go back: route=%v", a.route())
+	}
+}
+
+func TestKeyboardEscapeInFullscreenLeavesFullscreenFirst(t *testing.T) {
+	a := &app{nav: []routeKind{routeHome, routeSearch}}
+	a.library.search.query = "示例"
+	a.setFullScreen(true)
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.Key(0, ui.KeyEscape)
+	if a.fullScreen || a.route() != routeSearch {
+		t.Fatalf("Escape in fullscreen went back at once: fullscreen=%v route=%v", a.fullScreen, a.route())
+	}
+	tt.Key(0, ui.KeyEscape)
+	if a.route() != routeHome {
+		t.Fatalf("second Escape did not go back: route=%v", a.route())
+	}
+}
 func TestKeyboardEscapeFromFullscreenHome(t *testing.T) {
 	a := &app{}
 	a.setFullScreen(true)

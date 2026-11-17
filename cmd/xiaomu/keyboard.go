@@ -17,6 +17,12 @@ func (a *app) handleKeyboard(c *ui.Context) {
 		if a.window != nil {
 			a.window.SetFullScreen(false)
 		}
+		// One key, one step: leaving fullscreen does not also go back.
+	} else if a.player == nil && c.Shortcut(0, ui.KeyEscape) && !c.ShortcutRepeated() && len(a.nav) > 1 {
+		// Outside the player, Escape goes back a page: from a search or a
+		// title to the page it came from. A dialog or a suggestions popup
+		// takes the key first, and a text field keeps it, as before.
+		a.pop()
 	}
 	p := a.player
 	if p == nil {

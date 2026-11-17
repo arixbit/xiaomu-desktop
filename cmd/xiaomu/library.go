@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/douban"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/egoist/mygo/ui"
 )
@@ -30,6 +31,7 @@ type libraryScan struct {
 	items            []library.Item
 	groups           []titleGroup
 	seen             map[string]bool
+	hot              map[string]bool // Douban hot titles, for feed ranking
 	more             []library.Target
 	query            string
 	selected         int
@@ -87,6 +89,10 @@ func (a *app) searchLibrary() {
 		a.status = "请输入片名"
 		return
 	}
+	if err := a.searchHistory.record(query); err != nil {
+		a.status = "搜索记录保存失败：" + err.Error()
+	}
+	a.focusSearchGrid = true
 	a.cancelJob(jobTitle)
 	for len(a.nav) > 1 {
 		a.pop()
@@ -113,6 +119,10 @@ func (a *app) startScan(s *libraryScan, query string, more bool) {
 	} else {
 		s.items, s.groups, s.seen = nil, nil, map[string]bool{}
 		s.selected = -1
+		s.hot = nil
+		if query == "" {
+			s.hot = a.hotTitles()
+		}
 	}
 	s.more, s.progress = nil, library.Event{}
 	s.query, s.running, s.stopped = query, true, false
@@ -194,7 +204,7 @@ func (a *app) applyLibraryEvent(s *libraryScan, event library.Event) {
 		s.items = append(s.items, item)
 	}
 	sort.SliceStable(s.items, func(i, j int) bool {
-		return libraryItemRank(s.items[i], s.query) < libraryItemRank(s.items[j], s.query)
+		return libraryItemRank(s.items[i], s.query, s.hot) < libraryItemRank(s.items[j], s.query, s.hot)
 	})
 	s.groups = groupTitles(s.items)
 	if s.query != "" && result.Page.HasNext {
@@ -244,12 +254,19 @@ func (g titleGroup) origin() string {
 	return fmt.Sprintf("%d 个来源", len(g.items))
 }
 
-func libraryItemRank(item library.Item, query string) int {
+func libraryItemRank(item library.Item, query string, hot map[string]bool) int {
 	if query == "" {
-		if item.Entry.Site.Kind == config.KindJSON || item.Entry.Site.Kind == config.KindXML {
+		// The feed is the sites' latest updates. A title the Douban lists
+		// already call hot comes first, so the feed surfaces what is
+		// popular now instead of whichever site answered first; CMS sites
+		// follow, then the rest.
+		if hot[titleKey(item.Video.Name)] {
 			return 0
 		}
-		return 1
+		if item.Entry.Site.Kind == config.KindJSON || item.Entry.Site.Kind == config.KindXML {
+			return 1
+		}
+		return 2
 	}
 	name, query := titleKey(item.Video.Name), titleKey(query)
 	if name == query {
@@ -304,6 +321,28 @@ func (a *app) scanBar(c *ui.Context, s *libraryScan) {
 	}
 }
 
+// hotTitles are the Douban hot titles already cached for the home page, by
+// normalized title: the disk cache from the last run plus the lists loaded
+// in this run. The feed scan ranks them first; search keeps its own
+// relevance order and ignores them.
+func (a *app) hotTitles() map[string]bool {
+	hot := map[string]bool{}
+	add := func(feed douban.Feed) {
+		for _, subject := range feed.Subjects {
+			if key := titleKey(subject.Title); key != "" {
+				hot[key] = true
+			}
+		}
+	}
+	if a.discovery.client != nil {
+		add(a.discovery.client.Cached(douban.Movie))
+		add(a.discovery.client.Cached(douban.TV))
+	}
+	add(a.discovery.movie.feed)
+	add(a.discovery.tv.feed)
+	return hot
+}
+
 // titleGrid shows a pass's titles; choosing one opens it with its sources.
 func (a *app) titleGrid(c *ui.Context, s *libraryScan) {
 	groups := s.groups
@@ -311,10 +350,22 @@ func (a *app) titleGrid(c *ui.Context, s *libraryScan) {
 	s.grid.Selected = &s.selected
 	s.grid.Label = func(i int) string { return groups[i].name + " · " + groups[i].origin() }
 	s.grid.Key = func(i int) any { return itemKey(groups[i].items[0]) }
-	if ui.GridView(c, &s.grid, len(groups), 152, 252, func(i int) {
+	// A search just ran from the toolbar: ask for the focus on its results,
+	// so the arrows move through them and Enter opens one without a click.
+	// The request is applied after the build, which is what keeps it.
+	if a.focusSearchGrid && s == &a.library.search {
+		s.grid.Handle.Focus()
+		a.focusSearchGrid = false
+	}
+	grid := ui.GridView(c, &s.grid, len(groups), 152, 252, func(i int) {
 		group := groups[i]
-		a.videoCard(c, group.items[0].Video, group.origin(), query != "" && titleKey(group.name) == query)
-	}).Gap(14).Grow(1).FillWidth().Changed() && s.selected >= 0 && s.selected < len(groups) {
+		card := a.videoCard(c, group.items[0].Video, group.origin(), query != "" && titleKey(group.name) == query)
+		if card.Clicked() {
+			a.openTitle(group.name, group.items[0].Video.Pic, group.items)
+		}
+	}).Gap(14).Grow(1).FillWidth()
+	// Arrows move the choice without opening it; a click or Enter opens it.
+	if grid.Submitted() && s.selected >= 0 && s.selected < len(groups) {
 		group := groups[s.selected]
 		s.selected = -1
 		a.openTitle(group.name, group.items[0].Video.Pic, group.items)

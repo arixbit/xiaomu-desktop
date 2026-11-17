@@ -137,6 +137,7 @@ func (a *app) homeView(c *ui.Context) {
 		}
 	}
 	ui.Column(c).Fill().Gap(14).Children(func() {
+		a.favoritesStrip(c)
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 			if ui.Segmented(c, &tab, "热播电影", "热播剧集", "最近更新").Label("榜单").Changed() {
 				d.tab = homeTabs[tab]
@@ -185,14 +186,19 @@ func (a *app) discoveryView(c *ui.Context) {
 	list.grid.Selected = &list.selected
 	list.grid.Key = func(i int) any { return list.feed.Subjects[i].ID }
 	list.grid.Label = func(i int) string { return "查找影片 " + list.feed.Subjects[i].Title }
-	if ui.GridView(c, &list.grid, len(list.feed.Subjects), 152, 252, func(i int) {
+	grid := ui.GridView(c, &list.grid, len(list.feed.Subjects), 152, 252, func(i int) {
 		subject := list.feed.Subjects[i]
 		score := "暂无评分"
 		if subject.Rating != "" {
 			score = fmt.Sprintf("豆瓣 %s", subject.Rating)
 		}
-		a.videoCard(c, catalog.Video{ID: catalog.ID(subject.ID), Name: subject.Title, Pic: subject.Cover, Remarks: subject.Episodes}, score, false)
-	}).Gap(14).Grow(1).FillWidth().Changed() && list.selected >= 0 && list.selected < len(list.feed.Subjects) {
+		card := a.videoCard(c, catalog.Video{ID: catalog.ID(subject.ID), Name: subject.Title, Pic: subject.Cover, Remarks: subject.Episodes}, score, false)
+		if card.Clicked() {
+			a.openTitle(subject.Title, subject.Cover, nil)
+		}
+	}).Gap(14).Grow(1).FillWidth()
+	// Arrows move the choice without opening it; a click or Enter opens it.
+	if grid.Submitted() && list.selected >= 0 && list.selected < len(list.feed.Subjects) {
 		subject := list.feed.Subjects[list.selected]
 		list.selected = -1
 		a.openTitle(subject.Title, subject.Cover, nil)

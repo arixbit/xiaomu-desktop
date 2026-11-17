@@ -105,6 +105,58 @@ func TestFavoritesUIRestartAndSourceChanges(t *testing.T) {
 	}
 }
 
+func TestFavoritesStripOnHomeOpensSavedTitle(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("ids") != "" {
+			fmt.Fprint(w, `{"list":[{"vod_id":7,"vod_name":"示例片","vod_play_from":"线路","vod_play_url":"第1集$https://example.com/one.mp4"}]}`)
+			return
+		}
+		fmt.Fprint(w, `{"list":[]}`)
+	}))
+	defer srv.Close()
+	doc := &config.Config{URL: srv.URL + "/config", Sites: []config.Site{{Key: "site", Name: "示例来源", Type: 1, Kind: config.KindJSON, API: srv.URL + "/api"}}}
+	path := filepath.Join(t.TempDir(), "favorites.json")
+	a := &app{favorites: favoriteStore{path: path}}
+	defer a.close()
+	a.library = libraryBrowser{root: doc, cached: map[string]*config.Config{}}
+	a.openTitle("示例片", "", []library.Item{{Entry: library.Entry{Config: doc, Site: doc.Sites[0]}, Video: catalog.Video{ID: "7", Name: "示例片"}}})
+	tt := ui.NewTester(a.view, 1120, 760)
+	if err := tt.Click("加入想看"); err != nil {
+		t.Fatal(err)
+	}
+	a.switchTab(routeHome)
+	tt.Frame()
+	if !tt.HasText("我的收藏") || !tt.HasText("示例片") {
+		t.Fatalf("favorites strip missing on home: %v", tt.Texts())
+	}
+	if err := tt.Click("打开收藏 示例片"); err != nil {
+		t.Fatal(err)
+	}
+	if a.route() != routeDetail || a.title == nil || a.title.detail == nil {
+		t.Fatalf("strip did not open the saved title: route=%v title=%+v", a.route(), a.title)
+	}
+	if err := tt.Click("返回"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("全部收藏"); err != nil {
+		t.Fatal(err)
+	}
+	if a.route() != routeFavorites {
+		t.Fatalf("strip did not lead to the favorites page: route=%v", a.route())
+	}
+}
+
+func TestFavoritesStripHiddenWithoutFavorites(t *testing.T) {
+	a := &app{}
+	defer a.close()
+	a.library = libraryBrowser{root: &config.Config{URL: "https://example.com/config"}}
+	tt := ui.NewTester(a.view, 1120, 760)
+	if tt.HasText("我的收藏") {
+		t.Fatalf("empty favorites showed a strip: %v", tt.Texts())
+	}
+}
+
 func TestFavoritesAllowSavingBeforeDetailAndPreserveFileOnError(t *testing.T) {
 	a := &app{title: &titlePage{name: "示例片"}}
 	a.toggleFavorite()

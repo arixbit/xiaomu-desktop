@@ -10,10 +10,46 @@ import (
 	"testing"
 	"time"
 
+	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/douban"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/egoist/mygo/ui"
 )
+
+func TestLibraryItemRankPrefersDoubanHotTitles(t *testing.T) {
+	hot := map[string]bool{titleKey("热播片"): true}
+	hotCSP := library.Item{Entry: library.Entry{Site: config.Site{Kind: config.KindCSP}}, Video: catalog.Video{Name: "热播片"}}
+	plainJSON := library.Item{Entry: library.Entry{Site: config.Site{Kind: config.KindJSON}}, Video: catalog.Video{Name: "冷门片"}}
+	plainCSP := library.Item{Entry: library.Entry{Site: config.Site{Kind: config.KindCSP}}, Video: catalog.Video{Name: "冷门片"}}
+	if got := libraryItemRank(hotCSP, "", hot); got != 0 {
+		t.Fatalf("hot title did not rank first in the feed: %d", got)
+	}
+	if got := libraryItemRank(plainJSON, "", hot); got != 1 {
+		t.Fatalf("plain CMS title rank: %d", got)
+	}
+	if got := libraryItemRank(plainCSP, "", hot); got != 2 {
+		t.Fatalf("plain other title rank: %d", got)
+	}
+	// A search keeps its own relevance order: a hot title does not outrank
+	// an exact match for another title.
+	if got := libraryItemRank(hotCSP, "冷门片", hot); got != 2 {
+		t.Fatalf("hot title outranked an exact search match: %d", got)
+	}
+	if got := libraryItemRank(plainJSON, "冷门片", hot); got != 0 {
+		t.Fatalf("exact search match rank: %d", got)
+	}
+}
+
+func TestHotTitlesComeFromCachedDoubanLists(t *testing.T) {
+	a := &app{}
+	a.discovery.movie.feed = douban.Feed{Subjects: []douban.Subject{{Title: "热播电影"}}}
+	a.discovery.tv.feed = douban.Feed{Subjects: []douban.Subject{{Title: "热播剧集"}}}
+	hot := a.hotTitles()
+	if !hot[titleKey("热播电影")] || !hot[titleKey("热播剧集")] || hot[titleKey("其他")] {
+		t.Fatalf("hot titles: %v", hot)
+	}
+}
 
 func TestCMSSearchAndDetailIgnoreCategoryEndpoint(t *testing.T) {
 	for _, kind := range []config.Kind{config.KindJSON, config.KindXML} {
@@ -198,9 +234,13 @@ func TestSameTitleMergesAndFallsBackToNextSource(t *testing.T) {
 		t.Fatalf("same title was not merged: items=%d groups=%d", len(search.items), len(search.groups))
 	}
 	tt := ui.NewTester(a.view, 960, 640)
-	if err := tt.Click("《示例》 · 2 个来源"); err != nil {
-		t.Fatalf("%v; texts %v", err, tt.Texts())
+	// By coordinates: the poster image covers the card, so a label click
+	// would land on the image rather than the card behind it.
+	poster, ok := tt.Find("《示例》 · 2 个来源")
+	if !ok {
+		t.Fatalf("result label missing: %v", tt.Texts())
 	}
+	tt.ClickAt(poster.X+poster.W/2, poster.Y+poster.H/2)
 	if a.title == nil || a.title.detail == nil || a.title.item.Entry.Site.Key != "b" {
 		t.Fatalf("title did not settle on the source that reads: status=%s title=%+v", a.status, a.title)
 	}
