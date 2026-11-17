@@ -126,8 +126,8 @@ func TestDetailSourceCardShowsLatency(t *testing.T) {
 	if !tt.HasText("2.3s") || !tt.HasText("850ms") {
 		t.Fatalf("latency labels missing: %v", tt.Texts())
 	}
-	// The grid shows the fastest source first, so card 1 sits to the
-	// left of card 0 even though seed 0 was listed first.
+	// The list shows the fastest source first, so row 1 sits above
+	// row 0 even though seed 0 was listed first.
 	first, ok := tt.Find("来源 " + seeds[1].Entry.Label())
 	if !ok {
 		t.Fatal("fastest card is missing")
@@ -136,7 +136,7 @@ func TestDetailSourceCardShowsLatency(t *testing.T) {
 	if !ok {
 		t.Fatal("slower card is missing")
 	}
-	if first.X >= second.X {
+	if first.Y >= second.Y {
 		t.Fatalf("fastest card is not first: first=%+v second=%+v", first, second)
 	}
 }

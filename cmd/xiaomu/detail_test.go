@@ -19,9 +19,12 @@ func newDetailTestApp(t *testing.T, count int) (*app, []library.Item) {
 	a := newSuggestionTestApp(t, doc)
 	seeds := make([]library.Item, 0, count)
 	for i := 0; i < count; i++ {
+		// The seeds keep distinct keys and names, but borrow the test
+		// server's type and API, so a row can actually be opened the
+		// way a viewer opens it.
 		seeds = append(seeds, library.Item{
 			Entry: library.Entry{
-				Site:   config.Site{Key: fmt.Sprintf("site-%d", i), Name: fmt.Sprintf("来源 %d", i)},
+				Site:   config.Site{Key: fmt.Sprintf("site-%d", i), Name: fmt.Sprintf("来源 %d", i), Type: doc.Sites[0].Type, Kind: doc.Sites[0].Kind, API: doc.Sites[0].API},
 				Config: doc,
 			},
 			Video: catalog.Video{ID: catalog.ID(fmt.Sprintf("%d", i)), Name: "演示电影", Remarks: "HD"},
@@ -91,69 +94,133 @@ func TestDetailHeaderShowsPlayButtonAboveSources(t *testing.T) {
 		t.Fatalf("synopsis still has HTML tags: %v", tt.Texts())
 	}
 	// The play button lives in the fixed header, above the sources
-	// box, so it never scrolls away with the sources.
+	// section, so it never scrolls away with the sources.
 	play, ok := tt.Find("立即播放")
 	if !ok {
 		t.Fatal("play button is missing")
 	}
-	box, ok := tt.Find("来源列表")
+	sources, ok := tt.Find("来源")
 	if !ok {
-		t.Fatal("sources box is missing")
+		t.Fatal("sources heading is missing")
 	}
-	if play.Y+play.H > box.Y {
-		t.Fatalf("play button is not above the sources box: play=%+v box=%+v", play, box)
+	if play.Y+play.H > sources.Y {
+		t.Fatalf("play button is not above the sources: play=%+v sources=%+v", play, sources)
+	}
+	// The play button is a normal-sized button beside the favourite
+	// button, not a full-width bar.
+	fav, ok := tt.Find("加入想看")
+	if !ok {
+		t.Fatal("favourite button is missing")
+	}
+	if fav.Y < play.Y || fav.Y >= play.Y+play.H || fav.X <= play.X+play.W {
+		t.Fatalf("favourite button is not beside the play button: play=%+v fav=%+v", play, fav)
 	}
 }
 
-func TestDetailSourcesGridShowsNineFirst(t *testing.T) {
+func TestDetailHeaderShortSynopsisLeavesNoHole(t *testing.T) {
+	a, _ := newDetailTestApp(t, 3)
+	a.title.detail.Content = "简介只有一句。"
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.SetTitleBar(dragBar)
+	tt.Frame()
+	if !tt.HasText("简介只有一句。") || !tt.HasText("立即播放") || !tt.HasText("加入想看") {
+		t.Fatalf("short-synopsis header missing: %v", tt.Texts())
+	}
+	// The header's height is driven by the poster (240), not by the
+	// synopsis: with a one-line synopsis the sources heading still
+	// sits just below the header, with no empty hole in between.
+	title, ok := tt.Find("演示电影")
+	if !ok {
+		t.Fatal("title is missing")
+	}
+	sources, ok := tt.Find("来源")
+	if !ok {
+		t.Fatal("sources heading is missing")
+	}
+	if sources.Y-title.Y >= 300 {
+		t.Fatalf("header is taller than the poster: title=%+v sources=%+v", title, sources)
+	}
+}
+
+func TestDetailAccordionShowsAllSources(t *testing.T) {
 	a, seeds := newDetailTestApp(t, 19)
 	tt := ui.NewTester(a.view, 1120, 760)
 	tt.SetTitleBar(dragBar)
 	tt.Frame()
-	if !tt.HasText("共 19 个") || !tt.HasText("下滑查看更多") {
-		t.Fatalf("sources count or scroll hint missing: %v", tt.Texts())
+	if !tt.HasText("共 19 个") {
+		t.Fatalf("sources count missing: %v", tt.Texts())
 	}
-	box, ok := tt.Find("来源列表")
-	if !ok {
-		t.Fatal("sources box is missing")
-	}
-	if box.H != sourceBoxHeight {
-		t.Fatalf("sources box height = %v, want %v", box.H, sourceBoxHeight)
-	}
-	// The first nine cards tile three rows inside the box; the tenth
-	// card is only a peek below the box's bottom edge, so it needs
-	// the scroll. The tester clips rects to the visible area, so a
-	// partly visible card reports a short height.
-	for i := 0; i < 10; i++ {
-		rect, ok := tt.Find("来源 " + seeds[i].Entry.Label())
-		if !ok {
-			t.Fatalf("source card %d is missing", i)
-		}
-		if i < 9 && rect.H != sourceCardHeight {
-			t.Fatalf("card %d is not fully inside the box: card=%+v box=%+v", i, rect, box)
-		}
-		if i == 9 && rect.H >= sourceCardHeight {
-			t.Fatalf("tenth card is already visible without scrolling: card=%+v box=%+v", rect, box)
+	// Every source is a row in the list: no scroll box, no scroll hint.
+	for i := 0; i < 19; i++ {
+		if _, ok := tt.Find("来源 " + seeds[i].Entry.Label()); !ok {
+			t.Fatalf("source row %d is missing", i)
 		}
 	}
-	// Scrolling the box to the end swaps the hint.
-	a.title.sourcesScroll.Y = 1e9
-	tt.Frame()
-	if !tt.HasText("已显示全部 19 个来源") || tt.HasText("下滑查看更多") {
-		t.Fatalf("end-of-list hint did not show: %v", tt.Texts())
+	if tt.HasText("下滑查看更多") || tt.HasText("已显示全部") || tt.HasText("来源列表") {
+		t.Fatalf("scroll-box leftovers show with the accordion: %v", tt.Texts())
 	}
 }
 
-func TestDetailSourcesFewNeedNoScrollHint(t *testing.T) {
-	a, _ := newDetailTestApp(t, 3)
+func TestDetailAccordionFewSources(t *testing.T) {
+	a, seeds := newDetailTestApp(t, 3)
 	tt := ui.NewTester(a.view, 1120, 760)
 	tt.SetTitleBar(dragBar)
 	tt.Frame()
 	if !tt.HasText("共 3 个") {
 		t.Fatalf("sources count missing: %v", tt.Texts())
 	}
-	if tt.HasText("下滑查看更多") || tt.HasText("已显示全部") {
-		t.Fatalf("scroll hint shows with only three sources: %v", tt.Texts())
+	for i := 0; i < 3; i++ {
+		if _, ok := tt.Find("来源 " + seeds[i].Entry.Label()); !ok {
+			t.Fatalf("source row %d is missing", i)
+		}
+	}
+}
+
+func TestDetailAccordionExpandsCurrentSource(t *testing.T) {
+	a, seeds := newDetailTestApp(t, 3)
+	a.title.detail.Sources = []catalog.Source{
+		{Name: "线路一", Episodes: []catalog.Episode{{Name: "第1集", ID: "one"}, {Name: "第2集", ID: "two"}}},
+		{Name: "线路二", Episodes: []catalog.Episode{{Name: "第1集", ID: "one"}}},
+	}
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.SetTitleBar(dragBar)
+	tt.Frame()
+	// The current source is expanded: its lines and episodes show
+	// inside its own row. (Episode chips render as "1" and "2":
+	// episodeButtonLabel strips the 第/集 wrapper.)
+	if !tt.HasText("播放线路") || !tt.HasText("选集") || !tt.HasText("共 2 集") || !tt.HasText("线路一") {
+		t.Fatalf("expanded source content missing: %v", tt.Texts())
+	}
+	// "当前来源" sits on the current source's row.
+	row, ok := tt.Find("来源 " + seeds[0].Entry.Label())
+	if !ok {
+		t.Fatal("current source row is missing")
+	}
+	state, ok := tt.Find("当前来源")
+	if !ok {
+		t.Fatal("current-source state is missing")
+	}
+	if state.Y < row.Y || state.Y >= row.Y+row.H {
+		t.Fatalf("current-source state is not on the current row: state=%+v row=%+v", state, row)
+	}
+	// Choosing another source switches it: that row expands instead.
+	if err := tt.Click("来源 " + seeds[1].Entry.Label()); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.title == nil || itemKey(a.title.item) != itemKey(seeds[1]) {
+		t.Fatalf("click did not switch the source: item=%+v", a.title)
+	}
+	row, ok = tt.Find("来源 " + seeds[1].Entry.Label())
+	if !ok {
+		t.Fatal("new current source row is missing")
+	}
+	state, ok = tt.Find("当前来源")
+	if !ok {
+		t.Fatal("current-source state is missing after the switch")
+	}
+	if state.Y < row.Y || state.Y >= row.Y+row.H {
+		t.Fatalf("current-source state did not move with the switch: state=%+v row=%+v", state, row)
 	}
 }
 
