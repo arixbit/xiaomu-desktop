@@ -106,7 +106,7 @@ func suggestionTestServer(t *testing.T) (*httptest.Server, *config.Config) {
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		if q.Get("ids") != "" {
-			fmt.Fprintf(w, `{"list":[{"vod_id":"7","vod_name":"演示电影","vod_play_from":"直连","vod_play_url":"第1集$%s/clip.mp4"}]}`, srv.URL)
+			fmt.Fprintf(w, `{"list":[{"vod_id":"7","vod_name":"演示电影","vod_content":"<p>简介第一句。</p><p>简介第二句。</p>","vod_play_from":"直连","vod_play_url":"第1集$%s/clip.mp4"}]}`, srv.URL)
 			return
 		}
 		if q.Get("wd") != "" {

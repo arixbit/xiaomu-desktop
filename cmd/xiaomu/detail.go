@@ -29,8 +29,9 @@ type titlePage struct {
 	item           library.Item      // the source on show
 	session        source.Session
 	detail         *catalog.Detail
-	line           int // chosen play line
-	chunk          int // chosen range of episodes
+	line           int            // chosen play line
+	chunk          int            // chosen range of episodes
+	sourcesScroll  ui.ScrollState // where the sources box is scrolled
 }
 
 // openTitle shows a title. Without seeds, its sources are searched for in
@@ -120,7 +121,35 @@ func openItem(ctx context.Context, item library.Item, assets string) (source.Ses
 	if detail.Pic == "" {
 		detail.Pic = item.Video.Pic
 	}
+	detail.Content = stripHTML(detail.Content)
 	return session, detail, nil
+}
+
+// stripHTML takes the tags and entities out of a synopsis: CMS sites
+// return the description wrapped in <p>…</p> and the like, which the
+// detail page would otherwise show literally.
+func stripHTML(s string) string {
+	var b strings.Builder
+	inTag := false
+	for _, r := range s {
+		switch {
+		case r == '<':
+			inTag = true
+		case r == '>':
+			inTag = false
+		case !inTag:
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	// &amp; last, so "&amp;lt;" becomes "&lt;", not "<".
+	for _, e := range [][2]string{
+		{"&nbsp;", " "}, {"&quot;", `"`}, {"&#39;", "'"}, {"&apos;", "'"},
+		{"&lt;", "<"}, {"&gt;", ">"}, {"&amp;", "&"},
+	} {
+		out = strings.ReplaceAll(out, e[0], e[1])
+	}
+	return strings.Join(strings.Fields(out), " ")
 }
 
 // openCandidate shows the title as one of its sources has it.
@@ -308,66 +337,79 @@ func (a *app) detailView(c *ui.Context) {
 		return
 	}
 	candidates := a.candidates()
-	ui.Scroll(c).Fill().Gap(20).Children(func() {
-		ui.Row(c).FillWidth().Gap(22).Children(func() {
-			pic := t.pic
-			if t.detail != nil && t.detail.Pic != "" {
-				pic = t.detail.Pic
+	// The header stays put while the rest scrolls: the sources box
+	// scrolls inside itself, so the play button never leaves the
+	// screen however far down the sources go.
+	ui.Column(c).Fill().Gap(20).Children(func() {
+		a.detailHeader(c, t)
+		ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Gap(20).Children(func() {
+			if f := a.playFailure; f != nil && t.detail != nil && !a.running(jobPlay) {
+				ui.Column(c).FillWidth().Padding(16).Gap(10).Radius(18).Background(surface).Children(func() {
+					ui.Text(c, f.line+" · "+f.episode.Name).Bold()
+					ui.Text(c, f.err.Error()).Selectable()
+					a.recoveryActions(c)
+				})
 			}
-			ui.Box(c).Size(170, 240).Radius(16).Clip().Background(ui.Hex("#24242c")).Children(func() {
-				if poster := a.poster(pic); poster != nil {
-					ui.Image(c, poster).Fill().Fit(ui.Cover)
-				}
-			})
-			ui.Column(c).Grow(1).MinWidth(0).Gap(10).Children(func() {
-				ui.Text(c, t.name).FontSize(27).Bold()
-				a.favoriteButton(c)
-				if t.detail == nil {
-					return
-				}
-				if meta := videoMeta(t.detail.Year, t.detail.Type, ""); meta != "" {
-					ui.Text(c, meta).TextColor(textMuted)
-				}
-				if t.detail.Content != "" {
-					ui.Text(c, t.detail.Content).TextColor(textMuted).MaxHeight(132).Clip()
-				}
-				if line, ok := t.currentLine(); ok && len(line.Episodes) > 0 {
-					if primaryButton(c, "立即播放").AlignSelf(ui.Start).Clicked() {
-						a.playEpisode(line.Name, line.Episodes[0])
+			a.sourceList(c, candidates)
+			if t.detail == nil {
+				return
+			}
+			if len(t.detail.Sources) == 0 {
+				ui.Text(c, "这个站点没有提供可播放分集，换一个来源试试。").TextColor(textMuted)
+				return
+			}
+			if len(t.detail.Sources) > 1 {
+				ui.Text(c, "播放线路").FontSize(19).Bold()
+				ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
+					for i, line := range t.detail.Sources {
+						name := line.Name
+						if name == "" {
+							name = fmt.Sprintf("线路 %d", i+1)
+						}
+						if chip(c, name, i == t.line).Key(fmt.Sprintf("line-%d", i)).Clicked() {
+							t.line, t.chunk = i, 0
+						}
 					}
-				}
-			})
+				})
+			}
+			a.episodeList(c)
 		})
-		if f := a.playFailure; f != nil && t.detail != nil && !a.running(jobPlay) {
-			ui.Column(c).FillWidth().Padding(16).Gap(10).Radius(18).Background(surface).Children(func() {
-				ui.Text(c, f.line+" · "+f.episode.Name).Bold()
-				ui.Text(c, f.err.Error()).Selectable()
-				a.recoveryActions(c)
-			})
+	})
+}
+
+// detailHeader is the title's poster and information. It is fixed above
+// the scrolling body, so the play button is always visible.
+func (a *app) detailHeader(c *ui.Context, t *titlePage) {
+	ui.Row(c).FillWidth().Gap(22).AlignItems(ui.Start).Children(func() {
+		pic := t.pic
+		if t.detail != nil && t.detail.Pic != "" {
+			pic = t.detail.Pic
 		}
-		a.sourceList(c, candidates)
-		if t.detail == nil {
-			return
-		}
-		if len(t.detail.Sources) == 0 {
-			ui.Text(c, "这个站点没有提供可播放分集，换一个来源试试。").TextColor(textMuted)
-			return
-		}
-		if len(t.detail.Sources) > 1 {
-			ui.Text(c, "播放线路").FontSize(19).Bold()
-			ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
-				for i, line := range t.detail.Sources {
-					name := line.Name
-					if name == "" {
-						name = fmt.Sprintf("线路 %d", i+1)
-					}
-					if chip(c, name, i == t.line).Key(fmt.Sprintf("line-%d", i)).Clicked() {
-						t.line, t.chunk = i, 0
-					}
+		ui.Box(c).Size(220, 310).Radius(16).Clip().Background(ui.Hex("#24242c")).Children(func() {
+			if poster := a.poster(pic); poster != nil {
+				ui.Image(c, poster).Fill().Fit(ui.Cover)
+			}
+		})
+		ui.Column(c).Grow(1).MinWidth(0).Gap(10).Children(func() {
+			ui.Text(c, t.name).FontSize(27).Bold()
+			a.favoriteButton(c)
+			if t.detail == nil {
+				return
+			}
+			if meta := videoMeta(t.detail.Year, t.detail.Type, ""); meta != "" {
+				ui.Text(c, meta).TextColor(textMuted)
+			}
+			if t.detail.Content != "" {
+				ui.Column(c).FillWidth().Padding(12, 14).Radius(14).Background(surface).Children(func() {
+					ui.Text(c, t.detail.Content).MaxHeight(132).Clip()
+				})
+			}
+			if line, ok := t.currentLine(); ok && len(line.Episodes) > 0 {
+				if primaryButton(c, "立即播放").FillWidth().Clicked() {
+					a.playEpisode(line.Name, line.Episodes[0])
 				}
-			})
-		}
-		a.episodeList(c)
+			}
+		})
 	})
 }
 
@@ -381,45 +423,65 @@ func (t *titlePage) currentLine() (catalog.Source, bool) {
 	return t.detail.Sources[t.line], true
 }
 
+// isCurrent reports whether item is the source on show. A title with no
+// source on show yet — its item is empty — has no current source.
+func (t *titlePage) isCurrent(item library.Item) bool {
+	return t.detail != nil && t.item.Entry.Config != nil && itemKey(t.item) == itemKey(item)
+}
+
+// currentFailed reports whether the source on show failed to load.
+func (t *titlePage) currentFailed() bool {
+	return t.detail != nil && t.item.Entry.Config != nil && t.failed[itemKey(t.item)] != ""
+}
+
+// sourceCardHeight is the height of one source card; sourceBoxHeight
+// is the most the sources box grows to: three rows of cards (nine
+// cards) and a peek of the next row, so the box reads as scrollable
+// when there are more sources below. With fewer sources the box stays
+// as tall as its cards, so the episodes below it stay on screen.
+const sourceCardHeight = 56
+const sourceGridRows = 3
+const sourceBoxHeight = sourceGridRows*sourceCardHeight + (sourceGridRows-1)*8 + 16
+
 // sourceList is every site that has the title; choosing one shows it there.
 func (a *app) sourceList(c *ui.Context, candidates []library.Item) {
 	t, search := a.title, &a.library.search
 	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "来源").FontSize(19).Bold()
-		ui.Text(c, "当前来源播不了，换一个即可").FontSize(13).TextColor(textMuted).Grow(1)
+		if len(candidates) > 0 {
+			ui.Text(c, fmt.Sprintf("共 %d 个", len(candidates))).FontSize(13).TextColor(textMuted)
+		}
+		// The "switch source" hint only means something when the source
+		// on show actually failed; showing it while it plays fine reads
+		// as if the current source were broken.
+		if t.currentFailed() || a.playFailure != nil {
+			ui.Text(c, "当前来源播不了，换一个即可").FontSize(13).TextColor(textMuted).Grow(1)
+		} else {
+			ui.Spacer(c)
+		}
 		if !a.inStack(routeSearch) && a.library.root != nil && titleKey(search.query) != titleKey(t.name) {
 			if glassButton(c, "查找其他来源").Clicked() {
 				a.startScan(search, t.name, false)
 			}
 		}
 	})
-	for _, item := range candidates {
-		key := itemKey(item)
-		current := t.detail != nil && itemKey(t.item) == key
-		state := ""
-		switch {
-		case a.running(jobTitle) && itemKey(t.pending) == key:
-			state = "正在读取…"
-		case current:
-			state = "当前来源"
-		case t.failed[key] != "":
-			state = t.failed[key]
-		}
-		row := ui.Row(c).Key(key).FillWidth().Padding(12, 16).Gap(12).Radius(16).AlignItems(ui.Center).
-			Background(surface).Cursor(ui.CursorPointer).Label("来源 " + item.Entry.Label())
-		row.Children(func() {
-			ui.Text(c, item.Entry.Label()).Bold().SingleLine()
-			if item.Video.Remarks != "" {
-				ui.Text(c, item.Video.Remarks).FontSize(13).TextColor(textMuted).SingleLine()
-			}
-			ui.Spacer(c)
-			if state != "" {
-				ui.Text(c, state).FontSize(13).TextColor(textMuted).SingleLine()
-			}
+	if len(candidates) > 0 {
+		// The grid scrolls inside its own box, so the header — and its
+		// play button — never scroll away with it.
+		ui.Scroll(c).FillWidth().MaxHeight(sourceBoxHeight).TrackScroll(&t.sourcesScroll).
+			Label("来源列表").Children(func() {
+			ui.Grid(c).Columns(3).Gap(8).Children(func() {
+				for _, item := range candidates {
+					a.sourceCard(c, item)
+				}
+			})
 		})
-		if row.Clicked() && !current {
-			t.auto = false
-			a.openCandidate(item)
+		if len(candidates) > sourceGridRows*3 {
+			if t.sourcesScroll.MaxY > 0 && t.sourcesScroll.Y >= t.sourcesScroll.MaxY {
+				ui.Text(c, fmt.Sprintf("已显示全部 %d 个来源", len(candidates))).FontSize(13).TextColor(textMuted)
+			} else {
+				ui.Text(c, "下滑查看更多").FontSize(13).TextColor(textMuted)
+			}
 		}
 	}
 	searching := search.running && titleKey(search.query) == titleKey(t.name)
@@ -433,6 +495,51 @@ func (a *app) sourceList(c *ui.Context, candidates []library.Item) {
 				a.showRelated()
 			}
 		})
+	}
+}
+
+// sourceCard is one site that has the title, in the sources grid. The
+// dot says which one is on show (green), which one is still being read
+// (no dot, "正在读取…") and which one failed (grey, with the reason).
+func (a *app) sourceCard(c *ui.Context, item library.Item) {
+	t := a.title
+	key := itemKey(item)
+	current := t.isCurrent(item)
+	state := ""
+	dot := ""
+	switch {
+	case a.running(jobTitle) && itemKey(t.pending) == key:
+		state = "正在读取…"
+	case current:
+		state = "当前来源"
+		dot = "#3fb96a"
+	case t.failed[key] != "":
+		state = t.failed[key]
+		dot = "#8a8f9e"
+	}
+	card := ui.Column(c).Key(key).Height(sourceCardHeight).Padding(8, 14).Gap(2).Radius(14).
+		Background(surface).Cursor(ui.CursorPointer).Label("来源 " + item.Entry.Label())
+	card.Children(func() {
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			if dot != "" {
+				ui.Box(c).Size(8, 8).Radius(4).Background(ui.Hex(dot))
+			}
+			ui.Text(c, item.Entry.Label()).Bold().SingleLine().Grow(1).MinWidth(0)
+		})
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			if item.Video.Remarks != "" {
+				ui.Text(c, item.Video.Remarks).FontSize(13).TextColor(textMuted).SingleLine().Grow(1).MinWidth(0)
+			} else {
+				ui.Spacer(c)
+			}
+			if state != "" {
+				ui.Text(c, state).FontSize(13).TextColor(textMuted).SingleLine()
+			}
+		})
+	})
+	if card.Clicked() && !current {
+		t.auto = false
+		a.openCandidate(item)
 	}
 }
 
