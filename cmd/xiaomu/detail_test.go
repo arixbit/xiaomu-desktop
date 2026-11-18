@@ -2,10 +2,12 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/douban"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/egoist/mygo/ui"
 )
@@ -139,6 +141,49 @@ func TestDetailHeaderShortSynopsisLeavesNoHole(t *testing.T) {
 	}
 	if sources.Y-title.Y >= 300 {
 		t.Fatalf("header is taller than the poster: title=%+v sources=%+v", title, sources)
+	}
+}
+
+func TestDetailHeaderShowsDoubanScore(t *testing.T) {
+	a, _ := newDetailTestApp(t, 3)
+	a.title.score = "8.5"
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.SetTitleBar(dragBar)
+	tt.Frame()
+	if !tt.HasText("豆瓣 8.5") {
+		t.Fatalf("known score missing: %v", tt.Texts())
+	}
+	// A title with no known score shows no score at all.
+	a.title.score = ""
+	tt.Frame()
+	for _, text := range tt.Texts() {
+		if strings.Contains(text, "豆瓣") {
+			t.Fatalf("unknown score invented one: %v", tt.Texts())
+		}
+	}
+}
+
+func TestDoubanScoreLookup(t *testing.T) {
+	_, doc := suggestionTestServer(t)
+	a := newSuggestionTestApp(t, doc)
+	a.discovery.movie.feed = douban.Feed{Subjects: []douban.Subject{
+		{Title: "演示电影", Rating: "8.6"},
+		{Title: "没有评分", Rating: ""},
+	}}
+	a.discovery.tv.feed = douban.Feed{Subjects: []douban.Subject{
+		{Title: "演示剧集", Rating: "9.1"},
+	}}
+	if got := a.doubanScore("演示电影"); got != "8.6" {
+		t.Fatalf("movie list score = %q, want 8.6", got)
+	}
+	if got := a.doubanScore("演示剧集"); got != "9.1" {
+		t.Fatalf("tv list score = %q, want 9.1", got)
+	}
+	if got := a.doubanScore("没有评分"); got != "" {
+		t.Fatalf("unrated title score = %q, want empty", got)
+	}
+	if got := a.doubanScore("不在榜上"); got != "" {
+		t.Fatalf("unknown title score = %q, want empty", got)
 	}
 }
 

@@ -1,11 +1,17 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -81,6 +87,65 @@ func TestFormatLatency(t *testing.T) {
 		if got := formatLatency(tc.in); got != tc.want {
 			t.Fatalf("formatLatency(%v) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestMeasureSite(t *testing.T) {
+	_, doc := suggestionTestServer(t)
+	entry := library.Entry{Site: doc.Sites[0], Config: doc}
+	if d := measureSite(context.Background(), entry, ""); d <= 0 {
+		t.Fatal("a live CMS site measured nothing")
+	}
+	// A site that does not answer records nothing.
+	dead := library.Entry{
+		Site:   config.Site{Key: "dead", Name: "死了", Type: 1, Kind: config.KindJSON, API: "http://127.0.0.1:1/api"},
+		Config: doc,
+	}
+	if d := measureSite(context.Background(), dead, ""); d != 0 {
+		t.Fatalf("a dead site measured %v", d)
+	}
+}
+
+func TestSourcePageShowsLatency(t *testing.T) {
+	_, doc := suggestionTestServer(t)
+	a := newSuggestionTestApp(t, doc)
+	a.library.documents = []libraryDocument{{doc: doc, open: true}}
+	entry := library.Entry{Site: doc.Sites[0], Config: doc}
+	if err := a.latency.record(entry.Key(), 850*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.SetTitleBar(dragBar)
+	if err := tt.Click("片源"); err != nil {
+		t.Fatal(err)
+	}
+	if !tt.HasText("850ms") || !tt.HasText("示例来源") {
+		t.Fatalf("latency label missing: %v", tt.Texts())
+	}
+}
+
+func TestSourceSpeedTestUpdatesStore(t *testing.T) {
+	// The store records whole milliseconds and treats 0ms as
+	// unmeasured, so the site answers with a small delay: a
+	// loopback server alone can answer in under a millisecond.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(5 * time.Millisecond)
+		fmt.Fprint(w, `{"list":[]}`)
+	}))
+	t.Cleanup(srv.Close)
+	doc := &config.Config{URL: srv.URL + "/config", Sites: []config.Site{{Key: "site", Name: "示例来源", Type: 1, Kind: config.KindJSON, API: srv.URL + "/api"}}}
+	a := newSuggestionTestApp(t, doc)
+	a.library.documents = []libraryDocument{{doc: doc, open: true}}
+	a.startSourceSpeedTest()
+	if a.speedTest.running {
+		t.Fatal("the re-test did not finish")
+	}
+	if a.speedTest.done != 1 || a.speedTest.total != 1 {
+		t.Fatalf("progress = %d/%d, want 1/1", a.speedTest.done, a.speedTest.total)
+	}
+	entry := library.Entry{Site: doc.Sites[0], Config: doc}
+	if d, ok := a.latency.get(entry.Key()); !ok || d <= 0 {
+		t.Fatalf("the re-test recorded nothing: %v %v", d, ok)
 	}
 }
 

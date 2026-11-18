@@ -3,10 +3,13 @@ package main
 import (
 	"image"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
+	"github.com/arixbit/xiaomu-desktop/internal/proxy"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -141,6 +144,61 @@ func TestFullscreenKeepsControlsWhileDragging(t *testing.T) {
 	tt.Advance(3 * time.Second)
 	if tt.HasText("返回") {
 		t.Fatal("controls did not hide after the slider was released")
+	}
+}
+
+func TestFormatSpeed(t *testing.T) {
+	for _, tc := range []struct {
+		in   float64
+		want string
+	}{
+		{0, "—"},
+		{-1, "—"},
+		{512, "512 B/s"},
+		{1536, "1.5 KB/s"},
+		{2 << 20, "2.0 MB/s"},
+		{12<<20 + 512<<10, "12.5 MB/s"},
+	} {
+		if got := formatSpeed(tc.in); got != tc.want {
+			t.Fatalf("formatSpeed(%v) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestPlayerShowsNetworkSpeed(t *testing.T) {
+	a := newPlayerTestApp(t)
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.Frame()
+	if !tt.HasText("网速 —") {
+		t.Fatalf("speed missing before any flow: %v", tt.Texts())
+	}
+	// 2 MiB through the proxy, then one second later the player
+	// shows the rate for it.
+	body := make([]byte, 2<<20)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write(body)
+	}))
+	defer up.Close()
+	p, err := proxy.Start(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	a.proxy = p
+	tt.Frame() // first sample: nothing served yet
+	resp, err := http.Get(p.Wrap(up.URL + "/big.mp4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	tt.Advance(time.Second)
+	tt.Frame()
+	if !tt.HasText("2.0 MB/s") {
+		t.Fatalf("speed did not show the rate: %v", tt.Texts())
 	}
 }
 

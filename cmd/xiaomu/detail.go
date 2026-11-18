@@ -22,6 +22,7 @@ const episodeChunk = 50
 // the source on show, and serves the player while an episode plays.
 type titlePage struct {
 	name, pic      string
+	score          string            // Douban score, when the opener knew one
 	seeds          []library.Item    // sources known when the page opened
 	failed         map[string]string // source → why it could not be read
 	auto           bool              // open the first source that reads
@@ -37,11 +38,24 @@ type titlePage struct {
 // openTitle shows a title. Without seeds, its sources are searched for in
 // the library, and the first one that reads opens by itself.
 func (a *app) openTitle(name, pic string, seeds []library.Item) {
-	a.showTitle(name, pic, seeds, false)
+	a.showTitle(name, pic, seeds, false, "")
 }
 
-func (a *app) showTitle(name, pic string, seeds []library.Item, searchFallback bool) {
+// openTitleWithScore is openTitle for a caller that already knows the
+// title's Douban score, such as a discovery card. The score is shown
+// as-is; it is never looked up, guessed or invented here.
+func (a *app) openTitleWithScore(name, pic string, seeds []library.Item, score string) {
+	a.showTitle(name, pic, seeds, false, score)
+}
+
+func (a *app) showTitle(name, pic string, seeds []library.Item, searchFallback bool, score string) {
 	a.clearTitle()
+	if score == "" {
+		// A title opened from search or the library may still be on
+		// a cached Douban list; an exact title match there is the
+		// only other score this app knows. No match means no score.
+		score = a.doubanScore(name)
+	}
 	if saved, ok := a.rememberedCandidate(name, pic); ok {
 		known := false
 		for _, item := range seeds {
@@ -52,7 +66,7 @@ func (a *app) showTitle(name, pic string, seeds []library.Item, searchFallback b
 			searchFallback = true
 		}
 	}
-	a.title = &titlePage{name: name, pic: pic, seeds: seeds, auto: true, searchFallback: searchFallback, failed: map[string]string{}}
+	a.title = &titlePage{name: name, pic: pic, score: score, seeds: seeds, auto: true, searchFallback: searchFallback, failed: map[string]string{}}
 	a.push(routeDetail)
 	preferred := a.sourceMemory.entries[titleKey(name)].Preferred
 	knownPreferred := false
@@ -514,7 +528,14 @@ func (a *app) detailHeader(c *ui.Context, t *titlePage) {
 				a.favoriteButton(c)
 				return
 			}
-			if meta := videoMeta(t.detail.Year, t.detail.Type, ""); meta != "" {
+			// The score is the one the opener knew, or one found on a
+			// cached Douban list; a title with no known score shows
+			// no score at all, never a made-up one.
+			score := ""
+			if t.score != "" {
+				score = "豆瓣 " + t.score
+			}
+			if meta := videoMeta(t.detail.Year, t.detail.Type, score); meta != "" {
 				ui.Text(c, meta).TextColor(textMuted)
 			}
 			if t.detail.Content != "" {
