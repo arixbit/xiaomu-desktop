@@ -26,6 +26,18 @@ type app struct {
 	posters posterCache
 	proxy   *proxy.Proxy
 	open    func(string) (*ui.VideoPlayer, error)
+	// openLocal plays a file from disk directly, without the proxy.
+	// addRecent records a file in the system's recent documents.
+	// notify posts a system notification; nowPlaying publishes to the
+	// system Now Playing info. All four are replaceable for headless
+	// tests and wired to MyGo in main().
+	openLocal  func(string) (*ui.VideoPlayer, error)
+	addRecent  func(string) error
+	notify     func(id, title, body string)
+	nowPlaying nowPlayingSink
+	// pending holds file/URL events that arrived before the window
+	// existed; they run in order once it does.
+	pending []func()
 
 	nav             []routeKind
 	jobs            [jobSlots]job
@@ -54,8 +66,12 @@ type app struct {
 	persist         bool
 	dispatch        func(func())
 
-	playingLive    bool
-	playingDirect  bool
+	playingLive   bool
+	playingDirect bool
+	// playingFile is set for a local file opened from Finder; playingName
+	// is that file's name, shown in the header and Now Playing.
+	playingFile    bool
+	playingName    string
 	playingSource  string
 	playingEpisode string
 	resumeAt       time.Duration
@@ -99,6 +115,30 @@ func (a *app) play() {
 
 // playURL hands an HTTP address to the player through the loopback proxy,
 // which adds the request headers. It reports whether the player opened.
+// adoptPlayer makes p the current player and resets the per-play state.
+// playURL and openLocalFile share it; both close the old player before
+// opening, so a failed open still leaves no player, as before.
+func (a *app) adoptPlayer(p *ui.VideoPlayer) {
+	if a.player != nil {
+		a.player.Close()
+	}
+	a.player = p
+	a.applyPlayerPreferences(p)
+	a.playbackWait = playbackWait{}
+	a.playFailure = nil
+	// A new episode starts with no flow yet, so the speed reads
+	// neutral until the first sample a second later.
+	a.speedAt = time.Time{}
+	a.speedText = "—"
+	a.resumeAt, a.lastPosition = 0, 0
+	a.resumeIssued = false
+	a.panelOpen, a.panelTouched, a.panelSource, a.panelTab = !a.fullScreen, false, -1, 0
+	a.playerOverlay = playerOverlayState{}
+	a.autoNextPending = false
+	a.playingFile = false
+	a.playingName = ""
+}
+
 func (a *app) playURL(raw string, headers map[string]string) bool {
 	raw = strings.TrimSpace(raw)
 	u, err := url.Parse(raw)
@@ -129,21 +169,10 @@ func (a *app) playURL(raw string, headers map[string]string) bool {
 		a.status = "无法打开: " + err.Error()
 		return false
 	}
-	a.player = player
-	a.applyPlayerPreferences(player)
-	a.playbackWait = playbackWait{}
-	a.playFailure = nil
-	// A new episode starts with no flow yet, so the speed reads
-	// neutral until the first sample a second later.
-	a.speedAt = time.Time{}
-	a.speedText = "—"
+	a.adoptPlayer(player)
 	a.playingLive, a.playingDirect = false, false
-	a.resumeAt, a.lastPosition = 0, 0
-	a.resumeIssued = false
-	a.panelOpen, a.panelTouched, a.panelSource, a.panelTab = !a.fullScreen, false, -1, 0
-	a.playerOverlay = playerOverlayState{}
-	a.autoNextPending = false
 	a.status = "正在播放"
+	a.syncNowPlaying()
 	return true
 }
 
@@ -161,6 +190,31 @@ func playbackHeaders(referer, ua string) map[string]string {
 func main() {
 	a := &app{autoNext: true, persist: true}
 	a.initUpdates()
+	a.notify = postNotification
+	a.addRecent = mygo.App.AddRecentDocument
+	a.nowPlaying = mygo.NowPlaying
+	// System entry points. All are registered before Run so a file or
+	// link that launched the app is delivered too; the handlers queue
+	// with deferUntilReady when the window does not exist yet.
+	mygo.App.OnOpenFile(func(path string) {
+		a.deferUntilReady(func() { a.openLocalFile(path) })
+	})
+	mygo.App.OnOpenURL(func(raw string) {
+		a.deferUntilReady(func() { a.handleDeepLink(raw) })
+	})
+	mygo.App.OnNotificationClick(func(id string) {
+		a.deferUntilReady(func() { a.handleNotificationClick(id) })
+	})
+	mygo.App.OnDidBecomeActive(func() { mygo.ClearNotifications() })
+	mygo.NowPlaying.OnCommand(func(cmd mygo.MediaCommand, position time.Duration) {
+		a.handleMediaCommand(cmd, position)
+	})
+	// Claim the xiaomu:// scheme for this install. It is declared in
+	// mygo.json (urlSchemes), so the built .app lists it in Info.plist;
+	// registering at launch makes xiaomu the default handler for it.
+	// The error is ignored: in `go run` there is no bundle to declare
+	// it, and the app still works without being the handler.
+	_ = mygo.App.RegisterURLScheme("xiaomu")
 	mygo.App.WhenReady(func() {
 		win := mygo.NewWindow(mygo.WindowOptions{
 			Title:         "小幕",
@@ -187,6 +241,9 @@ func main() {
 		win.OnEnterFullScreen(func() { win.Update(func() { a.setFullScreen(true) }) })
 		win.OnLeaveFullScreen(func() { win.Update(func() { a.setFullScreen(false) }) })
 		a.restoreSavedSource()
+		// Files / links / notification clicks that arrived before the
+		// window existed run now, with the library restored.
+		a.drainPending()
 		win.OnClosed(a.close)
 	})
 	if err := mygo.App.Run(); err != nil {

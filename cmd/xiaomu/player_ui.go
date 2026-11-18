@@ -113,6 +113,9 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 	if a.playingLive && a.live.playingChannel < len(a.live.channels) {
 		name = "直播 · " + a.live.channels[a.live.playingChannel].Name
 	}
+	if a.playingFile {
+		name = a.playingName
+	}
 	top := float32(12)
 	if bar := c.TitleBar(); bar.Bottom+8 > top {
 		top = bar.Bottom + 8
@@ -237,6 +240,7 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 				}
 				if ui.Button(c, playLabel).Radius(16).Material(glass.Glass{Style: glass.Clear, Interactive: true}).TextColor(playerText).Clicked() {
 					togglePlayback(p)
+					a.syncNowPlayingState()
 				}
 				if hasEpisodes && ui.Button(c, "下一集").Radius(16).Material(glass.Glass{Style: glass.Clear, Interactive: true}).TextColor(playerText).
 					Disabled(!current || episode+1 >= len(a.title.detail.Sources[source].Episodes)).Clicked() {
@@ -508,7 +512,10 @@ func (a *app) leavePlayer() {
 		a.player.Close()
 		a.player = nil
 	}
+	a.syncNowPlaying()
 	a.playingLive, a.playingDirect = false, false
+	a.playingFile = false
+	a.playingName = ""
 	a.playerOverlay = playerOverlayState{}
 	a.playbackWait = playbackWait{}
 	a.playFailure = nil

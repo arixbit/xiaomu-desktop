@@ -3,6 +3,15 @@
   "identifier": "dev.arixbit.xiaomu",
   "version": "0.7.1",
   "main": "./cmd/xiaomu",
+  "urlSchemes": ["xiaomu"],
+  "fileAssociations": [
+    {
+      "ext": ["mp4", "mov", "m4v", "m3u8"],
+      "name": "Video",
+      "mimeType": "video/mp4",
+      "role": "Viewer"
+    }
+  ],
   "out": "build",
   "updates": {
     "publicKey": "+fHvmj1BfzANUNWPMbHUlnVPJkCBvcFZ26XuzcgYKUI=",
