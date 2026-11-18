@@ -17,10 +17,18 @@ func (a *app) sourcesView(c *ui.Context) {
 	ui.Scroll(c).Fill().Gap(14).Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "首页和搜索会汇集这里的全部站点。").TextColor(textMuted).Grow(1)
+			// One press re-measures every site; the button stays
+			// disabled until the last site answers or times out.
+			if glassButton(c, "重新测速").Disabled(a.speedTest.running || a.library.root == nil).Clicked() {
+				a.startSourceSpeedTest()
+			}
 			if primaryButton(c, "添加片源").Clicked() {
 				b.importOpen = true
 			}
 		})
+		if a.speedTest.running {
+			ui.Text(c, fmt.Sprintf("测速中 %d/%d…", a.speedTest.done, a.speedTest.total)).TextColor(textMuted)
+		}
 		card(func() {
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 				ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
@@ -95,9 +103,19 @@ func (a *app) documentSites(c *ui.Context, document *libraryDocument) {
 					if site.Kind.Unsupported() {
 						continue
 					}
-					if glassButton(c, site.Name).Key(i).Clicked() {
-						a.openSite(library.Entry{Site: site, Config: document.doc, Line: document.line})
-					}
+					entry := library.Entry{Site: site, Config: document.doc, Line: document.line}
+					// The button stays the site's name; its last
+					// measured latency sits beside it, in the same
+					// form as the detail page. An unmeasured site
+					// shows nothing, never a made-up number.
+					ui.Row(c).Key(i).Gap(6).AlignItems(ui.Center).Children(func() {
+						if glassButton(c, site.Name).Clicked() {
+							a.openSite(entry)
+						}
+						if d, ok := a.latency.get(entry.Key()); ok {
+							ui.Text(c, formatLatency(d)).FontSize(13).TextColor(textMuted)
+						}
+					})
 				}
 			})
 			if skipped > 0 {

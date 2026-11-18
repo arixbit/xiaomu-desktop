@@ -51,6 +51,49 @@ func TestInjectsHeadersAndRange(t *testing.T) {
 	}
 }
 
+func TestBytesServedCountsPlayback(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte("moovdata"))
+	}))
+	defer up.Close()
+
+	p, err := Start(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if p.BytesServed() != 0 {
+		t.Fatalf("served = %d before any playback", p.BytesServed())
+	}
+	resp, err := http.Get(p.Wrap(up.URL + "/a.mp4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if got := p.BytesServed(); got != int64(len(body)) {
+		t.Fatalf("served = %d, want %d", got, len(body))
+	}
+
+	// A rewritten playlist counts the bytes the player actually
+	// receives, not the upstream's original.
+	up2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		_, _ = io.WriteString(w, "#EXTM3U\n#EXTINF:4,\nseg0.ts\n")
+	}))
+	defer up2.Close()
+	resp, err = http.Get(p.Wrap(up2.URL + "/live.m3u8"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body2, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if got := p.BytesServed(); got != int64(len(body))+int64(len(body2)) {
+		t.Fatalf("served = %d, want %d", got, len(body)+len(body2))
+	}
+}
+
 func TestRewritePlaylist(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Referer") != "https://fixture.example/" {

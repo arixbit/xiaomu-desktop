@@ -169,7 +169,7 @@ func (a *app) openFavorite(e favoriteEntry) {
 		if entry, ok := findSite(doc, e.EntryKey, e.SiteKey); ok {
 			seeds = []library.Item{{Entry: entry, Video: catalog.Video{ID: catalog.ID(e.VideoID), Name: e.Name, Pic: e.Pic}}}
 		}
-		return jobResult{apply: func() { a.showTitle(e.Name, e.Pic, seeds, true) }}, nil
+		return jobResult{apply: func() { a.showTitle(e.Name, e.Pic, seeds, true, "") }}, nil
 	}, func(error) { a.openTitle(e.Name, e.Pic, nil) })
 }
 

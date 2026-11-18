@@ -219,6 +219,7 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 					resolution = "分辨率未知"
 				}
 				ui.Text(c, resolution).FontSize(12).SingleLine()
+				ui.Text(c, "网速 "+a.playbackSpeed(c)).FontSize(12).SingleLine()
 			})
 			ui.Row(c).FillWidth().Wrap().Gap(8).AlignItems(ui.Center).Children(func() {
 				if a.playingLive {
@@ -556,6 +557,44 @@ func nextPlayerRate(current float64) float64 {
 		}
 	}
 	return 1
+}
+
+// playbackSpeed is the proxy's current download rate, sampled about
+// once a second. The proxy only ever serves playback, so its bytes are
+// the video's bytes: nothing is fetched twice and nothing in the video
+// path changes. While nothing flows — before the first segment, while
+// buffering or paused — it reads "—".
+func (a *app) playbackSpeed(c *ui.Context) string {
+	if a.proxy == nil || a.player == nil {
+		return "—"
+	}
+	now := c.Now()
+	total := a.proxy.BytesServed()
+	if a.speedAt.IsZero() {
+		a.speedBytes, a.speedAt, a.speedText = total, now, "—"
+	} else if dt := now.Sub(a.speedAt); dt >= time.Second {
+		a.speedText = formatSpeed(float64(total-a.speedBytes) / dt.Seconds())
+		a.speedBytes, a.speedAt = total, now
+	}
+	// Wake the view again in a second so the number keeps moving
+	// even when nothing else rebuilds the player.
+	c.After(time.Second)
+	return a.speedText
+}
+
+// formatSpeed is a bytes-per-second rate for the player: B/s below a
+// kilobyte, one decimal above it.
+func formatSpeed(bytesPerSecond float64) string {
+	switch {
+	case bytesPerSecond <= 0:
+		return "—"
+	case bytesPerSecond < 1024:
+		return fmt.Sprintf("%.0f B/s", bytesPerSecond)
+	case bytesPerSecond < 1024*1024:
+		return fmt.Sprintf("%.1f KB/s", bytesPerSecond/1024)
+	default:
+		return fmt.Sprintf("%.1f MB/s", bytesPerSecond/(1024*1024))
+	}
 }
 
 func playerClock(d time.Duration) string {

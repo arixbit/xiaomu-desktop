@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/urljoin"
@@ -40,7 +41,29 @@ type Proxy struct {
 	headers     map[string]string
 	client      *http.Client
 	readTimeout time.Duration
+
+	// served counts the media bytes written to players. The proxy
+	// only ever serves playback, so this is the video's throughput;
+	// counting costs nothing in the video path.
+	served atomic.Int64
 }
+
+// countingWriter passes every body byte through to the player and
+// counts it. Headers are written by the server, not through here,
+// so only media bytes count.
+type countingWriter struct {
+	http.ResponseWriter
+	served *atomic.Int64
+}
+
+func (w countingWriter) Write(b []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(b)
+	w.served.Add(int64(n))
+	return n, err
+}
+
+// BytesServed is how many media bytes this proxy has handed to players.
+func (p *Proxy) BytesServed() int64 { return p.served.Load() }
 
 // Start listens on 127.0.0.1 and a free port.
 func Start(headers map[string]string) (*Proxy, error) {
@@ -104,6 +127,7 @@ func (p *Proxy) Close() error {
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w = countingWriter{ResponseWriter: w, served: &p.served}
 	if r.URL.Path != "/u" {
 		http.NotFound(w, r)
 		return

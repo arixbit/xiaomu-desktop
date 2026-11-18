@@ -39,6 +39,7 @@ type app struct {
 	searchHistory   searchHistoryStore
 	searchFocused   bool
 	latency         latencyStore
+	speedTest       sourceSpeedTest
 	sourceMemory    sourceMemoryStore
 	sourceAttempt   sourcePlaybackAttempt
 	seriesSkips     seriesSkipStore
@@ -53,13 +54,20 @@ type app struct {
 	persist         bool
 	dispatch        func(func())
 
-	playingLive     bool
-	playingDirect   bool
-	playingSource   string
-	playingEpisode  string
-	resumeAt        time.Duration
-	resumeIssued    bool
-	lastPosition    time.Duration
+	playingLive    bool
+	playingDirect  bool
+	playingSource  string
+	playingEpisode string
+	resumeAt       time.Duration
+	resumeIssued   bool
+	lastPosition   time.Duration
+
+	// speedBytes/speedAt/speedText are the last throughput sample
+	// taken from the proxy: the bytes served then, when, and the
+	// text the player shows for the rate since.
+	speedBytes      int64
+	speedAt         time.Time
+	speedText       string
 	panelSource     int
 	panelTab        int
 	panelOpen       bool
@@ -125,6 +133,10 @@ func (a *app) playURL(raw string, headers map[string]string) bool {
 	a.applyPlayerPreferences(player)
 	a.playbackWait = playbackWait{}
 	a.playFailure = nil
+	// A new episode starts with no flow yet, so the speed reads
+	// neutral until the first sample a second later.
+	a.speedAt = time.Time{}
+	a.speedText = "—"
 	a.playingLive, a.playingDirect = false, false
 	a.resumeAt, a.lastPosition = 0, 0
 	a.resumeIssued = false

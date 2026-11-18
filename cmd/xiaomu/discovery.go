@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
@@ -119,6 +120,25 @@ func (a *app) loadDiscoveryTab(force bool) {
 	}
 }
 
+// doubanScore finds a title's score on the cached Douban lists, by
+// exact title. The lists hold at most 24 subjects each, and the score
+// was validated when the list was read, so a match is a real score and
+// a miss simply means this app does not know one.
+func (a *app) doubanScore(title string) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return ""
+	}
+	for _, list := range []*discoveryList{&a.discovery.movie, &a.discovery.tv} {
+		for _, subject := range list.feed.Subjects {
+			if subject.Title == title && subject.Rating != "" {
+				return subject.Rating
+			}
+		}
+	}
+	return ""
+}
+
 // homeTabs are the home page's lists, in the order they show.
 var homeTabs = []string{string(douban.Movie), string(douban.TV), "sites"}
 
@@ -212,13 +232,13 @@ func (a *app) discoveryView(c *ui.Context) {
 		}
 		card := a.videoCard(c, catalog.Video{ID: catalog.ID(subject.ID), Name: subject.Title, Pic: subject.Cover, Remarks: subject.Episodes}, score, false)
 		if card.Clicked() {
-			a.openTitle(subject.Title, subject.Cover, nil)
+			a.openTitleWithScore(subject.Title, subject.Cover, nil, subject.Rating)
 		}
 	}).Gap(14).Grow(1).FillWidth()
 	// Arrows move the choice without opening it; a click or Enter opens it.
 	if grid.Submitted() && list.selected >= 0 && list.selected < len(list.feed.Subjects) {
 		subject := list.feed.Subjects[list.selected]
 		list.selected = -1
-		a.openTitle(subject.Title, subject.Cover, nil)
+		a.openTitleWithScore(subject.Title, subject.Cover, nil, subject.Rating)
 	}
 }

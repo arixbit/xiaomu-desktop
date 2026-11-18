@@ -1,11 +1,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
+
+	"github.com/arixbit/xiaomu-desktop/internal/library"
+	"github.com/arixbit/xiaomu-desktop/internal/source"
 )
 
 // latencyStoreLimit is how many sites keep a measured latency. A depot
@@ -111,4 +117,127 @@ func formatLatency(d time.Duration) string {
 		return fmt.Sprintf("%.1fs", d.Seconds())
 	}
 	return fmt.Sprintf("%dms", d.Milliseconds())
+}
+
+// sourceSpeedTest is one manual re-measurement of every site on the
+// sources page. It runs beside the UI, like the discovery refresh:
+// workers measure, and the UI thread records, so a slow site never
+// blocks the page and the labels fill in as results arrive.
+type sourceSpeedTest struct {
+	running bool
+	done    int
+	total   int
+}
+
+// speedTestEntries is every supported site the sources page lists, each
+// once by its latency key. Unsupported sites are skipped, as the page
+// skips them.
+func (a *app) speedTestEntries() []library.Entry {
+	seen := map[string]bool{}
+	var entries []library.Entry
+	for _, document := range a.library.documents {
+		for _, site := range document.doc.Sites {
+			if site.Kind.Unsupported() {
+				continue
+			}
+			entry := library.Entry{Site: site, Config: document.doc, Line: document.line}
+			if seen[entry.Key()] {
+				continue
+			}
+			seen[entry.Key()] = true
+			entries = append(entries, entry)
+		}
+	}
+	return entries
+}
+
+// measureSite is one site answering: open it and close it again. For a
+// CMS site that is one list request; for a script site it is the
+// engine load and home call a search would do anyway. A site that does
+// not answer within the timeout measures nothing, and a failed open
+// records nothing — the same rule as a failed detail read.
+func measureSite(ctx context.Context, entry library.Entry, assets string) time.Duration {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	session, _, err := source.Open(ctx, entry.Site, assets)
+	if err != nil {
+		return 0
+	}
+	session.Close()
+	return time.Since(start)
+}
+
+type speedTestResult struct {
+	entry library.Entry
+	d     time.Duration
+}
+
+// startSourceSpeedTest re-measures every site on the sources page, one
+// measurement per site per press. Four workers bound the network work,
+// as the library scan does; the button stays disabled until the last
+// site answers or times out.
+func (a *app) startSourceSpeedTest() {
+	if a.speedTest.running || a.library.root == nil {
+		return
+	}
+	entries := a.speedTestEntries()
+	if len(entries) == 0 {
+		return
+	}
+	a.speedTest.running, a.speedTest.done, a.speedTest.total = true, 0, len(entries)
+	assets := strings.TrimSpace(a.browser.assets)
+	dispatch := a.dispatch
+	update := func(fn func()) {
+		guarded := func() {
+			if !a.closed {
+				fn()
+			}
+		}
+		if dispatch == nil {
+			guarded()
+		} else {
+			dispatch(guarded)
+		}
+	}
+	work := func() {
+		ctx := context.Background()
+		jobs := make(chan library.Entry)
+		results := make(chan speedTestResult)
+		var wg sync.WaitGroup
+		for range 4 {
+			wg.Go(func() {
+				for entry := range jobs {
+					results <- speedTestResult{entry: entry, d: measureSite(ctx, entry, assets)}
+				}
+			})
+		}
+		go func() {
+			for _, entry := range entries {
+				jobs <- entry
+			}
+			close(jobs)
+		}()
+		go func() {
+			wg.Wait()
+			close(results)
+		}()
+		for r := range results {
+			r := r
+			update(func() {
+				if r.d > 0 {
+					_ = a.latency.record(r.entry.Key(), r.d)
+				}
+				a.speedTest.done++
+				if a.speedTest.done >= a.speedTest.total {
+					a.speedTest.running = false
+				}
+			})
+		}
+	}
+	if dispatch == nil {
+		work()
+	} else {
+		go work()
+	}
 }

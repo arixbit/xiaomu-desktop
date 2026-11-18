@@ -150,6 +150,10 @@ func TestDoubanCardsSearchUserLibraryAndPlay(t *testing.T) {
 	if a.title == nil || a.title.detail == nil {
 		t.Fatalf("the title's only source did not open: %s; texts=%v", a.status, tt.Texts())
 	}
+	// The card's score carries into the detail header.
+	if !tt.HasText("豆瓣 8.6") {
+		t.Fatalf("detail header did not carry the card score: %v", tt.Texts())
+	}
 	opened := false
 	a.open = func(raw string) (*ui.VideoPlayer, error) {
 		response, err := http.Get(raw)
