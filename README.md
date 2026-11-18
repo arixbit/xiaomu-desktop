@@ -1,6 +1,6 @@
 # 小幕 Xiaomu
 
-一款 macOS 原生多源播放器。导入自己的 TVBox 配置、IPTV 列表，或直接打开视频链接。
+一款基于 MyGo 构建的 macOS 原生多源播放器。导入自己的 TVBox 配置、IPTV 列表，或直接打开视频链接。 [MyGo 项目](https://github.com/egoist/mygo)
 
 macOS 13+ · Apple Silicon / Intel · [下载最新版](https://github.com/arixbit/xiaomu-desktop/releases/latest)
 
@@ -81,6 +81,12 @@ v0.7.0 更新：
 上游 drpy2 引擎在运行时从你的配置地址加载。`assets://js/lib/` 依赖优先读取 `-assets` 指定的本地文件，否则从所选引擎所在目录加载同名依赖；加载失败会明确报错。仓库里的小型占位模块仅由离线测试显式使用，不再嵌入应用或作为运行时后备。上游库（drpy2 为 LGPL-3.0，cheerio、crypto-js、jsencrypt 等另有各自许可证）不随本仓库分发。
 
 FongMi class 目前覆盖基础文本/JSON 请求与常见分类、详情、播放方法。依赖 Android 宿主、二进制响应或额外加密函数的脚本会显示缺失能力；这些站点仍需单独适配。
+
+## 技术与致谢
+
+MyGo 是 Egoist 创建的 Go 桌面应用框架。小幕用它创建 macOS 原生窗口，用 `ui` 包和 Glass 插件构建界面，并通过 `ui.Video` 接入系统播放器 AVPlayer。小幕的应用包也由 MyGo 的构建工具生成。
+
+感谢 Egoist 和 MyGo 项目的贡献者。
 
 ## 环境
 
