@@ -291,24 +291,62 @@ func (a *app) playEpisode(line string, episode catalog.Episode) {
 
 // playEpisodeAt plays an episode of the title on show from a position.
 func (a *app) playEpisodeAt(line string, episode catalog.Episode, at time.Duration) {
+	a.loadEpisode(line, episode, at, false)
+}
+
+func (a *app) loadEpisode(line string, episode catalog.Episode, at time.Duration, refresh bool) {
 	t := a.title
 	if t == nil || t.session == nil {
 		return
 	}
 	session := t.session
+	videoID := string(t.item.Video.ID)
+	refresh = refresh && videoID != ""
+	label := "解析分集"
+	if refresh {
+		label = "重新获取播放地址"
+	}
 	a.playFailure = nil
 	a.playbackWait = playbackWait{}
 	a.beginSourceAttempt(t.item, line, episode.Name)
 	resolver := resolve.Resolver{Sniff: a.sniffPage, Parsers: entryParsers(t.item.Entry)}
-	a.run(jobPlay, "解析分集", func(ctx context.Context) (jobResult, error) {
-		play, err := resolvePlay(ctx, session, resolver, line, episode)
+	a.run(jobPlay, label, func(ctx context.Context) (jobResult, error) {
+		selected := episode
+		var refreshed []catalog.Source
+		var lineIndex int
+		if refresh {
+			detail, err := session.Detail(ctx, videoID)
+			if err != nil {
+				return jobResult{}, err
+			}
+			for i, candidate := range detail.Sources {
+				if candidate.Name != line {
+					continue
+				}
+				only := catalog.Detail{Sources: detail.Sources[i : i+1]}
+				if _, fresh, ok := matchEpisode(only, episode.Name, -1); ok {
+					selected, refreshed, lineIndex = fresh, detail.Sources, i
+					break
+				}
+			}
+			if refreshed == nil {
+				return jobResult{}, fmt.Errorf("这条线路已找不到对应的分集")
+			}
+		}
+		play, err := resolvePlay(ctx, session, resolver, line, selected)
 		if err != nil {
 			return jobResult{}, err
 		}
-		return jobResult{apply: func() { a.startEpisode(play, line, episode, at) }}, nil
+		return jobResult{apply: func() {
+			if refreshed != nil {
+				t.detail.Sources = refreshed
+				t.line, t.chunk = lineIndex, 0
+			}
+			a.startEpisode(play, line, selected, at)
+		}}, nil
 	}, func(err error) {
 		a.failSourceAttempt()
-		a.playFailure = &episodeFailure{line: line, episode: episode, at: at, err: fmt.Errorf("%s", jobError("解析分集", err))}
+		a.playFailure = &episodeFailure{line: line, episode: episode, at: at, err: fmt.Errorf("%s", jobError(label, err))}
 		a.status = ""
 		if a.player != nil {
 			a.player.Pause()

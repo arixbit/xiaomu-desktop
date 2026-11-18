@@ -3,10 +3,16 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
+	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/arixbit/xiaomu-desktop/internal/source"
 	"github.com/egoist/mygo/ui"
 )
@@ -100,6 +106,65 @@ func TestOpenFailureKeepsRecoveryTargetAndUnappliedResumePosition(t *testing.T) 
 	a.retryEpisode()
 	if a.playFailure != nil || a.resumeAt != 35*time.Second || a.player == nil {
 		t.Fatal("a successful retry did not restore the pending seek")
+	}
+}
+
+func TestEpisodeRetryRefreshesExpiredCMSURL(t *testing.T) {
+	var detailReads atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api":
+			if r.URL.Query().Get("ids") != "7" {
+				t.Errorf("requested wrong title: %s", r.URL.RawQuery)
+			}
+			if detailReads.Add(1) == 1 {
+				fmt.Fprint(w, `{"list":[{"vod_name":"示例片","vod_play_from":"线路","vod_play_url":"第15集$/expired.m3u8"}]}`)
+				return
+			}
+			fmt.Fprint(w, `{"list":[{"vod_name":"示例片","vod_play_from":"备用$$$线路","vod_play_url":"第15集$/other.m3u8$$$第16集$/wrong.m3u8#15$/fresh.m3u8"}]}`)
+		case "/fresh.m3u8":
+			fmt.Fprint(w, "#EXTM3U\n#EXTINF:4,\nsegment.ts\n#EXT-X-ENDLIST\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	item := library.Item{
+		Entry: library.Entry{Site: config.Site{Kind: config.KindJSON, API: upstream.URL + "/api"}},
+		Video: catalog.Video{ID: "7", Name: "示例片"},
+	}
+	session, detail, err := openItem(t.Context(), item, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &app{nav: []routeKind{routeHome, routeDetail}, title: &titlePage{name: "示例片", item: item, session: session, detail: &detail}}
+	defer a.close()
+	a.open = func(raw string) (*ui.VideoPlayer, error) {
+		resp, err := http.Get(raw)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, errors.New(resp.Status)
+		}
+		return ui.NewVideoPlayer(&timedVideo{})
+	}
+	at := 25 * time.Second
+	a.playEpisodeAt("线路", detail.Sources[0].Episodes[0], at)
+	tt := ui.NewTester(a.view, 1120, 760)
+	if a.playFailure == nil || !tt.HasText("无法打开: 404 Not Found") {
+		t.Fatalf("expected an expired playback address: %v", tt.Texts())
+	}
+	if err := tt.Click("重试"); err != nil {
+		t.Fatal(err)
+	}
+	if detailReads.Load() != 2 || a.playFailure != nil || a.player == nil {
+		t.Fatalf("retry did not open a refreshed address: detail reads=%d failure=%+v", detailReads.Load(), a.playFailure)
+	}
+	line, episode, ok := a.currentEpisode()
+	if !ok || line != 1 || a.title.detail.Sources[line].Episodes[episode].Name != "15" || a.playbackPosition() < at {
+		t.Fatalf("retry lost the current episode or progress: line=%d episode=%d position=%s", line, episode, a.playbackPosition())
 	}
 }
 

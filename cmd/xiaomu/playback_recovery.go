@@ -97,7 +97,8 @@ func (a *app) recoveryEpisode() (line, index int, episode catalog.Episode, at ti
 
 func (a *app) retryEpisode() {
 	if line, _, episode, at, ok := a.recoveryEpisode(); ok {
-		a.playEpisodeAt(a.title.detail.Sources[line].Name, episode, at)
+		// Some sites only return a fresh media URL in the title detail.
+		a.loadEpisode(a.title.detail.Sources[line].Name, episode, at, true)
 	}
 }
 

@@ -160,11 +160,13 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 func (a *app) playerState(c *ui.Context, p *ui.VideoPlayer) {
 	message := ""
 	switch {
-	case a.playFailure != nil && a.hasEpisodes() && !a.running(jobPlay):
+	case a.running(jobPlay):
+		message = a.status
+	case a.playFailure != nil && a.hasEpisodes():
 		a.playerFailure(c, a.playFailure.err)
 		return
 	case p.Err() != nil:
-		if a.hasEpisodes() && !a.running(jobPlay) {
+		if a.hasEpisodes() {
 			a.playerFailure(c, p.Err())
 			return
 		}
@@ -176,8 +178,6 @@ func (a *app) playerState(c *ui.Context, p *ui.VideoPlayer) {
 		}
 	case p.Buffering():
 		message = "正在缓冲…"
-	case a.running(jobPlay):
-		message = a.status
 	case a.status != "" && a.status != "正在播放":
 		message = a.status
 	}
