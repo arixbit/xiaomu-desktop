@@ -9,7 +9,16 @@ import (
 // Register keys outside the auto-hiding controls. Focused controls and dialogs
 // get first use of shortcuts; single-key commands also leave text editing alone.
 func (a *app) handleKeyboard(c *ui.Context) {
+	if a.player == nil && a.library.root != nil && c.Shortcut(ui.Cmd, ui.KeyK) && !c.ShortcutRepeated() {
+		a.searchFocused = true
+		return
+	}
 	if c.FocusTakesText() {
+		// Autocomplete consumes Escape while its suggestions are open.
+		// The next press leaves the field; only a later press goes back.
+		if ui.FocusedValue(c, &a.searchFocused) && c.Shortcut(0, ui.KeyEscape) && !c.ShortcutRepeated() {
+			a.searchFocused = false
+		}
 		return
 	}
 	if a.fullScreen && c.Shortcut(0, ui.KeyEscape) && !c.ShortcutRepeated() {

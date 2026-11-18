@@ -26,18 +26,19 @@ const (
 // the episode, never the media address, which expires: resuming asks the
 // site again.
 type historyEntry struct {
-	Name      string    `json:"name"`
-	Pic       string    `json:"pic,omitempty"`
-	ConfigURL string    `json:"config_url"`
-	EntryKey  string    `json:"entry_key"`
-	SiteKey   string    `json:"site_key"`
-	Origin    string    `json:"origin,omitempty"`
-	VideoID   string    `json:"video_id"`
-	Line      string    `json:"line"`
-	Episode   string    `json:"episode"`
-	Position  float64   `json:"position"` // seconds
-	Duration  float64   `json:"duration"`
-	Updated   time.Time `json:"updated"`
+	Name       string    `json:"name"`
+	Pic        string    `json:"pic,omitempty"`
+	ConfigURL  string    `json:"config_url"`
+	EntryKey   string    `json:"entry_key"`
+	SiteKey    string    `json:"site_key"`
+	Origin     string    `json:"origin,omitempty"`
+	VideoID    string    `json:"video_id"`
+	Line       string    `json:"line"`
+	Episode    string    `json:"episode"`
+	Position   float64   `json:"position"` // seconds
+	Duration   float64   `json:"duration"`
+	Updated    time.Time `json:"updated"`
+	HomeHidden bool      `json:"home_hidden,omitempty"`
 }
 
 func (e historyEntry) finished() bool {
@@ -77,6 +78,8 @@ func (h *historyStore) note(e historyEntry) {
 	for _, old := range h.entries {
 		if titleKey(old.Name) != key {
 			kept = append(kept, old)
+		} else {
+			e.HomeHidden = old.HomeHidden
 		}
 	}
 	h.entries = append([]historyEntry{e}, kept...)
@@ -234,45 +237,92 @@ func findSite(doc *config.Config, entryKey, siteKey string) (library.Entry, bool
 // resumePoint is where to continue: the recorded episode at its position,
 // or the one after it when that episode was watched to the end.
 func resumePoint(detail catalog.Detail, e historyEntry) (line int, episode catalog.Episode, at time.Duration, ok bool) {
-	for i, source := range detail.Sources {
-		if source.Name != e.Line {
-			continue
-		}
-		for j, candidate := range source.Episodes {
-			if candidate.Name != e.Episode {
-				continue
-			}
-			if !e.finished() {
-				return i, candidate, time.Duration(e.Position * float64(time.Second)), true
-			}
-			if j+1 < len(source.Episodes) {
-				return i, source.Episodes[j+1], 0, true
-			}
-			return i, candidate, 0, true
-		}
-	}
-	// The site renamed its lines or episodes: fall back to the same number.
-	line, episode, ok = matchEpisode(detail, e.Episode, -1)
-	if !ok && len(detail.Sources) > 0 && len(detail.Sources[0].Episodes) > 0 {
-		line, episode, ok = 0, detail.Sources[0].Episodes[0], true
-	}
-	if e.finished() {
-		return line, episode, 0, ok
-	}
-	return line, episode, time.Duration(e.Position * float64(time.Second)), ok
+	return followingResumePoint(detail, e, true)
 }
 
 // resume plays an entry from where it stopped, straight into the player.
 func (a *app) resume(e historyEntry) {
-	if !a.historyAvailable(e) {
+	preferred := a.sourceMemory.entries[titleKey(e.Name)].Preferred
+	originalAvailable := a.historyAvailable(e)
+	preferSaved := preferred.VideoID != "" && a.configAvailable(preferred.ConfigURL)
+	if preferred.ConfigURL == e.ConfigURL && preferred.VideoID == e.VideoID && preferred.Line == e.Line && (preferred.EntryKey == e.EntryKey || preferred.SiteKey == e.SiteKey) {
+		preferSaved = false
+	}
+	if !originalAvailable && (!preferSaved || e.finished()) {
 		a.status = "这条记录的片源已移除，重新添加后可继续播放"
 		return
 	}
 	cached := a.library.cached[e.ConfigURL]
+	preferredDoc := a.library.cached[preferred.ConfigURL]
+	if root := a.library.root; root != nil {
+		if root.URL == e.ConfigURL {
+			cached = root
+		}
+		if root.URL == preferred.ConfigURL {
+			preferredDoc = root
+		}
+	}
 	assets := strings.TrimSpace(a.browser.assets)
 	sniff := a.sniffPage
 	a.cancelJob(jobTitle)
 	a.run(jobPlay, "继续播放", func(ctx context.Context) (jobResult, error) {
+		// Match the saved episode by name or number, never by another site's
+		// list position. A missing episode or failed resolution falls back.
+		tryPreferred := func(name string, at time.Duration) (jobResult, bool) {
+			if !preferSaved || name == "" {
+				return jobResult{}, false
+			}
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			doc := preferredDoc
+			if doc == nil {
+				var err error
+				doc, err = config.Read(ctx, preferred.ConfigURL, nil)
+				if err != nil {
+					return jobResult{}, false
+				}
+			}
+			entry, found := findSite(doc, preferred.EntryKey, preferred.SiteKey)
+			if !found {
+				return jobResult{}, false
+			}
+			item := library.Item{Entry: entry, Video: catalog.Video{ID: catalog.ID(preferred.VideoID), Name: e.Name, Pic: e.Pic}}
+			session, detail, err := openItem(ctx, item, assets)
+			if err != nil {
+				return jobResult{}, false
+			}
+			if titleKey(detail.Name) != titleKey(e.Name) {
+				session.Close()
+				return jobResult{}, false
+			}
+			line, episode, ok := rememberedEpisode(detail, preferred.Line, name)
+			if !ok {
+				session.Close()
+				return jobResult{}, false
+			}
+			play, err := resolvePlay(ctx, session, resolve.Resolver{Sniff: sniff, Parsers: doc.Parsers}, detail.Sources[line].Name, episode)
+			if err != nil {
+				session.Close()
+				return jobResult{}, false
+			}
+			return jobResult{discard: session.Close, apply: func() {
+				a.clearTitle()
+				a.title = &titlePage{name: e.Name, pic: e.Pic, seeds: []library.Item{item}, failed: map[string]string{},
+					item: item, session: session, detail: &detail, line: line}
+				a.startEpisode(play, detail.Sources[line].Name, episode, at)
+				if a.player == nil && a.route() != routeDetail {
+					a.clearTitle()
+				}
+			}}, true
+		}
+		if !e.finished() {
+			if result, ok := tryPreferred(e.Episode, time.Duration(e.Position*float64(time.Second))); ok {
+				return result, nil
+			}
+		}
+		if !originalAvailable {
+			return jobResult{}, fmt.Errorf("上次成功的来源没有对应分集，原播放记录的片源已移除")
+		}
 		doc := cached
 		if doc == nil {
 			var err error
@@ -292,7 +342,13 @@ func (a *app) resume(e historyEntry) {
 		line, episode, at, ok := resumePoint(detail, e)
 		if !ok {
 			session.Close()
-			return jobResult{}, fmt.Errorf("这个站点已经没有可播放的分集")
+			return jobResult{}, fmt.Errorf("找不到原分集或暂时没有下一集，请打开详情选集")
+		}
+		if e.finished() {
+			if result, ok := tryPreferred(episode.Name, at); ok {
+				session.Close()
+				return result, nil
+			}
 		}
 		play, err := resolvePlay(ctx, session, resolve.Resolver{Sniff: sniff, Parsers: doc.Parsers}, detail.Sources[line].Name, episode)
 		if err != nil {

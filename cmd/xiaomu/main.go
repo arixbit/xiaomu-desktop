@@ -37,7 +37,12 @@ type app struct {
 	history         historyStore
 	favorites       favoriteStore
 	searchHistory   searchHistoryStore
+	searchFocused   bool
 	latency         latencyStore
+	sourceMemory    sourceMemoryStore
+	sourceAttempt   sourcePlaybackAttempt
+	seriesSkips     seriesSkipStore
+	skipPlayback    seriesSkipPlayback
 	focusSearchGrid bool
 	preferences     playerPreferences
 	preferencesPath string
@@ -164,6 +169,8 @@ func main() {
 		a.restoreSearchHistory()
 		a.restoreLatency()
 		a.restorePreferences()
+		a.restoreSeriesSkips()
+		a.restoreSourceMemory()
 		a.setFullScreen(win.IsFullScreen())
 		win.OnEnterFullScreen(func() { win.Update(func() { a.setFullScreen(true) }) })
 		win.OnLeaveFullScreen(func() { win.Update(func() { a.setFullScreen(false) }) })

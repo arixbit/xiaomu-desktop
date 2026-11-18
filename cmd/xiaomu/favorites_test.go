@@ -43,13 +43,13 @@ func TestFavoritesUIRestartAndSourceChanges(t *testing.T) {
 	a.library = libraryBrowser{root: doc, cached: map[string]*config.Config{}}
 	a.openTitle("示例片", "", []library.Item{{Entry: library.Entry{Config: doc, Site: doc.Sites[0]}, Video: catalog.Video{ID: "7", Name: "示例片"}}})
 	tt := ui.NewTester(a.view, 1120, 760)
-	if err := tt.Click("加入想看"); err != nil {
+	if err := tt.Click("加入追剧"); err != nil {
 		t.Fatal(err)
 	}
-	if !tt.HasText("已收藏 · 取消") || len(a.history.entries) != 0 {
+	if !tt.HasText("已追剧 · 取消") || len(a.history.entries) != 0 {
 		t.Fatal("saving an unwatched title should not add history")
 	}
-	if err := tt.Click("收藏"); err != nil {
+	if err := tt.Click("追剧"); err != nil {
 		t.Fatal(err)
 	}
 	if !tt.HasText("示例片") || a.route() != routeFavorites {
@@ -67,13 +67,13 @@ func TestFavoritesUIRestartAndSourceChanges(t *testing.T) {
 	defer b.close()
 	b.library = libraryBrowser{root: doc, cached: map[string]*config.Config{}}
 	bt := ui.NewTester(b.view, 640, 420)
-	if err := bt.Click("打开收藏 示例片"); err != nil {
+	if err := bt.Click("追剧详情 示例片"); err != nil {
 		t.Fatal(err)
 	}
 	if b.title == nil || b.title.detail == nil || b.route() != routeDetail || searches.Load() != 0 {
 		t.Fatal("saved site was not reopened directly")
 	}
-	if !bt.HasText("已收藏 · 取消") {
+	if !bt.HasText("已追剧 · 取消") {
 		t.Fatal("restart lost favorite membership")
 	}
 	// If the saved video disappeared, find it in the current library.
@@ -93,10 +93,10 @@ func TestFavoritesUIRestartAndSourceChanges(t *testing.T) {
 	}
 	b.switchTab(routeFavorites)
 	bt.Frame()
-	if err := bt.Click("移除收藏 示例片"); err != nil {
+	if err := bt.Click("移除追剧 示例片"); err != nil {
 		t.Fatal(err)
 	}
-	if !bt.HasText("还没有收藏") {
+	if !bt.HasText("还没有追剧") {
 		t.Fatal("favorite removal did not reach the empty state")
 	}
 	entries, err = readFavorites(path)
@@ -122,24 +122,25 @@ func TestFavoritesStripOnHomeOpensSavedTitle(t *testing.T) {
 	a.library = libraryBrowser{root: doc, cached: map[string]*config.Config{}}
 	a.openTitle("示例片", "", []library.Item{{Entry: library.Entry{Config: doc, Site: doc.Sites[0]}, Video: catalog.Video{ID: "7", Name: "示例片"}}})
 	tt := ui.NewTester(a.view, 1120, 760)
-	if err := tt.Click("加入想看"); err != nil {
+	if err := tt.Click("加入追剧"); err != nil {
 		t.Fatal(err)
 	}
+	a.open = func(string) (*ui.VideoPlayer, error) { return ui.NewVideoPlayer(&timedVideo{}) }
 	a.switchTab(routeHome)
 	tt.Frame()
-	if !tt.HasText("我的收藏") || !tt.HasText("示例片") {
+	if !tt.HasText("我的追剧") || !tt.HasText("示例片") {
 		t.Fatalf("favorites strip missing on home: %v", tt.Texts())
 	}
-	if err := tt.Click("打开收藏 示例片"); err != nil {
+	if err := tt.Click("打开追剧 示例片"); err != nil {
 		t.Fatal(err)
 	}
-	if a.route() != routeDetail || a.title == nil || a.title.detail == nil {
-		t.Fatalf("strip did not open the saved title: route=%v title=%+v", a.route(), a.title)
+	if a.player == nil || a.title == nil || a.playingEpisode != "第1集" {
+		t.Fatalf("strip did not play the saved title: episode=%s title=%+v", a.playingEpisode, a.title)
 	}
 	if err := tt.Click("返回"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.Click("全部收藏"); err != nil {
+	if err := tt.Click("全部追剧"); err != nil {
 		t.Fatal(err)
 	}
 	if a.route() != routeFavorites {
@@ -152,7 +153,7 @@ func TestFavoritesStripHiddenWithoutFavorites(t *testing.T) {
 	defer a.close()
 	a.library = libraryBrowser{root: &config.Config{URL: "https://example.com/config"}}
 	tt := ui.NewTester(a.view, 1120, 760)
-	if tt.HasText("我的收藏") {
+	if tt.HasText("我的追剧") {
 		t.Fatalf("empty favorites showed a strip: %v", tt.Texts())
 	}
 }

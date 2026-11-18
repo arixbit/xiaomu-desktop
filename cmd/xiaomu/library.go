@@ -63,6 +63,7 @@ func (a *app) stopScan(s *libraryScan) {
 
 // resetLibrary replaces the imported configuration; nil removes it.
 func (a *app) resetLibrary(doc *config.Config) {
+	a.cancelFollowingRefresh()
 	l := &a.library
 	a.stopScan(&l.feed)
 	a.stopScan(&l.search)
@@ -75,6 +76,7 @@ func (a *app) resetLibrary(doc *config.Config) {
 	if doc != nil {
 		a.startScan(&l.feed, "", false)
 		a.loadDiscoveryTab(false)
+		a.refreshFollowing()
 	}
 }
 

@@ -50,7 +50,7 @@ func TestPlayerScreenReturnsToLibrary(t *testing.T) {
 	if err := tt.Click("线路与选集"); err != nil {
 		t.Fatal(err)
 	}
-	if !tt.HasText("线路与选集") || !tt.HasText("2") || tt.HasText("第2集") || !tt.HasText("播完自动下一集") {
+	if !tt.HasText("跳过") || !tt.HasText("2") || tt.HasText("第2集") || !tt.HasText("播完自动下一集") {
 		t.Fatalf("player controls missing: %v", tt.Texts())
 	}
 	if err := tt.Click("返回"); err != nil {

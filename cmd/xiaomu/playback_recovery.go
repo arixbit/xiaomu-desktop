@@ -57,6 +57,7 @@ func (a *app) checkPlayback(c *ui.Context, p *ui.VideoPlayer) {
 	if err == nil {
 		err = a.playbackWait.check(c.Now(), p.Ready(), p.Buffering(), p.Playing(), p.Position())
 	}
+	a.observeSourcePlayback(c.Now(), p, err)
 	if err != nil {
 		if line, episode, ok := a.currentEpisode(); ok {
 			source := a.title.detail.Sources[line]

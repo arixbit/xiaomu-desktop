@@ -298,13 +298,23 @@ func (a *app) playerPanel(c *ui.Context) ui.Element {
 			return
 		}
 		candidates := a.candidates()
+		tabs := []string{"选集"}
 		if len(candidates) > 1 {
-			ui.Segmented(c, &a.panelTab, "选集", "换源").Label("面板内容")
-		} else {
-			a.panelTab = 0
-			ui.Text(c, "线路与选集").FontSize(18).Bold()
+			tabs = append(tabs, "换源")
 		}
-		if a.panelTab == 1 {
+		skipTab := len(tabs)
+		tabs = append(tabs, "跳过")
+		if a.panelTab < 0 || a.panelTab >= len(tabs) {
+			a.panelTab = 0
+		}
+		ui.Segmented(c, &a.panelTab, tabs...).Label("面板内容")
+		if a.panelTab == skipTab {
+			ui.Scroll(c).FillWidth().Grow(1).Gap(10).Children(func() {
+				a.panelSeriesSkips(c)
+			})
+			return
+		}
+		if a.panelTab == 1 && len(candidates) > 1 {
 			a.panelSources(c, candidates)
 			return
 		}
@@ -331,24 +341,24 @@ func (a *app) panelEpisodes(c *ui.Context) {
 			a.panelSource = currentSource
 		}
 	}
-	ui.Text(c, "线路").Bold()
-	for i, source := range detail.Sources {
-		name := source.Name
-		if name == "" {
-			name = fmt.Sprintf("线路 %d", i+1)
-		}
-		if panelButton(c, name, i == a.panelSource).Key(fmt.Sprintf("player-source-%d", i)).Clicked() {
-			if _, index, requested, at, ok := a.recoveryEpisode(); ok {
-				if _, candidate, found := matchEpisode(catalog.Detail{Sources: detail.Sources[i : i+1]}, requested.Name, index); found {
-					a.playEpisodeAt(source.Name, candidate, at)
-				}
+	ui.Scroll(c).FillWidth().Grow(1).Gap(8).Children(func() {
+		ui.Text(c, "线路").Bold()
+		for i, source := range detail.Sources {
+			name := source.Name
+			if name == "" {
+				name = fmt.Sprintf("线路 %d", i+1)
 			}
-			a.panelSource = i
+			if panelButton(c, name, i == a.panelSource).Key(fmt.Sprintf("player-source-%d", i)).Clicked() {
+				if _, index, requested, at, ok := a.recoveryEpisode(); ok {
+					if _, candidate, found := matchEpisode(catalog.Detail{Sources: detail.Sources[i : i+1]}, requested.Name, index); found {
+						a.playEpisodeAt(source.Name, candidate, at)
+					}
+				}
+				a.panelSource = i
+			}
 		}
-	}
-	ui.Text(c, "选集").Bold()
-	selected := detail.Sources[a.panelSource]
-	ui.Scroll(c).FillWidth().Grow(1).Children(func() {
+		ui.Text(c, "选集").Bold()
+		selected := detail.Sources[a.panelSource]
 		ui.Row(c).FillWidth().Wrap().Gap(6).Children(func() {
 			for i, episode := range selected.Episodes {
 				active := selected.Name == a.playingSource && episode.Name == a.playingEpisode
@@ -429,9 +439,10 @@ func (a *app) hasEpisodes() bool {
 // trackPlayback seeks to where a resumed episode stopped, then keeps the
 // position for the play history and for changing line or source.
 func (a *app) trackPlayback(c *ui.Context, p *ui.VideoPlayer) {
-	if !p.Ready() || p.Err() != nil || a.playFailure != nil {
+	if !p.Ready() || p.Err() != nil || a.playFailure != nil || a.autoNextPending {
 		return
 	}
+	a.applyOpeningSkip(p)
 	if a.resumeAt > 0 {
 		if !a.resumeIssued {
 			if duration := p.Duration(); duration > 0 {
@@ -453,7 +464,10 @@ func (a *app) trackPlayback(c *ui.Context, p *ui.VideoPlayer) {
 }
 
 func (a *app) advanceEpisode(p *ui.VideoPlayer) {
-	if !a.hasEpisodes() || !a.autoNext || !p.Ended() || a.autoNextPending || a.running(jobPlay) || a.playFailure != nil {
+	if !a.hasEpisodes() || !a.autoNext || a.autoNextPending || a.running(jobPlay) || a.playFailure != nil || p.Err() != nil {
+		return
+	}
+	if !p.Ended() && !a.skipEndingReady(p) {
 		return
 	}
 	source, episode, ok := a.currentEpisode()
@@ -464,6 +478,7 @@ func (a *app) advanceEpisode(p *ui.VideoPlayer) {
 	if episode+1 >= len(episodes) {
 		return
 	}
+	a.recordEpisodeCompletion(p)
 	a.autoNextPending = true
 	a.playEpisode(a.title.detail.Sources[source].Name, episodes[episode+1])
 }

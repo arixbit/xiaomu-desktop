@@ -28,9 +28,13 @@ var tabs = []struct {
 	{routeHome, "首页"},
 	{routeLive, "直播"},
 	{routeHistory, "播放历史"},
-	{routeFavorites, "收藏"},
+	{routeFavorites, "追剧"},
 	{routeSources, "片源"},
 }
+
+const sidebarWidth = 204
+
+var librarySearchIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M15 15L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`))
 
 // Liquid Glass floats over the content: panes for the sidebar and panels,
 // clear capsules for controls, and one tint for the primary action.
@@ -115,6 +119,7 @@ func (a *app) pop() {
 
 func (a *app) switchTab(kind routeKind) {
 	a.cancelJob(jobTitle)
+	a.cancelJob(jobPlay)
 	for len(a.nav) > 1 {
 		a.pop()
 	}
@@ -203,7 +208,7 @@ func (a *app) sidebar(c *ui.Context) {
 	// the pressed element carries no other interactive flags, so the
 	// tabs and buttons on it keep working and only its empty areas
 	// drag; a double click on it maximizes the window.
-	side := ui.Column(c).Width(204).FillHeight().Radius(22).Padding(top, 10, 10, 10).Gap(4).
+	side := ui.Column(c).Width(sidebarWidth).FillHeight().Radius(22).Padding(top, 10, 10, 10).Gap(4).
 		Material(glassPane)
 	if dragStripHeight(c) > 0 {
 		side.DragWindow().Label("拖动窗口（侧边栏）")
@@ -226,29 +231,52 @@ func (a *app) sidebar(c *ui.Context) {
 }
 
 func (a *app) toolbar(c *ui.Context) {
-	// The toolbar itself is a drag handle, like the sidebar: the back
-	// button and the search field keep working, and only the empty
-	// parts of the row — around the page title — drag the window.
-	bar := ui.Row(c).FillWidth().Height(44).Gap(10).AlignItems(ui.Center)
-	if dragStripHeight(c) > 0 {
-		bar.DragWindow().Label("拖动窗口")
+	width, _ := c.Size()
+	// Match shell's outer padding, sidebar, gap and content padding.
+	contentWidth := max(0, width-20-sidebarWidth-10-16)
+	// Equal space on either side keeps search centered as back appears.
+	// Each side leaves room for back, the page title and a 12px gap.
+	searchWidth := min(float32(560), contentWidth-2*192)
+	compact := searchWidth < 280
+	height, searchTop, searchLeft := float32(44), float32(2), (contentWidth-searchWidth)/2
+	navWidth := contentWidth
+	if a.library.root != nil {
+		if compact {
+			height, searchTop, searchLeft, searchWidth = 92, 52, 0, contentWidth
+		} else {
+			navWidth = searchLeft - 12
+		}
 	}
-	bar.Children(func() {
-		if glassButton(c, "返回").Disabled(len(a.nav) <= 1).Clicked() {
-			a.pop()
+	ui.Box(c).Key("toolbar").FillWidth().Height(height).Children(func() {
+		bar := ui.Row(c).FillWidth().Height(44).AlignItems(ui.Center)
+		if dragStripHeight(c) > 0 {
+			bar.DragWindow().Label("拖动窗口")
 		}
-		ui.Text(c, a.pageTitle()).FontSize(22).Bold().SingleLine().Grow(1)
-		if a.library.root == nil {
-			return
+		bar.Children(func() {
+			ui.Row(c).Width(navWidth).MinWidth(0).Gap(10).AlignItems(ui.Center).Children(func() {
+				if len(a.nav) > 1 && glassButton(c, "返回").Clicked() {
+					a.pop()
+				}
+				ui.Text(c, a.pageTitle()).FontSize(22).Bold().SingleLine().Grow(1).MinWidth(0)
+			})
+		})
+		if a.library.root != nil {
+			// Keep the same parent at both sizes so editing and the popup
+			// survive resizing. Input sits above the draggable toolbar.
+			a.librarySearch(c).Absolute().Top(searchTop).Left(searchLeft).Width(searchWidth)
 		}
-		// Autocomplete suggests the viewer's recent searches and the Douban
-		// hot titles already cached for the home page, while Enter still
-		// searches exactly what was typed; Down or a click takes a
-		// suggestion, and Enter after that searches it.
+	})
+}
+
+func (a *app) librarySearch(c *ui.Context) ui.Element {
+	return ui.Box(c).Key("library-search").Height(40).Children(func() {
 		if ui.Autocomplete(c, &a.browser.query, a.searchSuggestions()).Label("片名").Placeholder("搜索整个片库").
-			Width(300).Radius(20).Material(glassControl).Submitted() {
+			Fill().Padding(0, 58, 0, 40).FontSize(16).Radius(20).Material(glassControl).
+			FocusBind(&a.searchFocused, true).Submitted() {
 			a.searchLibrary()
 		}
+		ui.Icon(c, librarySearchIcon).Size(18, 18).Absolute().Left(14).Top(11).TextColor(textMuted).PassThrough()
+		ui.Text(c, "⌘K").FontSize(12).TextColor(textMuted).Absolute().Right(14).Top(11).PassThrough()
 	})
 }
 
