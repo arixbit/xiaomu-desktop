@@ -37,9 +37,11 @@ go run ./cmd/xiaomu-probe -config '<配置URL>' -line '<线路名>' -n 3 -assets
 
 `csp_` jar 爬虫是 Dex，Mac 上不支持。
 
-## 进度与已知问题（2026-11-11，用户 Mac 实测）
+## 进度与已知问题
 
-窗口能启动。`mygo.json` 的 `main` 要写成 `./cmd/xiaomu`；不带 `./` 会被当成标准库路径（用户在本地改，助手不要抢着改这个文件）。`-line` 必须用带 emoji 的全名，应支持去掉 emoji 或模糊匹配。部分线路的 `drpy2.min.js` 会 `import` 远程依赖（如 `https://down.nigx.cn/qu.ax/*.js`）；某些网络下 Cloudflare 403 返回 HTML，引擎报 `SyntaxError: '<'`。要查代理和 UA，并对远程模块响应做内容校验，给出清楚报错。AVPlayer 实际播放和 HEVC 尚未验证。
+2026-11-11 用户在 Mac 上确认窗口能启动。`mygo.json` 的 `main` 要写成 `./cmd/xiaomu`。省略 `./` 会被当成标准库路径（用户在本地改，助手不要抢着改这个文件）。当时部分线路导入远程依赖时遇到 Cloudflare 403 并收到 HTML，导致引擎报 `SyntaxError: '<'`。探针的 `-line` 目前按包含 emoji 的完整名称匹配，省略 emoji 或模糊匹配仍待支持。
+
+v0.7.0 在 Apple Silicon Mac 上用本地生成的 H.264 和 HEVC 视频验证了 AVPlayer 连续解码与续播。Intel 实机、用户实际片源和音频听感仍需单独验证。 [发布验证记录](docs/releases/v0.7.0.md#验证)
 
 ## 工作规矩
 

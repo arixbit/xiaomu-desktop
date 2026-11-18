@@ -12,7 +12,7 @@
 
 ## 构建
 
-更新 `mygo.json` 的版本、`CHANGELOG.md` 对应 `## 版本号` 的说明、README 下载版本和许可证声明中的版本；补充 `docs/releases/` 中的版本说明。运行项目测试，再使用：
+更新 `mygo.json` 与 `resources/THIRD_PARTY_NOTICES.txt` 中的应用版本。在 `CHANGELOG.md` 增加对应版本的更新记录，并补充 `docs/releases/` 中的发布说明。README 下载入口指向 GitHub 的最新正式 Release。按以下步骤测试和构建。
 
 ```sh
 go test ./...
