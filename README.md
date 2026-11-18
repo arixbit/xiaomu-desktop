@@ -1,27 +1,45 @@
-# 小幕
+# 小幕 Xiaomu
 
-小幕：一个入口，聚合你的所有片源。简洁好用的桌面影视播放器。
+一款 macOS 原生多源播放器。导入自己的 TVBox 配置、IPTV 列表，或直接打开视频链接。
 
-macOS 原生影视聚合播放器，支持你自备的 TVBox 配置、CMS 站点、IPTV 列表和视频直链。程序不内置片源、不内置配置、也不附带任何片源地址。播什么，由你在运行时提供的配置或直链决定。
+macOS 13+ · Apple Silicon / Intel · [下载最新版](https://github.com/arixbit/xiaomu-desktop/releases/latest)
 
-<!-- 截图位（待 YiYi 提供真实截图再填，不虚构）：首页一张、播放页一张，建议放 docs/screenshots/home.png、docs/screenshots/player.png -->
-<!-- ![首页](docs/screenshots/home.png) -->
-<!-- ![播放页](docs/screenshots/player.png) -->
+- **跨站搜索**　按 `⌘K` 输入片名，同名影片的多个来源集中显示。
+- **选集播放**　在详情页选线路和分集，播放中也能切换来源。
+- **继续观看**　回到首页，从上次的分集和进度接着看，也能查看追剧更新。
+
+**快速上手**　在首页粘贴自己的配置地址并导入 → 搜索片名 → 打开影片选集播放。
+
+## 界面预览
+
+<p>
+  <a href="docs/screenshots/home.webp?raw=true"><img src="docs/screenshots/home.webp" alt="首页，展示继续观看、追剧和热播榜单" width="48%"></a>
+  <a href="docs/screenshots/player.webp?raw=true"><img src="docs/screenshots/player.webp" alt="播放器，右侧显示线路和选集" width="48%"></a>
+</p>
+
+点击截图查看原尺寸。截图展示了导入配置后的界面，播放内容来自用户自备的片源。
+
+<details>
+<summary>更多界面截图（4 张）</summary>
+
+<p>
+  <a href="docs/screenshots/search.webp?raw=true"><img src="docs/screenshots/search.webp" alt="跨站搜索结果，影片卡片显示来源数量" width="48%"></a>
+  <a href="docs/screenshots/detail.webp?raw=true"><img src="docs/screenshots/detail.webp" alt="影片详情页，展开来源、线路和分集" width="48%"></a>
+</p>
+<p>
+  <a href="docs/screenshots/player-wide.webp?raw=true"><img src="docs/screenshots/player-wide.webp" alt="收起选集面板后的播放界面" width="48%"></a>
+  <a href="docs/screenshots/history.webp?raw=true"><img src="docs/screenshots/history.webp" alt="本机播放历史和续播进度" width="48%"></a>
+</p>
+
+</details>
 
 ## 下载与安装
 
-从 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest) 下载最新版的 `.dmg`（也有 ZIP 可选）。要求 macOS 13 及以上；Universal 安装包同时包含 Apple Silicon 和 Intel 版本，无需安装 Go。安装包附有 `SHA256SUMS` 校验文件。
+最新版提供 `.dmg` 和 ZIP 两种 Universal 安装包，可直接在 macOS 13 及以上运行。安装包附有 `SHA256SUMS` 校验文件。 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest)
 
 1. 打开 `.dmg`，将 `Xiaomu.app` 拖到“应用程序”。也可使用 ZIP，解压后移动 App。
 2. 本版使用本地签名，尚无 Developer ID 签名及 Apple 公证。首次打开如被系统拦截，请在确认下载来源后，到“系统设置 → 隐私与安全性”选择“仍要打开”。也可以在终端执行 `xattr -d com.apple.quarantine /Applications/Xiaomu.app` 去掉隔离标记，之后双击即可打开；这会跳过 Gatekeeper 的首次检查，只在你信任下载来源时使用。
-3. 打开小幕，按下面“快速上手”走一遍就行。
-
-## 快速上手
-
-1. 在首页“配置地址”粘贴自己的配置 URL，点击“导入”。以后可在侧边栏“片源”页更换配置。
-2. 首页默认显示豆瓣热播电影，可切换热播剧集；“最近更新”会自动汇集各条线路的推荐。
-3. 点豆瓣影片海报即可全库搜索，或在顶部搜索框输入片名后按回车，无需先选线路、站点或分类；同名影片合并显示，进详情页选来源和分集播放。
-4. 看过的点播记在“播放历史”，点“继续播放”从上次的分集和进度接着看。想看直播，进侧边栏“直播”导入自己的 M3U、TXT 或含 `lives` 的 TVBox 配置地址。
+3. 打开小幕，在首页导入自己的配置。之后可以在侧边栏“片源”页更换配置，或在“直播”页导入自己的频道列表。
 
 ## 免责声明
 
