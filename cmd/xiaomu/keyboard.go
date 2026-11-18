@@ -40,6 +40,7 @@ func (a *app) handleKeyboard(c *ui.Context) {
 	if c.Shortcut(0, ui.KeySpace) {
 		if !c.ShortcutRepeated() {
 			togglePlayback(p)
+			a.syncNowPlayingState()
 		}
 		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 	}
@@ -56,6 +57,7 @@ func (a *app) handleKeyboard(c *ui.Context) {
 		return
 	}
 	p.Seek(min(max(p.Position()+step, 0), p.Duration()))
+	a.syncNowPlayingState()
 	a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 }
 

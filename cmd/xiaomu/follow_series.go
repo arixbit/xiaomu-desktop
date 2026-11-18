@@ -221,6 +221,10 @@ func (a *app) applyFollowingRefresh(old favoriteEntry, item library.Item, detail
 				a.favorites.refreshErrors = map[string]string{}
 			}
 			a.favorites.refreshErrors[titleKey(e.Name)] = "追剧更新保存失败"
+		} else {
+			// Only a saved refresh with more episodes than the last
+			// known count notifies; the first check has no baseline.
+			a.notifyFollow(old, count, latest)
 		}
 		return
 	}
