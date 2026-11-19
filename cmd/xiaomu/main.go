@@ -72,7 +72,7 @@ type app struct {
 
 	playingLive   bool
 	playingDirect bool
-	// playingFile is set for a local file opened from Finder; playingName
+	// playingFile is set for a local file opened from the file manager; playingName
 	// is that file's name, shown in the header and Now Playing.
 	playingFile    bool
 	playingName    string
