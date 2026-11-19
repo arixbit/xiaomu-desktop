@@ -62,7 +62,17 @@ func (a *app) playerScreen(c *ui.Context) {
 	}
 	a.trackPlayback(c, p)
 	a.checkPlayback(c, p)
-	a.advanceEpisode(p)
+	a.advanceEpisode(p, c.Now())
+	if !a.episodeEnd.since.IsZero() {
+		c.After(episodeEndTolerance)
+	}
+	// Advancing can synchronously replace (and close) the previous player.
+	// Controls must never read the old native engine after that transition.
+	p = a.player
+	if p == nil {
+		a.shell(c)
+		return
+	}
 	width, _ := c.Size()
 	compact := width < 900
 	overlayPanel := compact || a.fullScreen
@@ -470,21 +480,26 @@ func (a *app) trackPlayback(c *ui.Context, p *ui.VideoPlayer) {
 	a.recordHistory(p, c.Now())
 }
 
-func (a *app) advanceEpisode(p *ui.VideoPlayer) {
+func (a *app) advanceEpisode(p *ui.VideoPlayer, now time.Time) {
 	if !a.hasEpisodes() || !a.autoNext || a.autoNextPending || a.running(jobPlay) || a.playFailure != nil || p.Err() != nil {
-		return
-	}
-	if !p.Ended() && !a.skipEndingReady(p) {
+		a.episodeEnd = playbackEnd{}
 		return
 	}
 	source, episode, ok := a.currentEpisode()
 	if !ok {
+		a.episodeEnd = playbackEnd{}
 		return
 	}
 	episodes := a.title.detail.Sources[source].Episodes
 	if episode+1 >= len(episodes) {
+		a.episodeEnd = playbackEnd{}
 		return
 	}
+	ended := a.episodeEnd.check(now, p.Ready() && a.resumeAt == 0, p.Buffering(), p.Playing(), p.Position(), p.Duration())
+	if !p.Ended() && !a.skipEndingReady(p) && !ended {
+		return
+	}
+	a.episodeEnd = playbackEnd{}
 	a.recordEpisodeCompletion(p)
 	a.autoNextPending = true
 	a.playEpisode(a.title.detail.Sources[source].Name, episodes[episode+1])

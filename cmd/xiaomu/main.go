@@ -96,6 +96,7 @@ type app struct {
 	playerFocus     ui.Handle
 	autoNext        bool
 	autoNextPending bool
+	episodeEnd      playbackEnd
 }
 
 func (a *app) view(c *ui.Context) {
@@ -137,6 +138,7 @@ func (a *app) adoptPlayer(p *ui.VideoPlayer) {
 	a.panelOpen, a.panelTouched, a.panelSource, a.panelTab = !a.fullScreen, false, -1, 0
 	a.playerOverlay = playerOverlayState{}
 	a.autoNextPending = false
+	a.episodeEnd = playbackEnd{}
 	a.playingFile = false
 	a.playingName = ""
 	a.playingSource, a.playingEpisode = "", ""
