@@ -189,3 +189,13 @@ Copyright (c) 2026 arixbit。除另有声明的第三方材料外，小幕采用
 分享时须保留作者署名、[本项目地址](https://github.com/arixbit/xiaomu-desktop)及许可证信息，并标明所作修改；仅限非商业性使用，改编后分享须遵循相同许可证。完整条款见 [LICENSE](LICENSE) 和 [官方许可文本](https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode.zh-hans)。
 
 第三方依赖与单独标明许可证的材料继续遵循各自许可证。本次变更不撤销此前已按 MIT 许可证授予的权利。
+
+## Star History
+
+<a href="https://star-history.com/#arixbit/xiaomu-desktop&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=arixbit/xiaomu-desktop&amp;type=Date&amp;theme=dark">
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=arixbit/xiaomu-desktop&amp;type=Date">
+    <img alt="小幕 GitHub Star 增长历史" src="https://api.star-history.com/svg?repos=arixbit/xiaomu-desktop&amp;type=Date">
+  </picture>
+</a>
