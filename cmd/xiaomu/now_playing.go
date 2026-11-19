@@ -9,7 +9,7 @@ package main
 // The system advances the position itself while the state is Playing at
 // Rate, so xiaomu only publishes on changes: a new title/episode (Set),
 // a play/pause toggle or a seek (SetPlayback), and clears when playback
-// stops. Nothing here runs every frame.
+// stops. Frames observe changes but only publish when something changes.
 
 import (
 	"time"
@@ -17,6 +17,7 @@ import (
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
 )
 
 // nowPlayingSink is the part of MyGo's Now Playing API xiaomu uses. It
@@ -28,6 +29,12 @@ type nowPlayingSink interface {
 	Clear()
 }
 
+type nowPlayingSnapshot struct {
+	player *ui.VideoPlayer
+	info   mygo.NowPlayingInfo
+	at     time.Time
+}
+
 // nowPlayingTitle is the title the system shows: the live channel name,
 // the file name for a local file, the episode's title, or 直链播放.
 func (a *app) nowPlayingTitle() string {
@@ -37,7 +44,7 @@ func (a *app) nowPlayingTitle() string {
 	if a.playingFile {
 		return a.playingName
 	}
-	if a.title != nil && a.title.name != "" {
+	if !a.playingDirect && a.title != nil && a.title.name != "" {
 		return a.title.name
 	}
 	return "直链播放"
@@ -51,21 +58,68 @@ func (a *app) syncNowPlaying() {
 	}
 	if a.player == nil {
 		a.nowPlaying.Clear()
+		a.nowPlayingLast = nowPlayingSnapshot{}
 		return
 	}
+	info := a.currentNowPlaying()
+	a.nowPlaying.Set(info)
+	a.nowPlayingLast = nowPlayingSnapshot{a.player, info, time.Now()}
+}
+
+func (a *app) currentNowPlaying() mygo.NowPlayingInfo {
 	state := mygo.PlaybackPaused
-	if a.player.Playing() {
+	if a.player.Ended() || a.player.Err() != nil {
+		state = mygo.PlaybackStopped
+	} else if a.player.Playing() {
 		state = mygo.PlaybackPlaying
 	}
-	a.nowPlaying.Set(mygo.NowPlayingInfo{
+	commands := mygo.MediaPlay | mygo.MediaPause
+	if _, _, ok := a.nextEpisode(); ok || a.playingLive && a.live.playingChannel+1 < len(a.live.channels) {
+		commands |= mygo.MediaNext
+	}
+	if _, _, ok := a.prevEpisode(); ok || a.playingLive && a.live.playingChannel > 0 {
+		commands |= mygo.MediaPrevious
+	}
+	return mygo.NowPlayingInfo{
 		Title:    a.nowPlayingTitle(),
 		Album:    a.playingEpisode,
 		Duration: a.player.Duration(),
 		Position: a.player.Position(),
 		Rate:     a.player.Rate(),
 		State:    state,
-		Commands: mygo.MediaPlay | mygo.MediaPause | mygo.MediaNext | mygo.MediaPrevious,
-	})
+		Commands: commands,
+	}
+}
+
+func sameNowPlayingMedia(a, b mygo.NowPlayingInfo) bool {
+	return a.Title == b.Title && a.Album == b.Album && a.Duration == b.Duration && a.Rate == b.Rate && a.Commands == b.Commands
+}
+
+// observeNowPlaying catches readiness, natural ends, failures, rate changes
+// and completed asynchronous seeks. Normal progress is advanced by the OS.
+func (a *app) observeNowPlaying() {
+	if a.nowPlaying == nil {
+		return
+	}
+	last := a.nowPlayingLast
+	if a.player == nil {
+		if last.player != nil {
+			a.syncNowPlaying()
+		}
+		return
+	}
+	info := a.currentNowPlaying()
+	if last.player != a.player || !sameNowPlayingMedia(last.info, info) {
+		a.syncNowPlaying()
+		return
+	}
+	position := last.info.Position
+	if last.info.State == mygo.PlaybackPlaying {
+		position += time.Duration(float64(time.Since(last.at)) * last.info.Rate)
+	}
+	if info.State != last.info.State || info.Position-position > time.Second || position-info.Position > time.Second {
+		a.syncNowPlayingState()
+	}
 }
 
 // syncNowPlayingState republishes only the play state and position,
@@ -74,11 +128,13 @@ func (a *app) syncNowPlayingState() {
 	if a.nowPlaying == nil || a.player == nil {
 		return
 	}
-	state := mygo.PlaybackPaused
-	if a.player.Playing() {
-		state = mygo.PlaybackPlaying
+	info := a.currentNowPlaying()
+	if a.nowPlayingLast.player != a.player || !sameNowPlayingMedia(a.nowPlayingLast.info, info) {
+		a.syncNowPlaying()
+		return
 	}
-	a.nowPlaying.SetPlayback(state, a.player.Position())
+	a.nowPlaying.SetPlayback(info.State, info.Position)
+	a.nowPlayingLast = nowPlayingSnapshot{a.player, info, time.Now()}
 }
 
 // handleMediaCommand handles one remote command from the system
@@ -110,6 +166,9 @@ func (a *app) handleMediaCommand(cmd mygo.MediaCommand, position time.Duration) 
 
 // nextEpisode returns the episode after the one playing, if there is one.
 func (a *app) nextEpisode() (line string, episode catalog.Episode, ok bool) {
+	if !a.hasEpisodes() {
+		return "", catalog.Episode{}, false
+	}
 	source, index, found := a.currentEpisode()
 	if !found {
 		return "", catalog.Episode{}, false
@@ -123,6 +182,9 @@ func (a *app) nextEpisode() (line string, episode catalog.Episode, ok bool) {
 
 // prevEpisode returns the episode before the one playing, if there is one.
 func (a *app) prevEpisode() (line string, episode catalog.Episode, ok bool) {
+	if !a.hasEpisodes() {
+		return "", catalog.Episode{}, false
+	}
 	source, index, found := a.currentEpisode()
 	if !found {
 		return "", catalog.Episode{}, false

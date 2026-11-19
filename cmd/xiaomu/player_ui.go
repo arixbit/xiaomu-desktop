@@ -209,6 +209,7 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 					}
 					if progress.Changed() {
 						p.Seek(time.Duration(position * float64(time.Second)))
+						a.syncNowPlayingState()
 					}
 					ui.Text(c, playerClock(duration)).FontSize(12)
 				} else {
@@ -454,6 +455,7 @@ func (a *app) trackPlayback(c *ui.Context, p *ui.VideoPlayer) {
 				a.resumeAt = min(a.resumeAt, max(0, duration-time.Second))
 			}
 			p.Seek(a.resumeAt)
+			a.syncNowPlayingState()
 			a.lastPosition, a.resumeIssued = a.resumeAt, true
 			return
 		}

@@ -31,8 +31,19 @@ func isPlayableFile(path string) bool {
 // deferUntilReady runs fn once the window exists. Events arriving before
 // that (launch file / launch URL) wait in a.pending and run in order.
 func (a *app) deferUntilReady(fn func()) {
+	if a.closed {
+		return
+	}
 	if a.window != nil {
-		fn()
+		if a.dispatch != nil {
+			a.dispatch(func() {
+				if !a.closed {
+					fn()
+				}
+			})
+		} else {
+			fn()
+		}
 		return
 	}
 	a.pending = append(a.pending, fn)
@@ -43,8 +54,52 @@ func (a *app) drainPending() {
 	pending := a.pending
 	a.pending = nil
 	for _, fn := range pending {
+		a.deferUntilReady(fn)
+	}
+}
+
+// withLibrary delays navigation while the imported configuration loads.
+// A later navigation replaces it; opening media abandons it too.
+func (a *app) withLibrary(fn func()) {
+	a.pendingLibrary = nil
+	if a.running(jobConfig) {
+		a.pendingLibrary = fn
+		return
+	}
+	fn()
+}
+
+func (a *app) finishLibraryEvent() {
+	fn := a.pendingLibrary
+	a.pendingLibrary = nil
+	if fn != nil && a.library.root != nil && !a.closed {
 		fn()
 	}
+}
+
+// prepareExternalPlayback prevents an old resolver from replacing the
+// newly requested media, and saves the episode's history before switching.
+func (a *app) prepareExternalPlayback() {
+	a.pendingLibrary = nil
+	a.cancelJob(jobTitle)
+	a.cancelJob(jobPlay)
+	a.flushHistory()
+	a.sourceAttempt = sourcePlaybackAttempt{}
+}
+
+func (a *app) playDirectURL(raw string, headers map[string]string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		a.status = "请输入 http 或 https 播放地址"
+		return false
+	}
+	a.prepareExternalPlayback()
+	if !a.playURL(raw, headers) {
+		return false
+	}
+	a.playingDirect = true
+	a.syncNowPlaying()
+	return true
 }
 
 // openLocalFile plays a video file from disk, without the HTTP proxy:
@@ -58,6 +113,7 @@ func (a *app) openLocalFile(path string) bool {
 	if a.openLocal == nil {
 		a.openLocal = video.Open
 	}
+	a.prepareExternalPlayback()
 	if a.player != nil {
 		a.player.Close()
 		a.player = nil
@@ -65,6 +121,7 @@ func (a *app) openLocalFile(path string) bool {
 	p, err := a.openLocal(path)
 	if err != nil {
 		a.status = "打开文件失败：" + err.Error()
+		a.syncNowPlaying()
 		return false
 	}
 	a.adoptPlayer(p)
@@ -111,7 +168,7 @@ func parseDeepLink(raw string) (deepLinkAction, bool) {
 			return deepLinkAction{}, false
 		}
 		pu, err := url.Parse(play)
-		if err != nil || (pu.Scheme != "http" && pu.Scheme != "https") {
+		if err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" {
 			return deepLinkAction{}, false
 		}
 		return deepLinkAction{kind: "play", play: play}, true
@@ -136,14 +193,14 @@ func (a *app) handleDeepLink(raw string) {
 	}
 	switch action.kind {
 	case "play":
-		a.playURL(action.play, nil)
+		a.playDirectURL(action.play, nil)
 	case "search":
 		// The player view covers every page while a video plays, so
 		// leave it first; the search page then shows on arrival.
-		if a.player != nil {
+		a.withLibrary(func() {
 			a.leavePlayer()
-		}
-		a.browser.query = action.query
-		a.searchLibrary()
+			a.browser.query = action.query
+			a.searchLibrary()
+		})
 	}
 }

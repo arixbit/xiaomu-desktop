@@ -79,6 +79,7 @@ func (a *app) cancelJob(slot jobSlot) {
 }
 
 func (a *app) cancelJobs() {
+	a.pendingLibrary = nil
 	for slot := range a.jobs {
 		a.cancelJob(jobSlot(slot))
 	}
@@ -168,6 +169,7 @@ func (a *app) closeSession(s source.Session) {
 
 func (a *app) close() {
 	a.closed = true
+	a.pending, a.pendingLibrary = nil, nil
 	a.cancelFollowingRefresh()
 	a.stopScan(&a.library.feed)
 	a.stopScan(&a.library.search)
@@ -184,6 +186,7 @@ func (a *app) close() {
 		a.player.Close()
 		a.player = nil
 	}
+	a.syncNowPlaying()
 	if a.proxy != nil {
 		_ = a.proxy.Close()
 		a.proxy = nil
@@ -205,8 +208,14 @@ func (a *app) readConfig(raw string, restoring bool) {
 		if err != nil {
 			return jobResult{}, err
 		}
-		return jobResult{apply: func() { a.applyConfig(raw, doc, restoring) }}, nil
-	}, nil)
+		return jobResult{apply: func() {
+			a.applyConfig(raw, doc, restoring)
+			a.finishLibraryEvent()
+		}}, nil
+	}, func(err error) {
+		a.pendingLibrary = nil
+		a.status = jobError("加载配置", err)
+	})
 }
 
 func (a *app) applyConfig(raw string, doc *config.Config, restoring bool) {
@@ -242,6 +251,7 @@ func (a *app) applyConfig(raw string, doc *config.Config, restoring bool) {
 // removeConfig forgets the imported configuration. Play history stays, shown
 // as unavailable until its source is imported again.
 func (a *app) removeConfig() {
+	a.pendingLibrary = nil
 	a.cancelJob(jobConfig)
 	a.cancelJob(jobSite)
 	a.closeSite()

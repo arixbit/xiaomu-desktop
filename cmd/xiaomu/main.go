@@ -31,13 +31,16 @@ type app struct {
 	// notify posts a system notification; nowPlaying publishes to the
 	// system Now Playing info. All four are replaceable for headless
 	// tests and wired to MyGo in main().
-	openLocal  func(string) (*ui.VideoPlayer, error)
-	addRecent  func(string) error
-	notify     func(id, title, body string)
-	nowPlaying nowPlayingSink
+	openLocal      func(string) (*ui.VideoPlayer, error)
+	addRecent      func(string) error
+	notify         func(id, title, body string)
+	nowPlaying     nowPlayingSink
+	nowPlayingLast nowPlayingSnapshot
 	// pending holds file/URL events that arrived before the window
 	// existed; they run in order once it does.
 	pending []func()
+	// Only the latest navigation waits for a configuration still loading.
+	pendingLibrary func()
 
 	nav             []routeKind
 	jobs            [jobSlots]job
@@ -96,6 +99,7 @@ type app struct {
 }
 
 func (a *app) view(c *ui.Context) {
+	defer a.observeNowPlaying()
 	a.handleKeyboard(c)
 	if c.Vibrancy() {
 		c.Root().Background(ui.Transparent)
@@ -108,13 +112,11 @@ func (a *app) view(c *ui.Context) {
 }
 
 func (a *app) play() {
-	if a.playURL(a.rawURL, playbackHeaders(a.referer, a.ua)) {
-		a.playingDirect, a.linkOpen = true, false
+	if a.playDirectURL(a.rawURL, playbackHeaders(a.referer, a.ua)) {
+		a.linkOpen = false
 	}
 }
 
-// playURL hands an HTTP address to the player through the loopback proxy,
-// which adds the request headers. It reports whether the player opened.
 // adoptPlayer makes p the current player and resets the per-play state.
 // playURL and openLocalFile share it; both close the old player before
 // opening, so a failed open still leaves no player, as before.
@@ -137,8 +139,11 @@ func (a *app) adoptPlayer(p *ui.VideoPlayer) {
 	a.autoNextPending = false
 	a.playingFile = false
 	a.playingName = ""
+	a.playingSource, a.playingEpisode = "", ""
 }
 
+// playURL opens HTTP media through the proxy. The caller publishes Now
+// Playing after assigning the episode, channel or direct-play state.
 func (a *app) playURL(raw string, headers map[string]string) bool {
 	raw = strings.TrimSpace(raw)
 	u, err := url.Parse(raw)
@@ -167,12 +172,12 @@ func (a *app) playURL(raw string, headers map[string]string) bool {
 	player, err := opener(wrapped)
 	if err != nil {
 		a.status = "无法打开: " + err.Error()
+		a.syncNowPlaying()
 		return false
 	}
 	a.adoptPlayer(player)
 	a.playingLive, a.playingDirect = false, false
 	a.status = "正在播放"
-	a.syncNowPlaying()
 	return true
 }
 
@@ -241,8 +246,7 @@ func main() {
 		win.OnEnterFullScreen(func() { win.Update(func() { a.setFullScreen(true) }) })
 		win.OnLeaveFullScreen(func() { win.Update(func() { a.setFullScreen(false) }) })
 		a.restoreSavedSource()
-		// Files / links / notification clicks that arrived before the
-		// window existed run now, with the library restored.
+		// Library actions wait separately for the asynchronous restore.
 		a.drainPending()
 		win.OnClosed(a.close)
 	})

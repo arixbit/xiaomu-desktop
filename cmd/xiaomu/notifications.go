@@ -71,7 +71,10 @@ func (a *app) handleNotificationClick(id string) {
 	}
 	for _, e := range a.favorites.entries {
 		if e.Name == name {
-			a.openFavorite(e)
+			a.withLibrary(func() {
+				a.leavePlayer()
+				a.openFavorite(e)
+			})
 			return
 		}
 	}
