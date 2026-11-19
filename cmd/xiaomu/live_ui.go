@@ -140,6 +140,7 @@ func (a *app) startLiveChannel(index, streamIndex int) {
 				if a.player != nil {
 					a.player.SetRate(1)
 				}
+				a.syncNowPlaying()
 				return
 			}
 		}

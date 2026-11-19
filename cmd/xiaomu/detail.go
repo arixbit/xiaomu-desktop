@@ -385,6 +385,7 @@ func (a *app) startEpisode(play catalog.Playback, line string, episode catalog.E
 		return
 	}
 	a.playingSource, a.playingEpisode, a.resumeAt = line, episode.Name, at
+	a.syncNowPlaying()
 	a.sourceAttempt.player = a.player
 	a.revealContinueWatching(t.name)
 	a.updateFollowedTitle()

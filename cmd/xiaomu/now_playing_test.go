@@ -10,16 +10,25 @@ import (
 )
 
 type recordingNowPlaying struct {
-	sets   []mygo.NowPlayingInfo
-	states []mygo.PlaybackState
-	clears int
+	sets    []mygo.NowPlayingInfo
+	states  []mygo.PlaybackState
+	clears  int
+	info    mygo.NowPlayingInfo
+	showing bool
 }
 
-func (f *recordingNowPlaying) Set(info mygo.NowPlayingInfo) { f.sets = append(f.sets, info) }
-func (f *recordingNowPlaying) SetPlayback(state mygo.PlaybackState, _ time.Duration) {
-	f.states = append(f.states, state)
+func (f *recordingNowPlaying) Set(info mygo.NowPlayingInfo) {
+	f.sets = append(f.sets, info)
+	f.info, f.showing = info, true
 }
-func (f *recordingNowPlaying) Clear() { f.clears++ }
+func (f *recordingNowPlaying) SetPlayback(state mygo.PlaybackState, position time.Duration) {
+	f.states = append(f.states, state)
+	f.info.State, f.info.Position = state, position
+}
+func (f *recordingNowPlaying) Clear() {
+	f.clears++
+	f.showing = false
+}
 
 func TestSyncNowPlayingPublishesTitleAndEpisode(t *testing.T) {
 	a := newPlayerTestApp(t)
@@ -42,6 +51,7 @@ func TestSyncNowPlayingStateFollowsPauseAndPlay(t *testing.T) {
 	a := newPlayerTestApp(t)
 	fake := &recordingNowPlaying{}
 	a.nowPlaying = fake
+	a.syncNowPlaying()
 	a.player.Pause()
 	a.syncNowPlayingState()
 	if len(fake.states) != 1 || fake.states[0] != mygo.PlaybackPaused {
@@ -85,6 +95,7 @@ func TestMediaCommandTogglesPlayback(t *testing.T) {
 	a := newPlayerTestApp(t)
 	fake := &recordingNowPlaying{}
 	a.nowPlaying = fake
+	a.syncNowPlaying()
 	a.handleMediaCommand(mygo.MediaPause, 0)
 	if a.player.Playing() || len(fake.states) != 1 || fake.states[0] != mygo.PlaybackPaused {
 		t.Fatalf("media pause: playing=%v states=%v", a.player.Playing(), fake.states)

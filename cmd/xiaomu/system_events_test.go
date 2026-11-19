@@ -39,7 +39,7 @@ func TestHandleDeepLinkPlay(t *testing.T) {
 	a := &app{open: func(string) (*ui.VideoPlayer, error) { return ui.NewVideoPlayer(&stillVideo{}) }}
 	t.Cleanup(a.close)
 	a.handleDeepLink("xiaomu://play?url=" + url.QueryEscape("https://example.com/v.mp4"))
-	if a.player == nil || a.status != "正在播放" || a.playingLive || a.playingDirect {
+	if a.player == nil || a.status != "正在播放" || a.playingLive || !a.playingDirect {
 		t.Fatalf("play link did not start playback: player=%v status=%q live=%v direct=%v", a.player != nil, a.status, a.playingLive, a.playingDirect)
 	}
 }
