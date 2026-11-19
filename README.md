@@ -35,7 +35,7 @@ macOS 13+ · Apple Silicon / Intel · [下载最新版](https://github.com/arixb
 
 ## 下载与安装
 
-最新版提供 `.dmg` 和 ZIP 两种 Universal 安装包，可直接在 macOS 13 及以上运行。安装包附有 `SHA256SUMS` 校验文件。 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest)
+v0.8.0 提供 `.dmg` 和 ZIP 两种 Universal 安装包，可直接在 macOS 13 及以上运行。安装包附有 `SHA256SUMS` 校验文件。 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest)
 
 1. 打开 `.dmg`，将 `Xiaomu.app` 拖到“应用程序”。也可使用 ZIP，解压后移动 App。
 2. 本版使用本地签名，尚无 Developer ID 签名及 Apple 公证。首次打开如被系统拦截，请在确认下载来源后，到“系统设置 → 隐私与安全性”选择“仍要打开”。也可以在终端执行 `xattr -d com.apple.quarantine /Applications/Xiaomu.app` 去掉隔离标记，之后双击即可打开；这会跳过 Gatekeeper 的首次检查，只在你信任下载来源时使用。
@@ -47,13 +47,13 @@ macOS 13+ · Apple Silicon / Intel · [下载最新版](https://github.com/arixb
 
 ## 功能
 
-v0.7.0 更新：
+v0.8.0 更新：
 
-- **首页续播与追剧**：最近 6 部影片一键续播；追剧显示观看进度、最新分集和新集标记，原收藏与历史数据自动保留。
-- **按剧跳过片头片尾**：保存本剧的跳过秒数，后续分集沿用，片尾与自动下一集配合。
-- **成功来源记忆**：优先使用上次实际播出的来源和线路，续播严格匹配分集，失败时回退原历史来源。
-- **导航与搜索**：根页面隐藏返回按钮，搜索框居中并适配窄窗口，支持 `⌘K` 聚焦和分层 `Esc`。
-- **详情页**：来源、线路与选集分层折叠，影片信息和播放入口保持固定。
+- **系统通知**：追剧发现新集时提醒，点击进入详情；首次需要通知时才请求授权。
+- **本地视频与链接**：支持从 Finder 用小幕打开 mp4、mov、m4v、m3u8，以及通过 xiaomu:// 链接播放或搜索。文件默认打开方式由 macOS 设置决定。
+- **系统正在播放**：控制中心显示片名、分集和播放状态，媒体键支持播放／暂停及切换分集或频道。
+- **播放衔接修复**：外部播放保留原剧进度并取消旧解析任务；冷启动搜索和通知等待配置恢复；同步系统分集、倍速、进度与结束状态。
+- **详情与测速**：显示已知豆瓣评分，片源页可测速，播放页显示代理下载速度。
 
 观看与追剧：
 
