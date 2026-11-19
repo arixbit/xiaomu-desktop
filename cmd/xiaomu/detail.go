@@ -49,6 +49,8 @@ func (a *app) openTitleWithScore(name, pic string, seeds []library.Item, score s
 }
 
 func (a *app) showTitle(name, pic string, seeds []library.Item, searchFallback bool, score string) {
+	// Keep this title's sources independent of subsequent scan refreshes.
+	seeds = append([]library.Item(nil), seeds...)
 	a.clearTitle()
 	if score == "" {
 		// A title opened from search or the library may still be on
@@ -264,7 +266,7 @@ func (a *app) openCandidate(item library.Item) {
 			delete(t.failed, key)
 			// The detail read is the freshest measurement of this
 			// site's speed; a failed read records nothing.
-			_ = a.latency.record(item.Entry.Key(), elapsed)
+			a.recordLatency(item.Entry.Key(), elapsed)
 			a.updateFollowedTitle()
 		}}, nil
 	}, func(err error) {
@@ -451,7 +453,7 @@ func (a *app) switchSource(item library.Item) {
 			a.closeSession(t.session)
 			t.session, t.detail, t.item, t.auto = session, &detail, item, false
 			t.line, t.chunk = line, 0
-			_ = a.latency.record(item.Entry.Key(), elapsed)
+			a.recordLatency(item.Entry.Key(), elapsed)
 			a.startEpisode(play, detail.Sources[line].Name, episode, at)
 		}}, nil
 	}, func(err error) {

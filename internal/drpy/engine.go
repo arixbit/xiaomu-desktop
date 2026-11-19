@@ -54,8 +54,13 @@ type Options struct {
 	Timeout   time.Duration
 }
 
-// Engine is one QuickJS runtime. It is not safe for concurrent use.
+// Engine serializes runtime access, including Close. Waiting calls are cancellable.
+const scriptMemoryLimit = 64 << 20
+
+var scriptSlots = make(chan struct{}, 4)
+
 type Engine struct {
+	gate    chan struct{}
 	vm      *quickjs.VM
 	eng     quickjs.Value
 	loaded  bool
@@ -82,6 +87,7 @@ func Open(opt Options) (*Engine, error) {
 	}
 	e := &Engine{
 		vm:      vm,
+		gate:    make(chan struct{}, 1),
 		fetch:   opt.Fetch,
 		modules: modules,
 		assets:  opt.AssetsDir,
@@ -91,6 +97,7 @@ func Open(opt Options) (*Engine, error) {
 	if e.fetch == nil {
 		e.fetch = httpFetch
 	}
+	vm.SetMemoryLimit(scriptMemoryLimit)
 	to := opt.Timeout
 	if to <= 0 {
 		to = 20 * time.Second
@@ -117,6 +124,8 @@ func Open(opt Options) (*Engine, error) {
 
 // Close releases the runtime.
 func (e *Engine) Close() error {
+	e.gate <- struct{}{}
+	defer func() { <-e.gate }()
 	if e.loaded {
 		e.eng.Free()
 		e.loaded = false
@@ -129,14 +138,83 @@ func (e *Engine) Close() error {
 	return err
 }
 
+// begin owns the runtime until the cancellation observer has joined. QuickJS
+// resets Interrupt on each outer entry, so keep requesting it after cancellation
+// until all entries (including promise jobs) have returned.
+func (e *Engine) begin(ctx context.Context) (func(*error), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case e.gate <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if e.vm == nil {
+		<-e.gate
+		return nil, fmt.Errorf("drpy: engine closed")
+	}
+	select {
+	case scriptSlots <- struct{}{}:
+	case <-ctx.Done():
+		<-e.gate
+		return nil, ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		<-scriptSlots
+		<-e.gate
+		return nil, err
+	}
+	stop, joined := make(chan struct{}), make(chan struct{})
+	vm := e.vm
+	if ctx.Done() != nil {
+		go func() {
+			defer close(joined)
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+			}
+			vm.Interrupt()
+			tick := time.NewTicker(time.Millisecond)
+			defer tick.Stop()
+			for {
+				select {
+				case <-stop:
+					return
+				case <-tick.C:
+					vm.Interrupt()
+				}
+			}
+		}()
+	} else {
+		close(joined)
+	}
+	return func(err *error) {
+		close(stop)
+		<-joined
+		if ctx.Err() != nil {
+			*err = ctx.Err()
+		}
+		e.ctx = context.Background()
+		<-scriptSlots
+		<-e.gate
+	}, nil
+}
+
 // Load evaluates the module at moduleURL. Source already in Options.Modules
 // is used; otherwise the module loader fetches it.
 func (e *Engine) Load(moduleURL string) error {
 	return e.LoadContext(context.Background(), moduleURL)
 }
 
-// LoadContext loads a module with cancellation for its network requests.
-func (e *Engine) LoadContext(ctx context.Context, moduleURL string) error {
+// LoadContext cancels both module evaluation and its network requests.
+func (e *Engine) LoadContext(ctx context.Context, moduleURL string) (err error) {
+	finish, err := e.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer finish(&err)
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -179,7 +257,12 @@ func (e *Engine) LoadContext(ctx context.Context, moduleURL string) error {
 }
 
 // Call runs a method of the default export and returns its JSON text.
-func (e *Engine) Call(ctx context.Context, name string, args ...any) (string, error) {
+func (e *Engine) Call(ctx context.Context, name string, args ...any) (result string, err error) {
+	finish, err := e.begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer finish(&err)
 	if !e.loaded {
 		return "", fmt.Errorf("drpy: engine not loaded")
 	}
@@ -211,7 +294,12 @@ func (e *Engine) Call(ctx context.Context, name string, args ...any) (string, er
 
 // CallAwait runs a method that returns a Promise. FongMi class spiders may
 // implement their methods asynchronously; drpy2's synchronous calls still use Call.
-func (e *Engine) CallAwait(ctx context.Context, name string, args ...any) (string, error) {
+func (e *Engine) CallAwait(ctx context.Context, name string, args ...any) (result string, err error) {
+	finish, err := e.begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer finish(&err)
 	if !e.loaded {
 		return "", fmt.Errorf("drpy: engine not loaded")
 	}
@@ -222,18 +310,6 @@ func (e *Engine) CallAwait(ctx context.Context, name string, args ...any) (strin
 		return "", err
 	}
 	e.ctx = ctx
-	if ctx.Done() != nil {
-		done := make(chan struct{})
-		vm := e.vm
-		defer close(done)
-		go func() {
-			select {
-			case <-ctx.Done():
-				vm.Interrupt()
-			case <-done:
-			}
-		}()
-	}
 	atom, err := e.vm.NewAtom(name)
 	if err != nil {
 		return "", err
@@ -254,7 +330,6 @@ func (e *Engine) CallAwait(ctx context.Context, name string, args ...any) (strin
 		return "", err
 	}
 	defer res.Free()
-	var result string
 	var settled bool
 	var failure error
 	chained, err := res.Then(func(v quickjs.Value) {

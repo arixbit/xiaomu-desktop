@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/config"
 	"github.com/arixbit/xiaomu-desktop/internal/douban"
@@ -63,6 +66,7 @@ func (a *app) stopScan(s *libraryScan) {
 
 // resetLibrary replaces the imported configuration; nil removes it.
 func (a *app) resetLibrary(doc *config.Config) {
+	a.cancelSourceSpeedTest()
 	a.cancelFollowingRefresh()
 	l := &a.library
 	a.stopScan(&l.feed)
@@ -119,7 +123,19 @@ func (a *app) startScan(s *libraryScan, query string, more bool) {
 			return
 		}
 	} else {
-		s.items, s.groups, s.seen = nil, nil, map[string]bool{}
+		// A refresh owns this buffer; group/detail snapshots own their copies.
+		// Clear references before reuse, and release capacity on a new query.
+		if query == s.query {
+			clear(s.items)
+			s.items = s.items[:0]
+			clear(s.seen)
+		} else {
+			s.items, s.seen = nil, nil
+		}
+		s.groups = nil
+		if s.seen == nil {
+			s.seen = make(map[string]bool)
+		}
 		s.selected = -1
 		s.hot = nil
 		if query == "" {
@@ -144,14 +160,47 @@ func (a *app) startScan(s *libraryScan, query string, more bool) {
 		}
 	}
 	work := func() {
-		err := library.Scan(ctx, root, options, func(event library.Event) {
-			update(func() { a.applyLibraryEvent(s, event) })
-		})
+		// At most one update is queued per scan. Keep arrivals together until
+		// the UI takes them, so a burst cannot fill the main queue with sorts.
+		var mu sync.Mutex
+		var pending []library.Event
+		var scheduled, finished bool
+		var scanErr error
+		publish := func() {
+			update(func() {
+				mu.Lock()
+				events, done, err := pending, finished, scanErr
+				pending, scheduled = nil, false
+				mu.Unlock()
+				a.applyLibraryEvents(s, events)
+				if done {
+					s.running, s.cancel, s.stopped = false, nil, err != nil
+					a.autoOpenTitle()
+				}
+			})
+		}
+		enqueue := func(event *library.Event, done bool, err error) {
+			mu.Lock()
+			if event != nil {
+				pending = append(pending, *event)
+			}
+			if done {
+				finished, scanErr = true, err
+			}
+			schedule := !scheduled
+			scheduled = true
+			mu.Unlock()
+			if schedule {
+				if dispatch == nil {
+					publish()
+				} else {
+					time.AfterFunc(16*time.Millisecond, publish)
+				}
+			}
+		}
+		err := library.Scan(ctx, root, options, func(event library.Event) { enqueue(&event, false, nil) })
 		cancel()
-		update(func() {
-			s.running, s.cancel, s.stopped = false, nil, err != nil
-			a.autoOpenTitle()
-		})
+		enqueue(nil, true, err)
 	}
 	if dispatch == nil {
 		work()
@@ -167,6 +216,36 @@ func (a *app) reloadScan(s *libraryScan) {
 }
 
 func (a *app) applyLibraryEvent(s *libraryScan, event library.Event) {
+	a.applyLibraryEvents(s, []library.Event{event})
+}
+
+func (a *app) applyLibraryEvents(s *libraryScan, events []library.Event) {
+	// Reserve once for the batch rather than repeatedly copying every item
+	// as individual sites arrive. Duplicate/empty IDs still get filtered.
+	additional := 0
+	for _, event := range events {
+		if event.Result != nil && event.Err == nil {
+			additional += len(event.Result.Page.Videos)
+		}
+	}
+	s.items = slices.Grow(s.items, additional)
+	changed := false
+	for _, event := range events {
+		a.appendLibraryEvent(s, event)
+		changed = changed || (event.Result != nil && event.Err == nil)
+	}
+	if changed {
+		sort.SliceStable(s.items, func(i, j int) bool {
+			return libraryItemRank(s.items[i], s.query, s.hot) < libraryItemRank(s.items[j], s.query, s.hot)
+		})
+		s.groups = groupTitles(s.items)
+		if s == &a.library.search {
+			a.autoOpenTitle()
+		}
+	}
+}
+
+func (a *app) appendLibraryEvent(s *libraryScan, event library.Event) {
 	l := &a.library
 	s.progress = event
 	if doc := event.Document; doc != nil {
@@ -196,7 +275,7 @@ func (a *app) applyLibraryEvent(s *libraryScan, event library.Event) {
 	if event.Duration > 0 {
 		// The store is best-effort: a failed save must not disturb
 		// the scan, and the next measurement overwrites it anyway.
-		_ = a.latency.record(result.Target.Entry.Key(), event.Duration)
+		a.recordLatency(result.Target.Entry.Key(), event.Duration)
 	}
 	if event.Err != nil {
 		// A failed later page can be retried without repeating successful pages.
@@ -207,21 +286,18 @@ func (a *app) applyLibraryEvent(s *libraryScan, event library.Event) {
 	}
 	for _, video := range result.Page.Videos {
 		item := library.Item{Entry: result.Target.Entry, Video: video}
-		if video.ID == "" || s.seen[itemKey(item)] {
+		if video.ID == "" {
 			continue
 		}
-		s.seen[itemKey(item)] = true
+		key := itemKey(item)
+		if s.seen[key] {
+			continue
+		}
+		s.seen[key] = true
 		s.items = append(s.items, item)
 	}
-	sort.SliceStable(s.items, func(i, j int) bool {
-		return libraryItemRank(s.items[i], s.query, s.hot) < libraryItemRank(s.items[j], s.query, s.hot)
-	})
-	s.groups = groupTitles(s.items)
 	if s.query != "" && result.Page.HasNext {
 		s.more = append(s.more, library.Target{Entry: result.Target.Entry, Page: result.Target.Page + 1})
-	}
-	if s == &l.search {
-		a.autoOpenTitle()
 	}
 }
 
@@ -238,9 +314,11 @@ func titleKey(name string) string {
 // groupTitles merges videos of the same title, in the order they first show.
 // A video without a name stays on its own.
 func groupTitles(items []library.Item) []titleGroup {
-	var groups []titleGroup
-	index := map[string]int{}
-	for _, item := range items {
+	groups := make([]titleGroup, 0, len(items))
+	index := make(map[string]int, len(items))
+	counts := make([]int, 0, len(items))
+	membership := make([]int, len(items))
+	for n, item := range items {
 		key := titleKey(item.Video.Name)
 		if key == "" {
 			key = "\x00" + itemKey(item)
@@ -250,7 +328,21 @@ func groupTitles(items []library.Item) []titleGroup {
 			i = len(groups)
 			index[key] = i
 			groups = append(groups, titleGroup{name: videoTitle(item.Video)})
+			counts = append(counts, 0)
 		}
+		counts[i]++
+		membership[n] = i
+	}
+	// One independent snapshot avoids thousands of small allocations and
+	// remains valid when a later page sorts or refreshes the scan's items.
+	storage := make([]library.Item, len(items))
+	offset := 0
+	for i, count := range counts {
+		groups[i].items = storage[offset : offset : offset+count]
+		offset += count
+	}
+	for n, item := range items {
+		i := membership[n]
 		groups[i].items = append(groups[i].items, item)
 	}
 	return groups
