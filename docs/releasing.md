@@ -22,7 +22,7 @@ sh scripts/build-release.sh -o build/releases/v0.3.0
 
 脚本默认读取上述私钥路径，也可用 `XIAOMU_UPDATE_KEY_FILE` 指定路径，或让 CI 从密钥库注入 `MYGO_UPDATER_PRIVATE_KEY`。缺少密钥时脚本会停止；MyGo 会拒绝与公钥不匹配的密钥。普通 `go tool mygo build` 仍可用于本地测试，但缺少私钥时不会生成在线更新附件，不能直接用作公开发布。
 
-Windows 发布用 `scripts/build-release-windows.sh`，同样需要上述签名密钥，构建 `windows/amd64` 与 `windows/arm64` 两个目标，生成各架构的安装包与签名更新包、`update-windows-<架构>.json`。在没有 NSIS 的机器上构建会跳过安装包，只出 `Xiaomu.exe`；Windows 上构建时会自动下载 NSIS，macOS/Linux 上需自行安装 `makensis`。安装包未做代码签名，用户首次安装会遇到 SmartScreen 提示。
+Windows 发布用 `scripts/build-release-windows.sh`，同样需要上述签名密钥，构建 `windows/amd64` 与 `windows/arm64` 两个目标，生成各架构的安装包与签名更新包、`update-windows-<架构>.json`。在没有 NSIS 的机器上构建会跳过安装包，只出 `Xiaomu.exe`；Windows 上构建时会自动下载 NSIS，macOS/Linux 上需自行安装 `makensis`。安装包未做代码签名，用户首次安装会遇到 SmartScreen 提示。卸载时只删除安装器写进安装目录的文件（`scripts/installer.nsh` 按安装时写入的 `.mygo-files` 清单逐个删除），不会递归删除整个安装目录，用户自己放进该目录的文件不受影响。
 
 ## 发布附件
 
@@ -34,6 +34,7 @@ Windows 发布用 `scripts/build-release-windows.sh`，同样需要上述签名�
 - `update-darwin-universal.json`：与该更新包配套的版本、说明、大小和签名。
 - `SHA256SUMS`：上述四个文件的 SHA-256。
 - `xiaomu-setup-<版本>-amd64.exe` / `xiaomu-setup-<版本>-arm64.exe`：Windows 安装包（NSIS）。
+- `xiaomu-<版本>-windows-amd64.tar.gz` / `xiaomu-<版本>-windows-arm64.tar.gz`：更新器下载的签名更新包。
 - `update-windows-amd64.json` / `update-windows-arm64.json`：与 Windows 更新包配套的版本、说明、大小和签名。
 
 先建立 Release 草稿，上传全部附件并校验；确认完整后再发布为最新正式版本。每个后续版本都必须同时上传更新清单与其引用的更新包。当前不生成差量包。不得修改已发布更新包的内容后继续沿用旧签名。

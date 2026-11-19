@@ -24,6 +24,7 @@
     "minimumSystemVersion": "13.0"
   },
   "windows": {
-    "displayName": "小幕"
+    "displayName": "小幕",
+    "installerInclude": "scripts/installer.nsh"
   }
 }

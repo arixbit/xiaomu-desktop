@@ -199,6 +199,14 @@ func playbackHeaders(referer, ua string) map[string]string {
 }
 
 func main() {
+	// One instance only, before touching any state: a file opened with
+	// the app, or a xiaomu:// link clicked, while xiaomu runs must reach
+	// the running instance instead of starting another one that would
+	// read and write the same history. The second instance forwards its
+	// command line to the first and exits here.
+	if !mygo.App.RequestSingleInstanceLock() {
+		return
+	}
 	a := &app{autoNext: true, persist: true}
 	a.initUpdates()
 	a.notify = postNotification
@@ -218,15 +226,29 @@ func main() {
 		a.deferUntilReady(func() { a.handleNotificationClick(id) })
 	})
 	mygo.App.OnDidBecomeActive(func() { mygo.ClearNotifications() })
+	mygo.App.OnSecondInstance(func(args []string, workingDir string) {
+		// The forwarded file or link reaches OnOpenFile/OnOpenURL
+		// after this; bring the window forward first.
+		if w := a.window; w != nil {
+			w.Restore()
+			w.Focus()
+		}
+	})
 	mygo.NowPlaying.OnCommand(func(cmd mygo.MediaCommand, position time.Duration) {
 		a.handleMediaCommand(cmd, position)
 	})
 	// Claim the xiaomu:// scheme for this install. It is declared in
-	// mygo.json (urlSchemes), so the built .app lists it in Info.plist;
-	// registering at launch makes xiaomu the default handler for it.
-	// The error is ignored: in `go run` there is no bundle to declare
-	// it, and the app still works without being the handler.
-	_ = mygo.App.RegisterURLScheme("xiaomu")
+	// mygo.json (urlSchemes), so the built .app lists it in Info.plist
+	// and the Windows installer registers it; registering at launch
+	// makes xiaomu the default handler for it.
+	// Development builds must not claim it: `mygo dev` runs a temporary
+	// executable, and registering would point xiaomu:// at that instead
+	// of the installed app. The error is ignored: in `go run` there is
+	// no bundle to declare it, and the app still works without being
+	// the handler.
+	if !mygo.IsDev() {
+		_ = mygo.App.RegisterURLScheme("xiaomu")
+	}
 	mygo.App.WhenReady(func() {
 		win := mygo.NewWindow(mygo.WindowOptions{
 			Title:         "小幕",

@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arixbit/xiaomu-desktop/internal/fileurl"
 	"github.com/arixbit/xiaomu-desktop/internal/pdfh"
 	"github.com/arixbit/xiaomu-desktop/internal/urljoin"
 	"github.com/egoist/mygo/netproxy"
@@ -595,7 +596,11 @@ func (e *Engine) loadModule(_ *quickjs.VM, name string) (string, error) {
 		return "", fmt.Errorf("drpy: 依赖 %s 加载失败，请在脚本目录提供真实的 %s：%w", name, key, err)
 	}
 	if strings.HasPrefix(name, "file://") {
-		b, err := os.ReadFile(strings.TrimPrefix(name, "file://"))
+		p, err := fileurl.Path(name)
+		if err != nil {
+			return "", err
+		}
+		b, err := os.ReadFile(p)
 		if err != nil {
 			return "", err
 		}
