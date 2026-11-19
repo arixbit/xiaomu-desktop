@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- 小幕网站图标：深色圆角方块 + 红色播放三角，与 App 图标呼应 -->
+  <rect width="1024" height="1024" rx="220" fill="#17171a"/>
+  <path d="M408 296 L724 512 L408 728 Z" fill="#e5484d"/>
+</svg>
