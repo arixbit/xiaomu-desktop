@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -9,6 +10,27 @@ import (
 // dragBar is the traffic-light band the headless tester pretends the
 // window has, matching a hidden-title-bar window on macOS.
 var dragBar = ui.TitleBar{Height: 28, Left: 78, Right: 0, Bottom: 28}
+
+func TestWindowedOverlayHandsPressToNativeWindowDrag(t *testing.T) {
+	a := &app{}
+	pressed := false
+	tt := ui.NewTester(func(c *ui.Context) {
+		screen := ui.Box(c).Fill().DragWindow()
+		if !a.playerOverlaysVisible(c, screen) {
+			t.Error("windowed controls must stay visible")
+		}
+		// Read active state while painting: unlike reading it during layout,
+		// this does not turn the drag region into a clickable control.
+		screen.DrawOver(func(_ *ui.Painter, _ ui.Rect) { pressed = screen.Pressed() })
+	}, 1120, 760)
+	tt.Move(500, 24)
+	tt.Press(500, 24)
+	tt.Advance(time.Second / 30)
+	if pressed {
+		t.Fatal("overlay tracking captured the press instead of handing it to native window dragging")
+	}
+	tt.Release(580, 64)
+}
 
 func TestShellDragHandles(t *testing.T) {
 	_, doc := suggestionTestServer(t)
@@ -81,6 +103,10 @@ func TestPlayerDragHandle(t *testing.T) {
 	tt := ui.NewTester(a.view, 1120, 760)
 	tt.SetTitleBar(dragBar)
 	tt.Frame()
+	background, ok := tt.Find("拖动窗口（播放页空白）")
+	if !ok || background != (ui.Rect{W: 1120, H: 760}) {
+		t.Fatalf("player background has no full-page window drag handle: %+v", background)
+	}
 	// The header's title is the drag handle: it sits beside the back
 	// button, below the traffic-light band, not in a band above it.
 	title, ok := tt.Find("拖动窗口")
@@ -99,5 +125,8 @@ func TestPlayerDragHandle(t *testing.T) {
 	tt.Frame()
 	if _, ok := tt.Find("拖动窗口"); ok {
 		t.Fatal("player drag handle is drawn in full screen, where it cannot drag")
+	}
+	if _, ok := tt.Find("拖动窗口（播放页空白）"); ok {
+		t.Fatal("player background remains draggable in fullscreen")
 	}
 }

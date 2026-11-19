@@ -28,12 +28,19 @@ type playerOverlayState struct {
 func (a *app) setFullScreen(full bool) {
 	a.fullScreen = full
 	a.playerOverlay = playerOverlayState{}
+	a.playerPointer.clickAt = time.Time{}
 	if full {
 		a.panelOpen, a.panelTouched = false, false
 	}
 }
 
 func (a *app) playerOverlaysVisible(c *ui.Context, screen ui.Element) bool {
+	// PointerPosition makes the element consume presses, which prevents
+	// DragWindow from handing them to macOS. Only fullscreen needs pointer
+	// tracking: windowed controls are always visible and must remain draggable.
+	if !a.fullScreen {
+		return true
+	}
 	s := &a.playerOverlay
 	x, y, over := screen.PointerPosition()
 	now := c.Now()
@@ -42,9 +49,6 @@ func (a *app) playerOverlaysVisible(c *ui.Context, screen ui.Element) bool {
 	}
 	s.pointerX, s.pointerY, s.pointerOver = x, y, over
 	s.keepVisible = false
-	if !a.fullScreen {
-		return true
-	}
 	if now.Before(s.hideAt) {
 		c.After(s.hideAt.Sub(now))
 		return true
@@ -73,6 +77,7 @@ func (a *app) playerScreen(c *ui.Context) {
 		a.shell(c)
 		return
 	}
+	a.flushPlayerClick(c, p)
 	width, _ := c.Size()
 	compact := width < 900
 	overlayPanel := compact || a.fullScreen
@@ -80,7 +85,13 @@ func (a *app) playerScreen(c *ui.Context) {
 	hasEpisodes := a.hasEpisodes() || (a.playingLive && len(a.live.channels) > 1)
 	screen := ui.Box(c).Fill().Background(playerInk).ObserveInput(func(ev ui.InputEvent) {
 		a.playerOverlay.hideAt = ev.Time.Add(playerOverlayIdle)
+		if ev.Kind == ui.InputKeyDown {
+			a.playerPointer.clickAt = time.Time{}
+		}
 	})
+	if !a.fullScreen && dragStripHeight(c) > 0 {
+		screen.DragWindow().Label("拖动窗口（播放页空白）")
+	}
 	showControls := a.playerOverlaysVisible(c, screen)
 	showPanel := hasEpisodes && a.panelOpen && (!compact || a.panelTouched) && showControls
 	if !showControls {
@@ -89,7 +100,11 @@ func (a *app) playerScreen(c *ui.Context) {
 	screen.Children(func() {
 		ui.Row(c).Fill().Children(func() {
 			ui.Box(c).Grow(1).FillHeight().Clip().Children(func() {
-				ui.Video(c, p).Key(p).Fill().Fit(ui.Contain).Label("视频画面").Focusable().AutoFocus().Bind(&a.playerFocus)
+				ui.Video(c, p).Key(p).Fill().Fit(ui.Contain).Label("视频画面").Focusable().AutoFocus().Bind(&a.playerFocus).
+					HitTest(func(x, y float32, r ui.Rect) bool {
+						w, h := p.Size()
+						return a.fullScreen || playerPictureRect(r, w, h).Contains(x, y)
+					}).HandleInput(func(ev ui.InputEvent) bool { return a.handlePlayerPointer(p, ev) })
 				a.playerState(c, p)
 				if showControls {
 					a.playerControls(c, p, hasEpisodes, compact)
@@ -287,7 +302,7 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 						fullLabel = "退出全屏"
 					}
 					if ui.Button(c, fullLabel).Radius(16).Material(glass.Glass{Style: glass.Clear, Interactive: true}).TextColor(playerText).Clicked() {
-						a.window.ToggleFullScreen()
+						a.togglePlayerFullScreen()
 						a.playerFocus.Focus(c)
 					}
 				}
@@ -534,6 +549,7 @@ func (a *app) leavePlayer() {
 	a.playingFile = false
 	a.playingName = ""
 	a.playerOverlay = playerOverlayState{}
+	a.playerPointer = playerPointerState{}
 	a.playbackWait = playbackWait{}
 	a.playFailure = nil
 	a.status = ""

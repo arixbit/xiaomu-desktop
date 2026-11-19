@@ -37,7 +37,7 @@ macOS 13+ · Apple Silicon / Intel · [下载最新版](https://github.com/arixb
 
 ## 下载与安装
 
-v0.8.1 提供 `.dmg` 和 ZIP 两种 Universal 安装包，可直接在 macOS 13 及以上运行。安装包附有 `SHA256SUMS` 校验文件。 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest)
+v0.8.2 提供 `.dmg` 和 ZIP 两种 Universal 安装包，可直接在 macOS 13 及以上运行。安装包附有 `SHA256SUMS` 校验文件。 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest)
 
 1. 打开 `.dmg`，将 `Xiaomu.app` 拖到“应用程序”。也可使用 ZIP，解压后移动 App。
 2. 本版使用本地签名，尚无 Developer ID 签名及 Apple 公证。首次打开如被系统拦截，请在确认下载来源后，到“系统设置 → 隐私与安全性”选择“仍要打开”。也可以在终端执行 `xattr -d com.apple.quarantine /Applications/Xiaomu.app` 去掉隔离标记，之后双击即可打开；这会跳过 Gatekeeper 的首次检查，只在你信任下载来源时使用。
@@ -48,6 +48,8 @@ v0.8.1 提供 `.dmg` 和 ZIP 两种 Universal 安装包，可直接在 macOS 13 
 小幕只是播放器。它不提供、不收录、不分发任何影视内容。配置和规则由使用者自己提供，使用后果也由使用者自己承担。
 
 ## 功能
+
+v0.8.2 修复：播放期间保持显示器和电脑唤醒，暂停或结束后恢复正常睡眠；播放页顶部空白处和视频黑边可拖动窗口；单击画面暂停／继续，双击进入／退出全屏且不改变播放状态。
 
 v0.8.1 修复：部分 HLS 视频停在结尾前不足一秒时无法自动播放下一集，以及切集时读取旧播放器可能导致的崩溃。暂停、缓冲、关闭自动播放或最后一集时不会误切。
 
@@ -67,6 +69,7 @@ v0.8.0 更新：
 - **来源记忆**：同剧优先上次实际播放成功的来源和线路，并记录起播等待与播放失败。解析成功不算实播成功；续播严格匹配同一集，播放中仍由用户手动换源。
 - **点播恢复**：解析失败，或连续 30 秒没有画面／缓冲没有进度时，提供重试、换线路及可用的换来源入口。超时会暂停当前视频，手动选择后重新解析；保留对应分集与续播位置。
 - **播放偏好**：音量、点播播速、自动下一集开关保存在本机，重启与切集后恢复。直播使用正常速度。
+- **播放防睡眠**：视频播放期间阻止系统因闲置而熄屏或睡眠；暂停、结束、播放失败或离开播放器后恢复正常睡眠，不修改系统电源设置。
 
 现有功能：
 
@@ -80,6 +83,7 @@ v0.8.0 更新：
 - 网页取流：识别 CMS 分享页、HTML5 播放器、MacCMS 播放配置与 iframe，支持配置中的 type 0 网页解析和 type 1 JSON 解析。动态网页使用临时 WKWebView 会话，采集媒体请求和所需 UA / Referer / Cookie，不向页面开放 Go 方法。
 - 独立播放页：MyGo 原生视频画面、Glass 控件、进度、播放速度、音量、全屏、线路与选集，以及可关闭的播完自动下一集。进度条右侧显示当前解码画面的实际分辨率，全屏时随播放控件隐藏和恢复。
   播放快捷键：空格暂停／继续，左右方向键快退／快进 10 秒，Esc 退出全屏。全屏控件隐藏时同样有效；输入框、弹窗及正在用键盘操作的控件优先处理按键，直播和时长未知的视频不快进。
+  鼠标操作：单击视频画面暂停／继续，双击进入／退出全屏，双击不会改变播放状态；窗口模式下可从播放页空白处、视频黑边或顶部片名栏拖动窗口。
 - 系统集成：双击本地 mp4、mov、m4v、m3u8 文件用小幕打开播放；`xiaomu://play?url=...` 打开播放地址，`xiaomu://search?wd=...` 打开应用并搜索片名；追剧发现新集时发系统通知，点击打开该剧详情；播放时系统“正在播放”显示片名和分集，媒体键可播放／暂停、切上一集／下一集（直播切频道）。
 - IPTV 直播：M3U/M3U8 频道列表、TXT 分组列表、TVBox `lives` 内嵌频道或外部列表；支持频道搜索、分组、上一/下一频道和备用线路自动切换。列表和频道中的 User-Agent、Referer、Cookie 等请求头经本地代理传递；HLS 分片不会被当成频道。
 
@@ -168,11 +172,14 @@ mkdir -p /tmp/xiaomu-local-hls
 ffmpeg -f lavfi -i testsrc2=size=160x90:rate=10 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 6 -c:v libx264 -pix_fmt yuv420p -g 10 -c:a aac -hls_time 1 -hls_list_size 0 -hls_flags independent_segments -hls_segment_filename /tmp/xiaomu-local-hls/segment-%03d.ts /tmp/xiaomu-local-hls/stream.m3u8
 XIAOMU_NATIVE_MEDIA_DIR=/tmp/xiaomu-local-hls go test ./cmd/xiaomu -run '^TestNativeIPTVHLS$' -v -count=1 -timeout=45s
 XIAOMU_NATIVE_MEDIA_DIR=/tmp/xiaomu-local-hls go test ./cmd/xiaomu -run '^TestNativeAutoNextAtHLSEnd$' -v -count=1 -timeout=30s
+XIAOMU_NATIVE_MEDIA_DIR=/tmp/xiaomu-local-hls go test ./cmd/xiaomu -run '^TestNativePlaybackPowerAssertions$' -v -count=1 -timeout=30s
 ```
 
 该测试验证 IPTV 导入、请求头转发、HLS 分片获取、真实解码画面变化及播放时间推进。普通 `go test ./...` 会跳过这项需要本机媒体环境的检查。外部直播地址的可达性、音频实际听感和其他编码仍需单独验证。
 
 自动切集测试使用同一份本地 HLS 夹具，将末段声明时长增加 0.1 秒，复现视频停止但未报告结束的情况，并验证下一集实际开始播放。
+
+防睡眠测试通过 `pmset -g assertions` 核对本进程在播放期间持有显示器和系统闲置睡眠断言，暂停、结束和关闭后释放；不修改系统睡眠计时，也不执行真实睡眠。
 
 ## 在 Mac 上确认播放
 

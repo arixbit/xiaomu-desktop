@@ -53,6 +53,7 @@ func (a *app) nowPlayingTitle() string {
 // syncNowPlaying publishes the full Now Playing info for what plays
 // now, or clears it when nothing plays.
 func (a *app) syncNowPlaying() {
+	defer a.syncPlaybackPower(time.Now())
 	if a.nowPlaying == nil {
 		return
 	}
@@ -125,6 +126,7 @@ func (a *app) observeNowPlaying() {
 // syncNowPlayingState republishes only the play state and position,
 // e.g. after a play/pause toggle or a seek.
 func (a *app) syncNowPlayingState() {
+	defer a.syncPlaybackPower(time.Now())
 	if a.nowPlaying == nil || a.player == nil {
 		return
 	}
