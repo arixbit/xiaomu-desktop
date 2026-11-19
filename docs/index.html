@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小幕 Xiaomu — 一个入口，聚合你的所有片源</title>
+<meta name="description" content="小幕是一款 macOS 原生多源影视播放器：导入自己的配置，豆瓣热门、跨站搜索、继续观看、追剧都有了。免费开源，macOS 13+ 就能装。">
+<link rel="icon" href="assets/icon.svg">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap top-inner">
+    <a class="brand" href="#">
+      <img src="assets/icon.svg" alt="小幕图标" width="32" height="32">
+      <span>小幕</span>
+    </a>
+    <nav>
+      <a href="#features">功能</a>
+      <a href="#screens">界面</a>
+      <a href="#install">安装</a>
+      <a href="https://github.com/arixbit/xiaomu-desktop" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <!-- Hero -->
+  <section class="hero">
+    <div class="wrap hero-inner">
+      <img class="hero-icon" src="assets/icon.svg" alt="小幕图标" width="96" height="96">
+      <h1>小幕 <span class="latin">Xiaomu</span></h1>
+      <p class="tagline">一个入口，聚合你的所有片源。</p>
+      <p class="lede">macOS 原生桌面影视播放器。导入自己的 TVBox 配置或直播列表，豆瓣热门、跨站搜索、继续观看、追剧都有了。</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="https://github.com/arixbit/xiaomu-desktop/releases/latest">免费下载</a>
+        <a class="btn btn-ghost" href="https://github.com/arixbit/xiaomu-desktop">在 GitHub 上查看</a>
+      </div>
+      <p class="meta">macOS 13+ · Apple Silicon / Intel · 免费开源</p>
+      <figure class="hero-shot">
+        <img src="screenshots/home.webp" alt="小幕首页，展示继续观看、追剧和热播榜单" width="1440" height="998">
+      </figure>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section id="features" class="section">
+    <div class="wrap">
+      <h2>功能</h2>
+      <p class="section-intro">看片要的东西都在这儿，不用在各个 App 之间来回切。</p>
+      <div class="grid">
+        <article class="card">
+          <h3>豆瓣热门推荐</h3>
+          <p>首页有热播电影、热播剧集和最近更新榜单。点海报直接在你自己的片库里搜，榜单只提供片名、海报和评分，不提供播放地址。</p>
+        </article>
+        <article class="card">
+          <h3>跨站搜索</h3>
+          <p>按 ⌘K 输入片名，一次搜遍所有已导入的片源。同名影片合并成一项，并标出来源数。</p>
+        </article>
+        <article class="card">
+          <h3>继续观看</h3>
+          <p>首页最上方显示最近 6 部的海报、分集和进度，点一下就从上次的地方接着看。</p>
+        </article>
+        <article class="card">
+          <h3>追剧</h3>
+          <p>收藏的剧显示观看进度、最新分集和新集标记。刷新发现新集时发一条系统通知，点通知直接打开那部剧。</p>
+        </article>
+        <article class="card">
+          <h3>断点续播</h3>
+          <p>播放中切换来源或线路也不丢进度。解析失败或地址过期时可以重试，保留原来的分集和续播位置。</p>
+        </article>
+        <article class="card">
+          <h3>播放偏好记忆</h3>
+          <p>音量、点播倍速、自动下一集按本机保存，重启和切集后恢复。每部剧还能单独设置片头、片尾跳过秒数。</p>
+        </article>
+        <article class="card">
+          <h3>片源测速</h3>
+          <p>来源按实际请求耗时排序，快的排在前面。片源页可以手动重新测速，播放页实时显示下载速度。</p>
+        </article>
+        <article class="card">
+          <h3>系统集成</h3>
+          <p>双击本地 mp4、mov、m4v、m3u8 文件用小幕打开；<code>xiaomu://</code> 链接可以直接播放或搜索；播放时控制中心显示片名和分集，媒体键能暂停、切集。</p>
+        </article>
+        <article class="card">
+          <h3>应用内更新</h3>
+          <p>侧边栏“检查更新”就能升级，更新包经过签名校验，历史和追剧数据都会保留。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- Screenshots -->
+  <section id="screens" class="section section-alt">
+    <div class="wrap">
+      <h2>界面</h2>
+      <p class="section-intro">截图展示了导入配置后的界面，播放内容来自用户自备的片源。</p>
+      <div class="shots">
+        <figure>
+          <img src="screenshots/home.webp" alt="首页，展示继续观看、追剧和热播榜单" width="1440" height="998" loading="lazy">
+          <figcaption>首页：继续观看、追剧和热播榜单</figcaption>
+        </figure>
+        <figure>
+          <img src="screenshots/search.webp" alt="跨站搜索结果，影片卡片显示来源数量" width="1440" height="998" loading="lazy">
+          <figcaption>跨站搜索：同名影片合并，标出来源数</figcaption>
+        </figure>
+        <figure>
+          <img src="screenshots/detail.webp" alt="影片详情页，展开来源、线路和分集" width="1440" height="998" loading="lazy">
+          <figcaption>影片详情：来源、线路和分集分层展开</figcaption>
+        </figure>
+        <figure>
+          <img src="screenshots/player.webp" alt="播放器，右侧显示线路和选集" width="1440" height="998" loading="lazy">
+          <figcaption>播放页：线路与选集面板</figcaption>
+        </figure>
+        <figure>
+          <img src="screenshots/player-wide.webp" alt="收起选集面板后的播放界面" width="1440" height="998" loading="lazy">
+          <figcaption>播放页：收起选集面板的大画面</figcaption>
+        </figure>
+        <figure>
+          <img src="screenshots/history.webp" alt="本机播放历史和续播进度" width="1440" height="998" loading="lazy">
+          <figcaption>播放历史：分集与续播进度</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- Install -->
+  <section id="install" class="section">
+    <div class="wrap">
+      <h2>安装</h2>
+      <p class="section-intro">三步装好。要求 macOS 13 及以上，Universal 安装包同时支持 Apple Silicon 和 Intel。</p>
+      <ol class="steps">
+        <li>
+          <h3>下载</h3>
+          <p>从 <a href="https://github.com/arixbit/xiaomu-desktop/releases/latest">GitHub Releases</a> 下载 <code>.dmg</code> 或 ZIP 安装包，附有 <code>SHA256SUMS</code> 校验文件。</p>
+        </li>
+        <li>
+          <h3>安装</h3>
+          <p>打开 <code>.dmg</code>，把 <code>Xiaomu.app</code> 拖到“应用程序”。用 ZIP 的话，解压后把 App 移过去就行。</p>
+        </li>
+        <li>
+          <h3>首次打开</h3>
+          <p>小幕使用本地签名，尚无 Apple Developer ID 签名及公证。首次打开如被系统拦截，请在确认下载来源后，到“系统设置 → 隐私与安全性”选择“仍要打开”。也可以在终端执行：</p>
+          <pre><code>xattr -d com.apple.quarantine /Applications/Xiaomu.app</code></pre>
+          <p>这会跳过 Gatekeeper 的首次检查，只在你信任下载来源时使用。</p>
+        </li>
+      </ol>
+      <p class="start">装好后，在首页粘贴自己的配置地址并导入 → 搜索片名 → 打开影片选集播放。</p>
+    </div>
+  </section>
+
+  <!-- Notes -->
+  <section class="section section-alt">
+    <div class="wrap narrow">
+      <h2>说明</h2>
+      <ul class="notes">
+        <li><strong>小幕不内置片源或默认配置。</strong>片源和直播列表由使用者自己提供，小幕只是播放器，不提供、不收录、不分发任何影视内容。</li>
+        <li>开源协议为 <a href="https://github.com/arixbit/xiaomu-desktop/blob/main/LICENSE">CC BY-NC-SA 4.0</a>（署名—非商业性使用—相同方式共享）。</li>
+        <li>用 MyGo 构建，界面和播放器均为 macOS 原生。遇到问题或有建议，欢迎到 <a href="https://github.com/arixbit/xiaomu-desktop/issues">GitHub Issues</a> 反馈。</li>
+      </ul>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap foot-inner">
+    <p>小幕 Xiaomu · 免费开源 · <a href="https://github.com/arixbit/xiaomu-desktop">GitHub</a> · <a href="https://github.com/arixbit/xiaomu-desktop/releases/latest">下载最新版</a></p>
+    <p class="foot-small">Copyright (c) 2026 arixbit · CC BY-NC-SA 4.0</p>
+  </div>
+</footer>
+
+</body>
+</html>
