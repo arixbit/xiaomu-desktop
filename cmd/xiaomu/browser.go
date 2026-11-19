@@ -169,6 +169,8 @@ func (a *app) closeSession(s source.Session) {
 
 func (a *app) close() {
 	a.closed = true
+	a.cancelSourceSpeedTest()
+	a.posters.close()
 	a.pending, a.pendingLibrary = nil, nil
 	a.cancelFollowingRefresh()
 	a.stopScan(&a.library.feed)
@@ -180,6 +182,9 @@ func (a *app) close() {
 		}
 	}
 	a.flushHistory()
+	if err := a.latency.flush(); err != nil {
+		a.status = "测速记录保存失败：" + err.Error()
+	}
 	a.closeSite()
 	a.clearTitle()
 	if a.player != nil {

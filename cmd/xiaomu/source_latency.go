@@ -33,6 +33,7 @@ type latencyEntry struct {
 // a config URL or a media address — the key is a site identity, and the
 // file lives beside the saved source, like the search history.
 type latencyStore struct {
+	writer  *latencyWriter
 	entries map[string]latencyEntry
 	path    string
 }
@@ -124,9 +125,11 @@ func formatLatency(d time.Duration) string {
 // workers measure, and the UI thread records, so a slow site never
 // blocks the page and the labels fill in as results arrive.
 type sourceSpeedTest struct {
-	running bool
-	done    int
-	total   int
+	cancel     context.CancelFunc
+	generation uint64
+	running    bool
+	done       int
+	total      int
 }
 
 // speedTestEntries is every supported site the sources page lists, each
@@ -159,6 +162,11 @@ func (a *app) speedTestEntries() []library.Entry {
 func measureSite(ctx context.Context, entry library.Entry, assets string) time.Duration {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	release, err := source.AcquireBackground(ctx)
+	if err != nil {
+		return 0
+	}
+	defer release()
 	start := time.Now()
 	session, _, err := source.Open(ctx, entry.Site, assets)
 	if err != nil {
@@ -177,20 +185,34 @@ type speedTestResult struct {
 // measurement per site per press. Four workers bound the network work,
 // as the library scan does; the button stays disabled until the last
 // site answers or times out.
+func (a *app) cancelSourceSpeedTest() {
+	s := &a.speedTest
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+	s.generation++
+	s.running = false
+}
+
 func (a *app) startSourceSpeedTest() {
-	if a.speedTest.running || a.library.root == nil {
+	if a.closed || a.speedTest.running || a.library.root == nil {
 		return
 	}
 	entries := a.speedTestEntries()
 	if len(entries) == 0 {
 		return
 	}
+	a.cancelSourceSpeedTest()
+	ctx, cancel := context.WithCancel(context.Background())
+	a.speedTest.cancel = cancel
+	generation := a.speedTest.generation
 	a.speedTest.running, a.speedTest.done, a.speedTest.total = true, 0, len(entries)
 	assets := strings.TrimSpace(a.browser.assets)
 	dispatch := a.dispatch
 	update := func(fn func()) {
 		guarded := func() {
-			if !a.closed {
+			if !a.closed && a.speedTest.generation == generation {
 				fn()
 			}
 		}
@@ -201,36 +223,55 @@ func (a *app) startSourceSpeedTest() {
 		}
 	}
 	work := func() {
-		ctx := context.Background()
+		defer cancel()
 		jobs := make(chan library.Entry)
-		results := make(chan speedTestResult)
+		results := make(chan speedTestResult, 4)
 		var wg sync.WaitGroup
 		for range 4 {
 			wg.Go(func() {
 				for entry := range jobs {
-					results <- speedTestResult{entry: entry, d: measureSite(ctx, entry, assets)}
+					if ctx.Err() != nil {
+						return
+					}
+					result := speedTestResult{entry: entry, d: measureSite(ctx, entry, assets)}
+					select {
+					case <-ctx.Done():
+						return
+					case results <- result:
+					}
 				}
 			})
 		}
 		go func() {
+			defer close(jobs)
 			for _, entry := range entries {
-				jobs <- entry
+				if ctx.Err() != nil {
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case jobs <- entry:
+				}
 			}
-			close(jobs)
 		}()
 		go func() {
 			wg.Wait()
 			close(results)
 		}()
 		for r := range results {
+			if ctx.Err() != nil {
+				continue
+			}
 			r := r
 			update(func() {
 				if r.d > 0 {
-					_ = a.latency.record(r.entry.Key(), r.d)
+					a.recordLatency(r.entry.Key(), r.d)
 				}
 				a.speedTest.done++
 				if a.speedTest.done >= a.speedTest.total {
 					a.speedTest.running = false
+					a.speedTest.cancel = nil
 				}
 			})
 		}

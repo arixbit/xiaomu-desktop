@@ -258,6 +258,13 @@ func execute(parent context.Context, work task, options Options) (out completion
 			out.doc = cached
 			return out
 		}
+		release, err := source.AcquireBackground(ctx)
+		if err != nil {
+			out.err = err
+			return out
+		}
+		defer release()
+		start = time.Now()
 		out.doc, out.err = config.Read(ctx, work.url, options.Fetch)
 		return out
 	}
@@ -280,6 +287,14 @@ func execute(parent context.Context, work task, options Options) (out completion
 		}()
 	}
 	var session source.Session
+	release, acquireErr := source.AcquireBackground(ctx)
+	if acquireErr != nil {
+		out.err = acquireErr
+		return out
+	}
+	defer release()
+	// Queueing for the shared budget is not the source's measured latency.
+	start = time.Now()
 	var categories []catalog.Category
 	var err error
 	if options.Query == "" {

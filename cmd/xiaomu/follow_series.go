@@ -238,8 +238,12 @@ func followingDetail(ctx context.Context, e favoriteEntry, root *config.Config, 
 			doc = root
 		}
 		if doc == nil {
-			var err error
+			release, err := source.AcquireBackground(ctx)
+			if err != nil {
+				return item, nil, catalog.Detail{}, err
+			}
 			doc, err = config.Read(ctx, e.ConfigURL, nil)
+			release()
 			if err != nil {
 				return item, nil, catalog.Detail{}, err
 			}
@@ -268,6 +272,11 @@ func followingDetail(ctx context.Context, e favoriteEntry, root *config.Config, 
 			return item, nil, catalog.Detail{}, fmt.Errorf("当前片库暂未找到这部剧")
 		}
 	}
+	release, err := source.AcquireBackground(ctx)
+	if err != nil {
+		return item, nil, catalog.Detail{}, err
+	}
+	defer release()
 	session, detail, err := openItem(ctx, item, assets)
 	return item, session, detail, err
 }
