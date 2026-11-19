@@ -81,6 +81,10 @@ func TestPlayerDragHandle(t *testing.T) {
 	tt := ui.NewTester(a.view, 1120, 760)
 	tt.SetTitleBar(dragBar)
 	tt.Frame()
+	background, ok := tt.Find("拖动窗口（播放页空白）")
+	if !ok || background != (ui.Rect{W: 1120, H: 760}) {
+		t.Fatalf("player background has no full-page window drag handle: %+v", background)
+	}
 	// The header's title is the drag handle: it sits beside the back
 	// button, below the traffic-light band, not in a band above it.
 	title, ok := tt.Find("拖动窗口")
@@ -99,5 +103,8 @@ func TestPlayerDragHandle(t *testing.T) {
 	tt.Frame()
 	if _, ok := tt.Find("拖动窗口"); ok {
 		t.Fatal("player drag handle is drawn in full screen, where it cannot drag")
+	}
+	if _, ok := tt.Find("拖动窗口（播放页空白）"); ok {
+		t.Fatal("player background remains draggable in fullscreen")
 	}
 }

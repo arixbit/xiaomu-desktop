@@ -94,6 +94,7 @@ type app struct {
 	panelTouched    bool
 	fullScreen      bool
 	playerOverlay   playerOverlayState
+	playerPointer   playerPointerState
 	playerFocus     ui.Handle
 	autoNext        bool
 	autoNextPending bool
@@ -139,6 +140,7 @@ func (a *app) adoptPlayer(p *ui.VideoPlayer) {
 	a.resumeIssued = false
 	a.panelOpen, a.panelTouched, a.panelSource, a.panelTab = !a.fullScreen, false, -1, 0
 	a.playerOverlay = playerOverlayState{}
+	a.playerPointer = playerPointerState{}
 	a.autoNextPending = false
 	a.episodeEnd = playbackEnd{}
 	a.playingFile = false
