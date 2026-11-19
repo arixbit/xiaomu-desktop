@@ -37,7 +37,7 @@ macOS 13+ · Apple Silicon / Intel · [下载最新版](https://github.com/arixb
 
 ## 下载与安装
 
-v0.8.1 提供 `.dmg` 和 ZIP 两种 Universal 安装包，可直接在 macOS 13 及以上运行。安装包附有 `SHA256SUMS` 校验文件。 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest)
+v0.8.2 提供 `.dmg` 和 ZIP 两种 Universal 安装包，可直接在 macOS 13 及以上运行。安装包附有 `SHA256SUMS` 校验文件。 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest)
 
 1. 打开 `.dmg`，将 `Xiaomu.app` 拖到“应用程序”。也可使用 ZIP，解压后移动 App。
 2. 本版使用本地签名，尚无 Developer ID 签名及 Apple 公证。首次打开如被系统拦截，请在确认下载来源后，到“系统设置 → 隐私与安全性”选择“仍要打开”。也可以在终端执行 `xattr -d com.apple.quarantine /Applications/Xiaomu.app` 去掉隔离标记，之后双击即可打开；这会跳过 Gatekeeper 的首次检查，只在你信任下载来源时使用。
@@ -48,6 +48,8 @@ v0.8.1 提供 `.dmg` 和 ZIP 两种 Universal 安装包，可直接在 macOS 13 
 小幕只是播放器。它不提供、不收录、不分发任何影视内容。配置和规则由使用者自己提供，使用后果也由使用者自己承担。
 
 ## 功能
+
+v0.8.2 修复：播放期间保持显示器和电脑唤醒，暂停或结束后恢复正常睡眠；播放页顶部空白处和视频黑边可拖动窗口；单击画面暂停／继续，双击进入／退出全屏且不改变播放状态。
 
 v0.8.1 修复：部分 HLS 视频停在结尾前不足一秒时无法自动播放下一集，以及切集时读取旧播放器可能导致的崩溃。暂停、缓冲、关闭自动播放或最后一集时不会误切。
 
