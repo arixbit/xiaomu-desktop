@@ -36,6 +36,7 @@ type app struct {
 	notify         func(id, title, body string)
 	nowPlaying     nowPlayingSink
 	nowPlayingLast nowPlayingSnapshot
+	playbackPower  playbackPower
 	// pending holds file/URL events that arrived before the window
 	// existed; they run in order once it does.
 	pending []func()
@@ -101,6 +102,7 @@ type app struct {
 
 func (a *app) view(c *ui.Context) {
 	defer a.observeNowPlaying()
+	defer a.syncPlaybackPower(time.Now())
 	a.handleKeyboard(c)
 	if c.Vibrancy() {
 		c.Root().Background(ui.Transparent)
@@ -200,6 +202,7 @@ func main() {
 	a.notify = postNotification
 	a.addRecent = mygo.App.AddRecentDocument
 	a.nowPlaying = mygo.NowPlaying
+	a.playbackPower.keepAwake = mygo.Power.KeepAwake
 	// System entry points. All are registered before Run so a file or
 	// link that launched the app is delivered too; the handlers queue
 	// with deferUntilReady when the window does not exist yet.

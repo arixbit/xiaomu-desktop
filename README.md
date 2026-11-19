@@ -67,6 +67,7 @@ v0.8.0 更新：
 - **来源记忆**：同剧优先上次实际播放成功的来源和线路，并记录起播等待与播放失败。解析成功不算实播成功；续播严格匹配同一集，播放中仍由用户手动换源。
 - **点播恢复**：解析失败，或连续 30 秒没有画面／缓冲没有进度时，提供重试、换线路及可用的换来源入口。超时会暂停当前视频，手动选择后重新解析；保留对应分集与续播位置。
 - **播放偏好**：音量、点播播速、自动下一集开关保存在本机，重启与切集后恢复。直播使用正常速度。
+- **播放防睡眠**：视频播放期间阻止系统因闲置而熄屏或睡眠；暂停、结束、播放失败或离开播放器后恢复正常睡眠，不修改系统电源设置。
 
 现有功能：
 
@@ -168,11 +169,14 @@ mkdir -p /tmp/xiaomu-local-hls
 ffmpeg -f lavfi -i testsrc2=size=160x90:rate=10 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 6 -c:v libx264 -pix_fmt yuv420p -g 10 -c:a aac -hls_time 1 -hls_list_size 0 -hls_flags independent_segments -hls_segment_filename /tmp/xiaomu-local-hls/segment-%03d.ts /tmp/xiaomu-local-hls/stream.m3u8
 XIAOMU_NATIVE_MEDIA_DIR=/tmp/xiaomu-local-hls go test ./cmd/xiaomu -run '^TestNativeIPTVHLS$' -v -count=1 -timeout=45s
 XIAOMU_NATIVE_MEDIA_DIR=/tmp/xiaomu-local-hls go test ./cmd/xiaomu -run '^TestNativeAutoNextAtHLSEnd$' -v -count=1 -timeout=30s
+XIAOMU_NATIVE_MEDIA_DIR=/tmp/xiaomu-local-hls go test ./cmd/xiaomu -run '^TestNativePlaybackPowerAssertions$' -v -count=1 -timeout=30s
 ```
 
 该测试验证 IPTV 导入、请求头转发、HLS 分片获取、真实解码画面变化及播放时间推进。普通 `go test ./...` 会跳过这项需要本机媒体环境的检查。外部直播地址的可达性、音频实际听感和其他编码仍需单独验证。
 
 自动切集测试使用同一份本地 HLS 夹具，将末段声明时长增加 0.1 秒，复现视频停止但未报告结束的情况，并验证下一集实际开始播放。
+
+防睡眠测试通过 `pmset -g assertions` 核对本进程在播放期间持有显示器和系统闲置睡眠断言，暂停、结束和关闭后释放；不修改系统睡眠计时，也不执行真实睡眠。
 
 ## 在 Mac 上确认播放
 
