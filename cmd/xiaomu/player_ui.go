@@ -35,6 +35,12 @@ func (a *app) setFullScreen(full bool) {
 }
 
 func (a *app) playerOverlaysVisible(c *ui.Context, screen ui.Element) bool {
+	// PointerPosition makes the element consume presses, which prevents
+	// DragWindow from handing them to macOS. Only fullscreen needs pointer
+	// tracking: windowed controls are always visible and must remain draggable.
+	if !a.fullScreen {
+		return true
+	}
 	s := &a.playerOverlay
 	x, y, over := screen.PointerPosition()
 	now := c.Now()
@@ -43,9 +49,6 @@ func (a *app) playerOverlaysVisible(c *ui.Context, screen ui.Element) bool {
 	}
 	s.pointerX, s.pointerY, s.pointerOver = x, y, over
 	s.keepVisible = false
-	if !a.fullScreen {
-		return true
-	}
 	if now.Before(s.hideAt) {
 		c.After(s.hideAt.Sub(now))
 		return true
