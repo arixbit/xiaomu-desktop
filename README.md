@@ -165,9 +165,12 @@ macOS 上可额外验证真实 AVPlayer 解码。用已安装的 FFmpeg 在仓�
 mkdir -p /tmp/xiaomu-local-hls
 ffmpeg -f lavfi -i testsrc2=size=160x90:rate=10 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 6 -c:v libx264 -pix_fmt yuv420p -g 10 -c:a aac -hls_time 1 -hls_list_size 0 -hls_flags independent_segments -hls_segment_filename /tmp/xiaomu-local-hls/segment-%03d.ts /tmp/xiaomu-local-hls/stream.m3u8
 XIAOMU_NATIVE_MEDIA_DIR=/tmp/xiaomu-local-hls go test ./cmd/xiaomu -run '^TestNativeIPTVHLS$' -v -count=1 -timeout=45s
+XIAOMU_NATIVE_MEDIA_DIR=/tmp/xiaomu-local-hls go test ./cmd/xiaomu -run '^TestNativeAutoNextAtHLSEnd$' -v -count=1 -timeout=30s
 ```
 
 该测试验证 IPTV 导入、请求头转发、HLS 分片获取、真实解码画面变化及播放时间推进。普通 `go test ./...` 会跳过这项需要本机媒体环境的检查。外部直播地址的可达性、音频实际听感和其他编码仍需单独验证。
+
+自动切集测试使用同一份本地 HLS 夹具，将末段声明时长增加 0.1 秒，复现视频停止但未报告结束的情况，并验证下一集实际开始播放。
 
 ## 在 Mac 上确认播放
 

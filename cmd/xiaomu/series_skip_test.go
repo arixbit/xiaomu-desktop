@@ -139,7 +139,7 @@ func TestEndingSkipHonorsAutoNextOffAndLastEpisode(t *testing.T) {
 		}
 		_ = a.seriesSkips.set(a.title.name, seriesSkipRule{Enabled: true, Ending: 10})
 		a.player.Seek(51 * time.Second)
-		a.advanceEpisode(a.player)
+		a.advanceEpisode(a.player, time.Now())
 		if a.autoNextPending || len(a.history.entries) != 0 {
 			t.Fatal("credits completed without an enabled next episode")
 		}
