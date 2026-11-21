@@ -50,7 +50,7 @@ func newPlayerTestApp(t *testing.T) *app {
 func TestPlayerScreenReturnsToLibrary(t *testing.T) {
 	a := newPlayerTestApp(t)
 	tt := ui.NewTester(a.view, 1120, 760)
-	if err := tt.Click("线路与选集"); err != nil {
+	if err := tt.Click("换源与选集"); err != nil {
 		t.Fatal(err)
 	}
 	if !tt.HasText("跳过") || !tt.HasText("2") || tt.HasText("第2集") || !tt.HasText("播完自动下一集") {
@@ -93,7 +93,7 @@ func TestFullscreenPlayerOverlays(t *testing.T) {
 	if !tt.HasText("返回") || !tt.HasText("音量") || tt.Cursor() == ui.CursorNone {
 		t.Fatalf("pointer movement did not restore controls: %v", tt.Texts())
 	}
-	if err := tt.Click("线路与选集"); err != nil {
+	if err := tt.Click("换源与选集"); err != nil {
 		t.Fatal(err)
 	}
 	if !tt.HasText("2") || tt.HasText("第2集") {
