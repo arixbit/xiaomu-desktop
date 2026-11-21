@@ -43,11 +43,10 @@ func playerWithTwoSites(t *testing.T, lines, episodes string) (*app, library.Ite
 	return a, item
 }
 
-func TestPlayerFindsSourcesAndRecoversOnChosenLine(t *testing.T) {
-	a, _ := playerWithTwoSites(t, "主线$$$备用线", "02$/broken.mp4#01$/first.mp4$$$03$/third.mp4#2$/second.mp4")
+func TestPlayerSwitchesKnownSourcesAndRecoversOnChosenLine(t *testing.T) {
+	a, other := playerWithTwoSites(t, "主线$$$备用线", "02$/broken.mp4#01$/first.mp4$$$03$/third.mp4#2$/second.mp4")
 	a.library.search.query = "示例"
 	a.nav = []routeKind{routeHome, routeSearch, routeDetail}
-	a.panelTab = 1
 	a.playFailure = &episodeFailure{line: "线路", episode: a.title.detail.Sources[0].Episodes[1], at: 24 * time.Second, err: errors.New("原线路失效")}
 	tt := ui.NewTester(a.view, 800, 640)
 	click := func(label string) {
@@ -56,11 +55,14 @@ func TestPlayerFindsSourcesAndRecoversOnChosenLine(t *testing.T) {
 			t.Fatalf("click %s: %v; screen: %v", label, err, tt.Texts())
 		}
 	}
-	click("换来源")
-	if !tt.HasText("甲站") || !tt.HasText("线路") || !tt.HasText("查找其他来源") {
-		t.Fatalf("single source and its lines missing from recovery panel: %v", tt.Texts())
+	click("换源与选集")
+	if !tt.HasText("甲站") || !tt.HasText("线路") || tt.HasText("查找其他来源") || tt.HasText("换来源") {
+		t.Fatalf("unexpected single-source panel: %v", tt.Texts())
 	}
-	click("查找其他来源")
+	// A search started before playback can still deliver another known source.
+	a.library.search.items = append(a.library.search.items, other)
+	tt.Frame()
+	click("换来源")
 	click("选择来源")
 	if len(tt.Menu()) != 2 {
 		t.Fatalf("expected the two exact-title sources: %v", tt.Menu())

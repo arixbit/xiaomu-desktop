@@ -403,32 +403,8 @@ func (a *app) panelEpisodes(c *ui.Context) {
 
 // Keep the source visible above its lines even when only one site is known.
 func (a *app) panelSources(c *ui.Context, candidates []library.Item) {
-	t := a.title
-	scan := &t.lookup
-	if titleKey(a.library.search.query) == titleKey(t.name) {
-		scan = &a.library.search
-	}
-	ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "来源").Bold().Grow(1)
-		if a.library.root == nil || scan.running {
-			return
-		}
-		switch {
-		case len(scan.more) > 0:
-			if ui.Button(c, "查找更多来源").Clicked() {
-				a.startScan(scan, scan.query, true)
-			}
-		case scan.query == "":
-			if ui.Button(c, "查找其他来源").Clicked() {
-				a.startScan(scan, t.name, false)
-			}
-		case scan.stopped || scan.progress.Failed > 0 || scan.progress.Cooling > 0:
-			if ui.Button(c, "重新查找").Clicked() {
-				a.reloadScan(scan)
-			}
-		}
-	})
-	item := t.item
+	ui.Text(c, "来源").Bold()
+	item := a.title.item
 	if a.panelChoice != nil {
 		item = a.panelChoice.item
 	}
@@ -445,11 +421,6 @@ func (a *app) panelSources(c *ui.Context, candidates []library.Item) {
 		}).Label("选择来源").FillWidth()
 	} else if label := item.Entry.Label(); label != "" {
 		ui.Text(c, label)
-	}
-	if scan.running {
-		ui.Text(c, fmt.Sprintf("正在查找来源 · %d/%d", scan.progress.Completed, scan.progress.Total)).FontSize(12)
-	} else if scan.query != "" && len(candidates) == 1 && len(scan.more) == 0 {
-		ui.Text(c, "暂未找到其他来源").FontSize(12)
 	}
 }
 

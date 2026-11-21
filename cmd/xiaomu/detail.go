@@ -24,7 +24,6 @@ type titlePage struct {
 	name, pic      string
 	score          string            // Douban score, when the opener knew one
 	seeds          []library.Item    // sources known when the page opened
-	lookup         libraryScan       // exact-title lookup without replacing the search page
 	failed         map[string]string // source → why it could not be read
 	auto           bool              // open the first source that reads
 	searchFallback bool              // a saved source may have disappeared
@@ -89,7 +88,6 @@ func (a *app) clearTitle() {
 	a.cancelJob(jobTitle)
 	a.cancelJob(jobPlay)
 	if a.title != nil {
-		a.stopScan(&a.title.lookup)
 		a.clearPanelChoice()
 		a.closeSession(a.title.session)
 		a.title = nil
@@ -117,12 +115,10 @@ func (a *app) candidates() []library.Item {
 		seen[itemKey(t.item)] = true
 		out = append(out, t.item)
 	}
-	for _, items := range [][]library.Item{a.library.search.items, t.lookup.items} {
-		for _, item := range items {
-			if titleKey(item.Video.Name) == key && !seen[itemKey(item)] {
-				seen[itemKey(item)] = true
-				out = append(out, item)
-			}
+	for _, item := range a.library.search.items {
+		if titleKey(item.Video.Name) == key && !seen[itemKey(item)] {
+			seen[itemKey(item)] = true
+			out = append(out, item)
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
