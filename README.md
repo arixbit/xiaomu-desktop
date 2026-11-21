@@ -37,7 +37,7 @@ macOS 13+ · Apple Silicon / Intel · Windows 10/11 · x64 / ARM64 · [下载最
 
 ## 下载与安装
 
-v0.8.4 新增 Windows 安装包，macOS 提供 `.dmg` 和 ZIP 两种 Universal 构建。正式发布状态以 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest) 为准。安装包附有 `SHA256SUMS` 校验文件，改动及已知限制见 [v0.8.4 版本说明](docs/releases/v0.8.4.md)。
+v0.8.5 支持在播放页直接换源并接回当前集的进度。macOS 提供通用 DMG 和 ZIP，Windows 提供 x64 和 ARM64 安装包。下载页附有 `SHA256SUMS` 校验文件。[最新版下载](https://github.com/arixbit/xiaomu-desktop/releases/latest) · [v0.8.5 版本说明](docs/releases/v0.8.5.md)
 
 ### macOS
 
@@ -46,7 +46,7 @@ v0.8.4 新增 Windows 安装包，macOS 提供 `.dmg` 和 ZIP 两种 Universal �
 
 ### Windows
 
-在 GitHub Releases 下载 `xiaomu-setup-0.8.4-amd64.exe`，ARM64 设备使用 `xiaomu-setup-0.8.4-arm64.exe`。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
+在 GitHub Releases 下载 `xiaomu-setup-0.8.5-amd64.exe`，ARM64 设备使用 `xiaomu-setup-0.8.5-arm64.exe`。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
 
 打开小幕，在首页导入自己的配置。之后可以在侧边栏“片源”页更换配置，或在“直播”页导入自己的频道列表。
 
