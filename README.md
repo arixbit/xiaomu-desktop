@@ -2,9 +2,9 @@
 
 [![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/apps/xiaomu-desktop)
 
-一款基于 MyGo 构建的 macOS 原生多源播放器。导入自己的 TVBox 配置、IPTV 列表，或直接打开视频链接。 [MyGo 项目](https://github.com/egoist/mygo)
+一款基于 MyGo 构建的原生多源播放器。导入自己的 TVBox 配置、IPTV 列表，或直接打开视频链接。 [MyGo 项目](https://github.com/egoist/mygo)
 
-macOS 13+ · Apple Silicon / Intel · [下载最新版](https://github.com/arixbit/xiaomu-desktop/releases/latest)
+macOS 13+ · Apple Silicon / Intel · Windows 10/11 · x64 / ARM64 · [下载最新版](https://github.com/arixbit/xiaomu-desktop/releases/latest)
 
 - **跨站搜索**　按 `⌘K` 输入片名，同名影片的多个来源集中显示。
 - **选集播放**　在详情页选线路和分集，播放中也能切换来源。
@@ -37,11 +37,18 @@ macOS 13+ · Apple Silicon / Intel · [下载最新版](https://github.com/arixb
 
 ## 下载与安装
 
-v0.8.3 提供 `.dmg` 和 ZIP 两种 Universal 构建，支持 macOS 13 及以上；正式发布状态以 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest) 为准。安装包附有 `SHA256SUMS` 校验文件，性能改善及已知限制见 [v0.8.3 版本说明](docs/releases/v0.8.3.md)。
+v0.8.4 新增 Windows 安装包，macOS 提供 `.dmg` 和 ZIP 两种 Universal 构建。正式发布状态以 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest) 为准。安装包附有 `SHA256SUMS` 校验文件，改动及已知限制见 [v0.8.4 版本说明](docs/releases/v0.8.4.md)。
+
+### macOS
 
 1. 打开 `.dmg`，将 `Xiaomu.app` 拖到“应用程序”。也可使用 ZIP，解压后移动 App。
 2. 本版使用本地签名，尚无 Developer ID 签名及 Apple 公证。首次打开如被系统拦截，请在确认下载来源后，到“系统设置 → 隐私与安全性”选择“仍要打开”。也可以在终端执行 `xattr -d com.apple.quarantine /Applications/Xiaomu.app` 去掉隔离标记，之后双击即可打开；这会跳过 Gatekeeper 的首次检查，只在你信任下载来源时使用。
-3. 打开小幕，在首页导入自己的配置。之后可以在侧边栏“片源”页更换配置，或在“直播”页导入自己的频道列表。
+
+### Windows
+
+在 GitHub Releases 下载 `xiaomu-setup-0.8.4-amd64.exe`，ARM64 设备使用 `xiaomu-setup-0.8.4-arm64.exe`。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
+
+打开小幕，在首页导入自己的配置。之后可以在侧边栏“片源”页更换配置，或在“直播”页导入自己的频道列表。
 
 ## 免责声明
 

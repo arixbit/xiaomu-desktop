@@ -4,6 +4,7 @@ package main
 import (
 	"log"
 	"net/url"
+	"runtime"
 	"strings"
 	"time"
 
@@ -72,7 +73,7 @@ type app struct {
 
 	playingLive   bool
 	playingDirect bool
-	// playingFile is set for a local file opened from Finder; playingName
+	// playingFile is set for a local file opened from the file manager; playingName
 	// is that file's name, shown in the header and Now Playing.
 	playingFile    bool
 	playingName    string
@@ -199,6 +200,14 @@ func playbackHeaders(referer, ua string) map[string]string {
 }
 
 func main() {
+	// One instance only, before touching any state: a file opened with
+	// the app, or a xiaomu:// link clicked, while xiaomu runs must reach
+	// the running instance instead of starting another one that would
+	// read and write the same history. The second instance forwards its
+	// command line to the first and exits here.
+	if !mygo.App.RequestSingleInstanceLock() {
+		return
+	}
 	a := &app{autoNext: true, persist: true}
 	a.initUpdates()
 	a.notify = postNotification
@@ -218,15 +227,29 @@ func main() {
 		a.deferUntilReady(func() { a.handleNotificationClick(id) })
 	})
 	mygo.App.OnDidBecomeActive(func() { mygo.ClearNotifications() })
+	mygo.App.OnSecondInstance(func(args []string, workingDir string) {
+		// The forwarded file or link reaches OnOpenFile/OnOpenURL
+		// after this; bring the window forward first.
+		if w := a.window; w != nil {
+			w.Restore()
+			w.Focus()
+		}
+	})
 	mygo.NowPlaying.OnCommand(func(cmd mygo.MediaCommand, position time.Duration) {
 		a.handleMediaCommand(cmd, position)
 	})
 	// Claim the xiaomu:// scheme for this install. It is declared in
-	// mygo.json (urlSchemes), so the built .app lists it in Info.plist;
-	// registering at launch makes xiaomu the default handler for it.
-	// The error is ignored: in `go run` there is no bundle to declare
-	// it, and the app still works without being the handler.
-	_ = mygo.App.RegisterURLScheme("xiaomu")
+	// mygo.json (urlSchemes), so the built .app lists it in Info.plist
+	// and the Windows installer registers it; registering at launch
+	// makes xiaomu the default handler for it.
+	// Development builds must not claim it: `mygo dev` runs a temporary
+	// executable, and registering would point xiaomu:// at that instead
+	// of the installed app. The error is ignored: in `go run` there is
+	// no bundle to declare it, and the app still works without being
+	// the handler.
+	if !mygo.IsDev() {
+		_ = mygo.App.RegisterURLScheme("xiaomu")
+	}
 	mygo.App.WhenReady(func() {
 		win := mygo.NewWindow(mygo.WindowOptions{
 			Title:         "小幕",
@@ -241,6 +264,12 @@ func main() {
 		})
 		a.window = win
 		a.dispatch = win.Update
+		if runtime.GOOS == "windows" {
+			// The content under the caption buttons always has a dark background.
+			win.SetWindowButtonsTheme(mygo.ThemeDark)
+			fitMainWindow(win)
+			win.OnUnmaximize(func() { win.Update(func() { fitMainWindow(win) }) })
+		}
 		a.initDiscovery()
 		a.restoreHistory()
 		a.restoreFavorites()
@@ -251,7 +280,14 @@ func main() {
 		a.restoreSourceMemory()
 		a.setFullScreen(win.IsFullScreen())
 		win.OnEnterFullScreen(func() { win.Update(func() { a.setFullScreen(true) }) })
-		win.OnLeaveFullScreen(func() { win.Update(func() { a.setFullScreen(false) }) })
+		win.OnLeaveFullScreen(func() {
+			win.Update(func() {
+				a.setFullScreen(false)
+				if runtime.GOOS == "windows" {
+					fitMainWindow(win)
+				}
+			})
+		})
 		a.restoreSavedSource()
 		// Library actions wait separately for the asynchronous restore.
 		a.drainPending()
@@ -260,4 +296,28 @@ func main() {
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// MyGo can center an oversized window outside the Windows work area or
+// restore a saved rectangle that is only partially visible.
+func fitMainWindow(win *mygo.Window) {
+	if win.IsMaximized() || win.IsFullScreen() {
+		return
+	}
+	bounds := win.Bounds()
+	work := mygo.Screen.DisplayMatching(bounds).WorkArea
+	if fitted := windowBoundsInWorkArea(bounds, work); fitted != bounds {
+		win.SetBounds(fitted)
+	}
+}
+
+func windowBoundsInWorkArea(bounds, work mygo.Rectangle) mygo.Rectangle {
+	if work.Width <= 0 || work.Height <= 0 || bounds.Width <= 0 || bounds.Height <= 0 {
+		return bounds
+	}
+	bounds.Width = min(bounds.Width, work.Width)
+	bounds.Height = min(bounds.Height, work.Height)
+	bounds.X = min(max(bounds.X, work.X), work.X+work.Width-bounds.Width)
+	bounds.Y = min(max(bounds.Y, work.Y), work.Y+work.Height-bounds.Height)
+	return bounds
 }

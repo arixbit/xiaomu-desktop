@@ -81,6 +81,9 @@ func TestBrowserFlow(t *testing.T) {
 	if !tt.HasText("添加片源，开始观看") {
 		t.Fatalf("first launch should ask for a source: %v", tt.Texts())
 	}
+	if !tt.HasText("地址只保存在本机。") {
+		t.Fatalf("first launch should explain local storage: %v", tt.Texts())
+	}
 	if brand, ok := tt.Find("小幕"); !ok || brand.Y < 50 {
 		t.Fatalf("sidebar overlaps the macOS title bar: rect=%+v found=%v texts=%v", brand, ok, tt.Texts())
 	}

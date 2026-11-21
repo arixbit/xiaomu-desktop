@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arixbit/xiaomu-desktop/internal/fileurl"
 	"github.com/arixbit/xiaomu-desktop/internal/iptv"
 	"github.com/arixbit/xiaomu-desktop/internal/urljoin"
 	"github.com/egoist/mygo/netproxy"
@@ -124,7 +125,10 @@ func httpFetcher(client *http.Client, headers map[string]string) Fetcher {
 	}
 	return func(ctx context.Context, raw string) (Response, error) {
 		if strings.HasPrefix(raw, "file://") {
-			p := strings.TrimPrefix(raw, "file://")
+			p, err := fileurl.Path(raw)
+			if err != nil {
+				return Response{}, err
+			}
 			b, err := os.ReadFile(p)
 			if err != nil {
 				return Response{}, err

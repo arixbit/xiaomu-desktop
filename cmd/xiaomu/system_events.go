@@ -15,8 +15,8 @@ import (
 	"github.com/egoist/mygo/ui/video"
 )
 
-// playableFileExts are the extensions the built .app claims in mygo.json
-// (fileAssociations). Double-clicking one in Finder opens it in xiaomu.
+// playableFileExts are the extensions the built app claims in mygo.json
+// (fileAssociations). Double-clicking one in the file manager opens it in xiaomu.
 var playableFileExts = map[string]bool{
 	".mp4":  true,
 	".mov":  true,

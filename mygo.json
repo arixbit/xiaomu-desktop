@@ -1,8 +1,9 @@
 {
   "name": "Xiaomu",
   "identifier": "dev.arixbit.xiaomu",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "main": "./cmd/xiaomu",
+  "icon": "resources/icon.png",
   "urlSchemes": ["xiaomu"],
   "fileAssociations": [
     {
@@ -21,5 +22,9 @@
   "macos": {
     "icon": "xiaomu-icon/macos/AppIcon.icns",
     "minimumSystemVersion": "13.0"
+  },
+  "windows": {
+    "displayName": "小幕",
+    "installerInclude": "scripts/installer.nsh"
   }
 }

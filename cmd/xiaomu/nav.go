@@ -1,6 +1,8 @@
 package main
 
 import (
+	"runtime"
+
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/plugins/updater"
 	"github.com/egoist/mygo/ui"
@@ -201,8 +203,9 @@ func (a *app) shell(c *ui.Context) {
 }
 
 func (a *app) sidebar(c *ui.Context) {
-	// HiddenInset places macOS window controls over this pane, so it
-	// starts below them.
+	// The window controls sit in the title bar band above this pane
+	// (top-left on macOS, top-right on Windows), so it starts below
+	// them.
 	top := max(float32(52), c.TitleBar().Bottom+14)
 	// The pane itself is a drag handle: MyGo only starts a drag when
 	// the pressed element carries no other interactive flags, so the
@@ -268,6 +271,15 @@ func (a *app) toolbar(c *ui.Context) {
 	})
 }
 
+// searchShortcutHint is the search shortcut as the system shows it,
+// mirroring ui.Cmd: Command on macOS, Control elsewhere.
+func searchShortcutHint() string {
+	if runtime.GOOS == "darwin" {
+		return "⌘K"
+	}
+	return "Ctrl+K"
+}
+
 func (a *app) librarySearch(c *ui.Context) ui.Element {
 	return ui.Box(c).Key("library-search").Height(40).Children(func() {
 		if ui.Autocomplete(c, &a.browser.query, a.searchSuggestions()).Label("片名").Placeholder("搜索整个片库").
@@ -276,7 +288,7 @@ func (a *app) librarySearch(c *ui.Context) ui.Element {
 			a.searchLibrary()
 		}
 		ui.Icon(c, librarySearchIcon).Size(18, 18).Absolute().Left(14).Top(11).TextColor(textMuted).PassThrough()
-		ui.Text(c, "⌘K").FontSize(12).TextColor(textMuted).Absolute().Right(14).Top(11).PassThrough()
+		ui.Text(c, searchShortcutHint()).FontSize(12).TextColor(textMuted).Absolute().Right(14).Top(11).PassThrough()
 	})
 }
 
