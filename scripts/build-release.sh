@@ -20,4 +20,37 @@ if [ -z "$MYGO_UPDATER_PRIVATE_KEY" ]; then
   exit 1
 fi
 
-exec go tool mygo build -platform darwin/universal -skip-notarize "$@"
+# The build may succeed while skipping an artifact, so a successful build
+# alone does not mean a releasable one. Check every expected artifact
+# afterwards and fail listing what is missing. Names are MyGo's: the disk
+# image is xiaomu-<version>.dmg, the manual install archive is
+# xiaomu-<version>-macos-universal.zip, the update archive is
+# xiaomu-<version>-darwin-universal.tar.gz, and the manifest is
+# update-darwin-universal.json, all under build/darwin-universal/.
+# (Same check the Windows script got as its P1 fix; SHA256SUMS is made at
+# publish time, not by the build, so it is not checked here.)
+command -v python3 >/dev/null 2>&1 || {
+  printf '%s\n' '需要 python3 来读取 mygo.json 的版本。' >&2
+  exit 1
+}
+version=$(python3 -c 'import json; print(json.load(open("mygo.json"))["version"])')
+
+go tool mygo build -platform darwin/universal -skip-notarize "$@"
+
+missing=""
+for f in \
+  "build/darwin-universal/xiaomu-$version.dmg" \
+  "build/darwin-universal/xiaomu-$version-macos-universal.zip" \
+  "build/darwin-universal/xiaomu-$version-darwin-universal.tar.gz" \
+  "build/darwin-universal/update-darwin-universal.json" \
+; do
+  if [ ! -s "$f" ]; then
+    missing="$missing
+  $f"
+  fi
+done
+
+if [ -n "$missing" ]; then
+  printf '%s\n' "发布构建不完整，缺少以下产物：$missing" >&2
+  exit 1
+fi
