@@ -83,6 +83,7 @@ func (a *app) prepareExternalPlayback() {
 	a.pendingLibrary = nil
 	a.cancelJob(jobTitle)
 	a.cancelJob(jobPlay)
+	a.clearPanelChoice()
 	a.flushHistory()
 	a.sourceAttempt = sourcePlaybackAttempt{}
 }

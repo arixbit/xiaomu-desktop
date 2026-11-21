@@ -37,7 +37,7 @@ macOS 13+ · Apple Silicon / Intel · Windows 10/11 · x64 / ARM64 · [下载最
 
 ## 下载与安装
 
-v0.8.4 新增 Windows 安装包，macOS 提供 `.dmg` 和 ZIP 两种 Universal 构建。正式发布状态以 [GitHub Releases](https://github.com/arixbit/xiaomu-desktop/releases/latest) 为准。安装包附有 `SHA256SUMS` 校验文件，改动及已知限制见 [v0.8.4 版本说明](docs/releases/v0.8.4.md)。
+v0.8.5 支持在播放页直接换源并接回当前集的进度。macOS 提供通用 DMG 和 ZIP，Windows 提供 x64 和 ARM64 安装包。下载页附有 `SHA256SUMS` 校验文件。[最新版下载](https://github.com/arixbit/xiaomu-desktop/releases/latest) · [v0.8.5 版本说明](docs/releases/v0.8.5.md)
 
 ### macOS
 
@@ -46,7 +46,7 @@ v0.8.4 新增 Windows 安装包，macOS 提供 `.dmg` 和 ZIP 两种 Universal �
 
 ### Windows
 
-在 GitHub Releases 下载 `xiaomu-setup-0.8.4-amd64.exe`，ARM64 设备使用 `xiaomu-setup-0.8.4-arm64.exe`。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
+在 GitHub Releases 下载 `xiaomu-setup-0.8.5-amd64.exe`，ARM64 设备使用 `xiaomu-setup-0.8.5-arm64.exe`。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
 
 打开小幕，在首页导入自己的配置。之后可以在侧边栏“片源”页更换配置，或在“直播”页导入自己的频道列表。
 
@@ -91,6 +91,7 @@ v0.8.0 更新：
 - 打开链接：侧边栏底部“打开链接”可粘贴 mp4/m3u8，可选 Referer 和 User-Agent。片库解析出的请求头也会经本机 `127.0.0.1` 代理注入，再交给 MyGo `ui.Video` 播放。
 - 网页取流：识别 CMS 分享页、HTML5 播放器、MacCMS 播放配置与 iframe，支持配置中的 type 0 网页解析和 type 1 JSON 解析。动态网页使用临时 WKWebView 会话，采集媒体请求和所需 UA / Referer / Cookie，不向页面开放 Go 方法。
 - 独立播放页：MyGo 原生视频画面、Glass 控件、进度、播放速度、音量、全屏、线路与选集，以及可关闭的播完自动下一集。进度条右侧显示当前解码画面的实际分辨率，全屏时随播放控件隐藏和恢复。
+  打开“换源与选集”可查看当前来源、线路和分集。有多个已知来源时，点来源名称即可切换。新来源有同一集时会接着原进度播放，找不到对应集时可以手动选择。
   播放快捷键：空格暂停／继续，左右方向键快退／快进 10 秒，Esc 退出全屏。全屏控件隐藏时同样有效；输入框、弹窗及正在用键盘操作的控件优先处理按键，直播和时长未知的视频不快进。
   鼠标操作：单击视频画面暂停／继续，双击进入／退出全屏，双击不会改变播放状态；窗口模式下可从播放页空白处、视频黑边或顶部片名栏拖动窗口。
 - 系统集成：双击本地 mp4、mov、m4v、m3u8 文件用小幕打开播放；`xiaomu://play?url=...` 打开播放地址，`xiaomu://search?wd=...` 打开应用并搜索片名；追剧发现新集时发系统通知，点击打开该剧详情；播放时系统“正在播放”显示片名和分集，媒体键可播放／暂停、切上一集／下一集（直播切频道）。

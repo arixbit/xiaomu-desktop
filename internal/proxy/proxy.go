@@ -120,13 +120,15 @@ func (p *Proxy) Header(name string) string {
 	return ""
 }
 
-// Close stops the listener. Issued playback tokens die with it.
+// Close stops the listener, revokes playback tokens and releases upstream connections.
 func (p *Proxy) Close() error {
 	p.RevokeAllNASFiles()
 	if p.srv == nil {
 		return nil
 	}
-	return p.srv.Close()
+	err := p.srv.Close()
+	p.client.CloseIdleConnections()
+	return err
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {

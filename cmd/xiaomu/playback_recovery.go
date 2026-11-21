@@ -108,7 +108,7 @@ func (a *app) recoveryActions(c *ui.Context) {
 			a.playNextLine()
 		}
 		if a.player != nil && len(a.candidates()) > 1 && glassButton(c, "换来源").TextColor(playerText).Clicked() {
-			a.panelTab, a.panelOpen, a.panelTouched = 1, true, true
+			a.panelTab, a.panelOpen, a.panelTouched = 0, true, true
 			a.playerOverlay = playerOverlayState{}
 		}
 		if glassButton(c, "重试").TextColor(playerText).Clicked() {
