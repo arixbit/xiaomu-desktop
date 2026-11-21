@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -56,6 +57,8 @@ func nasTestProxy(t *testing.T) *Proxy {
 		switch path {
 		case `电影\示例.mp4`:
 			return &fakeNASFile{data: []byte("0123456789")}, nil
+		case `纪录片.mov`:
+			return &fakeNASFile{data: []byte("abcdefgh")}, nil
 		case "没有这个文件.mp4":
 			return nil, fs.ErrNotExist
 		default:
@@ -65,9 +68,19 @@ func nasTestProxy(t *testing.T) *Proxy {
 	return p
 }
 
+// nasURL issues a playback token for one file and returns its URL.
+func nasURL(t *testing.T, p *Proxy, server, share, path string) string {
+	t.Helper()
+	token, err := p.IssueNASFile(server, share, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p.WrapNAS(token)
+}
+
 func TestNASFullAndRange(t *testing.T) {
 	p := nasTestProxy(t)
-	url := p.WrapNAS("192.168.1.10", "Movies", `电影\示例.mp4`)
+	url := nasURL(t, p, "192.168.1.10", "Movies", `电影\示例.mp4`)
 
 	resp, err := http.Get(url)
 	if err != nil {
@@ -123,7 +136,7 @@ func TestNASFullAndRange(t *testing.T) {
 
 func TestNASRangeErrorsAndHead(t *testing.T) {
 	p := nasTestProxy(t)
-	url := p.WrapNAS("192.168.1.10", "Movies", `电影\示例.mp4`)
+	url := nasURL(t, p, "192.168.1.10", "Movies", `电影\示例.mp4`)
 
 	for _, rg := range []string{"bytes=10-", "bytes=5-2", "bytes=x-y", "bytes=0-1,4-5", "items=0-1", "bytes=-0"} {
 		req, _ := http.NewRequest(http.MethodGet, url, nil)
@@ -168,10 +181,13 @@ func TestNASRangeErrorsAndHead(t *testing.T) {
 func TestNASMissingParamsAndErrors(t *testing.T) {
 	p := nasTestProxy(t)
 
+	// No token at all, an unknown token, and the old server/share/path
+	// parameters without a token are all refused: the token alone
+	// decides what may be read.
 	for _, raw := range []string{
 		p.Base() + "/nas",
-		p.Base() + "/nas?server=192.168.1.10&share=Movies",
-		p.Base() + "/nas?server=192.168.1.10&path=x.mp4",
+		p.Base() + "/nas?token=0123456789abcdef0123456789abcdef",
+		p.Base() + "/nas?server=192.168.1.10&share=Movies&path=x.mp4",
 	} {
 		resp, err := http.Get(raw)
 		if err != nil {
@@ -179,12 +195,12 @@ func TestNASMissingParamsAndErrors(t *testing.T) {
 		}
 		_, _ = io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Fatalf("GET %s: status %d, want 400", raw, resp.StatusCode)
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("GET %s: status %d, want 403", raw, resp.StatusCode)
 		}
 	}
 
-	resp, err := http.Get(p.WrapNAS("192.168.1.10", "Movies", "没有这个文件.mp4"))
+	resp, err := http.Get(nasURL(t, p, "192.168.1.10", "Movies", "没有这个文件.mp4"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +210,7 @@ func TestNASMissingParamsAndErrors(t *testing.T) {
 		t.Fatalf("missing file: status %d, want 404", resp.StatusCode)
 	}
 
-	resp, err = http.Get(p.WrapNAS("192.168.1.10", "Movies", "坏了.mp4"))
+	resp, err = http.Get(nasURL(t, p, "192.168.1.10", "Movies", "坏了.mp4"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +226,11 @@ func TestNASMissingParamsAndErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p2.Close()
-	resp, err = http.Get(p2.WrapNAS("192.168.1.10", "Movies", "示例.mp4"))
+	token, err := p2.IssueNASFile("192.168.1.10", "Movies", "示例.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.Get(p2.WrapNAS(token))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +241,7 @@ func TestNASMissingParamsAndErrors(t *testing.T) {
 	}
 
 	// POST is not a playback method.
-	req, _ := http.NewRequest(http.MethodPost, p.WrapNAS("192.168.1.10", "Movies", `电影\示例.mp4`), strings.NewReader(""))
+	req, _ := http.NewRequest(http.MethodPost, nasURL(t, p, "192.168.1.10", "Movies", `电影\示例.mp4`), strings.NewReader(""))
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -231,4 +251,66 @@ func TestNASMissingParamsAndErrors(t *testing.T) {
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("POST: status %d, want 405", resp.StatusCode)
 	}
+}
+
+// A playback token opens only the file it was issued for: extra path or
+// server parameters are ignored, a revoked token is refused, and the URL
+// itself carries no server, share or path to reuse.
+func TestNASTokenScopeAndRevocation(t *testing.T) {
+	p := nasTestProxy(t)
+
+	tokenA, err := p.IssueNASFile("192.168.1.10", "Movies", `电影\示例.mp4`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenB, err := p.IssueNASFile("192.168.1.10", "Movies", `纪录片.mov`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokenA == tokenB {
+		t.Fatal("two issues produced the same token")
+	}
+	urlA := p.WrapNAS(tokenA)
+	for _, leaked := range []string{"server=", "share=", "path=", "192.168.1.10", "Movies", "示例"} {
+		if strings.Contains(urlA, leaked) {
+			t.Fatalf("token URL leaks %q: %s", leaked, urlA)
+		}
+	}
+	get := func(raw string) (int, string) {
+		t.Helper()
+		resp, err := http.Get(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return resp.StatusCode, string(body)
+	}
+	if status, body := get(urlA); status != http.StatusOK || body != "0123456789" {
+		t.Fatalf("token A: status %d body %q", status, body)
+	}
+	// Asking for another file with token A still serves file A.
+	other := urlA + "&path=" + url.QueryEscape(`纪录片.mov`) + "&server=10.0.0.1&share=Other"
+	if status, body := get(other); status != http.StatusOK || body != "0123456789" {
+		t.Fatalf("token A with other-file parameters: status %d body %q", status, body)
+	}
+	// Token B serves its own file.
+	if status, body := get(p.WrapNAS(tokenB)); status != http.StatusOK || body != "abcdefgh" {
+		t.Fatalf("token B: status %d body %q", status, body)
+	}
+	// Revoking one token leaves the other working.
+	p.RevokeNASFile(tokenA)
+	if status, _ := get(urlA); status != http.StatusForbidden {
+		t.Fatalf("revoked token A: status %d, want 403", status)
+	}
+	if status, body := get(p.WrapNAS(tokenB)); status != http.StatusOK || body != "abcdefgh" {
+		t.Fatalf("token B after revoking A: status %d body %q", status, body)
+	}
+	// Revoking everything stops the rest too.
+	p.RevokeAllNASFiles()
+	if status, _ := get(p.WrapNAS(tokenB)); status != http.StatusForbidden {
+		t.Fatalf("token B after revoke-all: status %d, want 403", status)
+	}
+	// Revoking an unknown token is a no-op, not a panic.
+	p.RevokeNASFile("0123456789abcdef0123456789abcdef")
 }

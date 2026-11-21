@@ -42,6 +42,7 @@ type Proxy struct {
 	client      *http.Client
 	readTimeout time.Duration
 	nasOpener   NASOpener
+	nasTokens   map[string]nasBinding
 
 	// served counts the media bytes written to players. The proxy
 	// only ever serves playback, so this is the video's throughput;
@@ -119,8 +120,9 @@ func (p *Proxy) Header(name string) string {
 	return ""
 }
 
-// Close stops the listener.
+// Close stops the listener. Issued playback tokens die with it.
 func (p *Proxy) Close() error {
+	p.RevokeAllNASFiles()
 	if p.srv == nil {
 		return nil
 	}

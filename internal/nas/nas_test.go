@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -365,4 +366,160 @@ func TestClientCloseDuringOpen(t *testing.T) {
 	}
 	close(stop)
 	wg.Wait()
+}
+
+// blockingNASFile waits for release before answering a read, unless its
+// context is cancelled first: a NAS that is slow to answer.
+type blockingNASFile struct {
+	data    []byte
+	release chan struct{}
+}
+
+func (f *blockingNASFile) ReadAt(ctx context.Context, p []byte, off int64) (int, error) {
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case <-f.release:
+	}
+	if off < 0 || off >= int64(len(f.data)) {
+		return 0, io.EOF
+	}
+	n := copy(p, f.data[off:])
+	if n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+func (f *blockingNASFile) Seek(ctx context.Context, off int64, whence int) (int64, error) {
+	return off, nil
+}
+
+func (f *blockingNASFile) Stat(ctx context.Context) (os.FileInfo, error) {
+	return fakeFileInfo{name: "慢.mp4", size: int64(len(f.data))}, nil
+}
+
+func (f *blockingNASFile) Close(ctx context.Context) error { return nil }
+
+// blockingOpenShare serves a fresh blocking file per Open.
+type blockingOpenShare struct {
+	*fakeShare
+	data    []byte
+	release chan struct{}
+}
+
+func (s *blockingOpenShare) Open(ctx context.Context, name string) (ShareFile, error) {
+	return &blockingNASFile{data: s.data, release: s.release}, nil
+}
+
+type blockingSession struct{ share Share }
+
+func (s *blockingSession) Mount(ctx context.Context, share string) (Share, error) {
+	return s.share, nil
+}
+
+func (s *blockingSession) Close() error { return nil }
+
+// A read that is still waiting on the NAS ends when its request is
+// cancelled, instead of hanging until the NAS answers.
+func TestFileReadCancelledByContext(t *testing.T) {
+	release := make(chan struct{})
+	share := &blockingOpenShare{
+		fakeShare: &fakeShare{dirs: map[string][]os.FileInfo{}, files: map[string][]byte{}},
+		data:      []byte("0123456789"),
+		release:   release,
+	}
+	srv := Server{Address: "192.168.1.10", Share: "Movies", User: "guest"}
+	c := NewWithDial(srv, func(ctx context.Context, s Server) (Session, error) {
+		return &blockingSession{share: share}, nil
+	})
+	if err := c.Dial(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	f, err := c.Open(ctx, "慢.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 4)
+		_, err := f.ReadAt(buf, 0)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("read finished before cancel: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled read: %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled read did not return")
+	}
+
+	// A live request still reads fine once the NAS answers.
+	close(release)
+	f2, err := c.Open(context.Background(), "慢.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f2.Close()
+	buf := make([]byte, 4)
+	n, err := f2.ReadAt(buf, 0)
+	if err != nil || n != 4 || string(buf) != "0123" {
+		t.Fatalf("live read: n=%d buf=%q err=%v", n, buf, err)
+	}
+}
+
+// A dial that is cancelled while the NAS is not answering returns the
+// cancellation and installs nothing; a later dial still connects.
+func TestClientDialCancelledWhileDialling(t *testing.T) {
+	entered := make(chan struct{}, 1)
+	var calls atomic.Int32
+	share := &fakeShare{
+		dirs:  map[string][]os.FileInfo{"": {fakeFileInfo{name: "示例.mp4", size: 12}}},
+		files: map[string][]byte{"示例.mp4": []byte("0123456789ab")},
+	}
+	srv := Server{Address: "192.168.1.10", Share: "Movies", User: "guest"}
+	c := NewWithDial(srv, func(ctx context.Context, s Server) (Session, error) {
+		if calls.Add(1) == 1 {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return &fakeSession{share: share}, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Dial(ctx) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("dial never started")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled dial: %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled dial did not return")
+	}
+	if err := c.Dial(context.Background()); err != nil {
+		t.Fatalf("dial after cancel: %v", err)
+	}
+	if _, err := c.ReadDir(context.Background(), ""); err != nil {
+		t.Fatalf("ReadDir after redial: %v", err)
+	}
 }

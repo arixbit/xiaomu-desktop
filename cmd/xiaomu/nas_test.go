@@ -99,11 +99,11 @@ func (s *fakeNASSession) Mount(ctx context.Context, share string) (nas.Share, er
 
 func (s *fakeNASSession) Close() error { return nil }
 
-// fakeNASDial pretends 192.168.1.10/Movies is a NAS with a film folder, a
-// playable file, an MKV the player cannot play and a text file that is
-// never listed.
-func fakeNASDial() func(context.Context, nas.Server) (*nas.Client, error) {
-	share := &fakeNASShare{
+// fakeNASShareData is the fake NAS contents: a film folder, a playable
+// file, an MKV the player cannot play and a text file that is never
+// listed.
+func fakeNASShareData() *fakeNASShare {
+	return &fakeNASShare{
 		dirs: map[string][]os.FileInfo{
 			"": {
 				fakeNASFileInfo{name: "电影", isDir: true},
@@ -122,6 +122,10 @@ func fakeNASDial() func(context.Context, nas.Server) (*nas.Client, error) {
 			`电影\正片.m4v`: []byte("abcdef"),
 		},
 	}
+}
+
+// fakeNASDialWithShare dials a client over the given share.
+func fakeNASDialWithShare(share nas.Share) func(context.Context, nas.Server) (*nas.Client, error) {
 	return func(ctx context.Context, srv nas.Server) (*nas.Client, error) {
 		if srv.Address != "192.168.1.10" || srv.Share != "Movies" {
 			return nil, fmt.Errorf("找不到 NAS %s/%s", srv.Address, srv.Share)
@@ -134,6 +138,24 @@ func fakeNASDial() func(context.Context, nas.Server) (*nas.Client, error) {
 		}
 		return client, nil
 	}
+}
+
+// fakeNASDial pretends 192.168.1.10/Movies is a NAS with a film folder, a
+// playable file, an MKV the player cannot play and a text file that is
+// never listed.
+func fakeNASDial() func(context.Context, nas.Server) (*nas.Client, error) {
+	return fakeNASDialWithShare(fakeNASShareData())
+}
+
+// cancelAwareNASShare fails an Open whose context is already cancelled,
+// like a real share would when the request is gone.
+type cancelAwareNASShare struct{ *fakeNASShare }
+
+func (s *cancelAwareNASShare) Open(ctx context.Context, name string) (nas.ShareFile, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.fakeNASShare.Open(ctx, name)
 }
 
 func TestNASStoreRoundTrip(t *testing.T) {
@@ -577,5 +599,275 @@ func TestNASReconnectWithNewPasswordRedials(t *testing.T) {
 	if !a.nas.connected || a.nas.server.Password != "new" {
 		t.Fatalf("reconnect with new password: connected=%v saved=%q status=%s",
 			a.nas.connected, a.nas.server.Password, a.status)
+	}
+}
+
+// A dial that never answers must not block disconnect: the old code held
+// a.nas.mu across the dial, so disconnect waited on the UI thread until
+// the job timed out.
+func TestNASDisconnectWhileDialling(t *testing.T) {
+	a := &app{}
+	defer a.close()
+	entered := make(chan struct{}, 1)
+	a.nas.dial = func(ctx context.Context, srv nas.Server) (*nas.Client, error) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.startNASConnection(nas.Server{Address: "192.168.1.10", Share: "Movies", User: "guest"})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("connect never started")
+	}
+	start := time.Now()
+	a.disconnectNAS()
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("disconnect waited %v for the hung dial", took)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("connect did not finish after disconnect")
+	}
+	a.nas.mu.Lock()
+	connected, client := a.nas.connected, a.nas.client
+	a.nas.mu.Unlock()
+	if connected || client != nil {
+		t.Fatalf("disconnect left the NAS connected: connected=%v client=%v", connected, client != nil)
+	}
+}
+
+// Closing the window while a dial is hung must return at once too.
+func TestNASCloseWhileDialling(t *testing.T) {
+	a := &app{}
+	entered := make(chan struct{}, 1)
+	a.nas.dial = func(ctx context.Context, srv nas.Server) (*nas.Client, error) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.startNASConnection(nas.Server{Address: "192.168.1.10", Share: "Movies", User: "guest"})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("connect never started")
+	}
+	start := time.Now()
+	a.close()
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("close waited %v for the hung dial", took)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("connect did not finish after close")
+	}
+}
+
+// Cancelling one open request must not drop the client: other Range
+// requests keep reading from the same session.
+func TestNASCancelledOpenKeepsClient(t *testing.T) {
+	a := &app{}
+	defer a.close()
+	a.nas.dial = fakeNASDialWithShare(&cancelAwareNASShare{fakeNASShare: fakeNASShareData()})
+	a.startNASConnection(nas.Server{Address: "192.168.1.10", Share: "Movies", User: "guest"})
+	if !a.nas.connected {
+		t.Fatalf("connect: %s", a.status)
+	}
+	a.nas.mu.Lock()
+	client := a.nas.client
+	a.nas.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := a.openNASFile(ctx, "192.168.1.10", "Movies", "示例.mp4"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled open: %v, want context.Canceled", err)
+	}
+	a.nas.mu.Lock()
+	kept := a.nas.client
+	a.nas.mu.Unlock()
+	if kept == nil || kept != client {
+		t.Fatal("a cancelled open dropped the client")
+	}
+	f, err := a.openNASFile(context.Background(), "192.168.1.10", "Movies", "示例.mp4")
+	if err != nil {
+		t.Fatalf("open after a cancelled open: %v", err)
+	}
+	buf := make([]byte, 4)
+	if n, err := f.ReadAt(buf, 0); err != nil || n != 4 || string(buf) != "0123" {
+		t.Fatalf("read after a cancelled open: n=%d buf=%q err=%v", n, buf, err)
+	}
+	_ = f.Close()
+}
+
+// Removing the NAS while a reconnect is still in flight must stick: the
+// old callback used to save the server back into nas.json afterwards.
+func TestNASRemoveDuringReconnect(t *testing.T) {
+	mygo.App.SetPath(mygo.PathUserData, t.TempDir())
+	t.Cleanup(func() { mygo.App.SetPath(mygo.PathUserData, "") })
+
+	a := &app{}
+	defer a.close()
+	entered := make(chan struct{}, 1)
+	a.nas.dial = func(ctx context.Context, srv nas.Server) (*nas.Client, error) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		// Slow to answer, but cancellable: a real NAS still mounting.
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+		return fakeNASDial()(ctx, srv)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.startNASConnection(nas.Server{Address: "192.168.1.10", Share: "Movies", User: "guest"})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("connect never started")
+	}
+	a.removeNAS()
+	path, err := savedNASPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("nas.json exists right after remove: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("connect did not finish after remove")
+	}
+	// Give a late apply a chance to run: the removal must still hold.
+	time.Sleep(100 * time.Millisecond)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("reconnect recreated nas.json after remove: %v", err)
+	}
+	a.nas.mu.Lock()
+	hasServer, connected := a.nas.hasServer, a.nas.connected
+	a.nas.mu.Unlock()
+	if hasServer || connected {
+		t.Fatalf("reconnect resurrected the NAS: hasServer=%v connected=%v", hasServer, connected)
+	}
+	if a.status != "已移除内网盘" {
+		t.Fatalf("status after remove during reconnect: %q", a.status)
+	}
+}
+
+// Two folders' 01.mp4 are two history entries, not one overwriting the
+// other.
+func TestNASHistorySameNameDifferentDirs(t *testing.T) {
+	a := &app{}
+	defer a.close()
+	share := &fakeNASShare{
+		dirs: map[string][]os.FileInfo{
+			"": {
+				fakeNASFileInfo{name: "A", isDir: true},
+				fakeNASFileInfo{name: "B", isDir: true},
+			},
+			"A": {fakeNASFileInfo{name: "01.mp4", size: 10}},
+			"B": {fakeNASFileInfo{name: "01.mp4", size: 10}},
+		},
+		files: map[string][]byte{
+			`A\01.mp4`: []byte("aaaaaaaaaa"),
+			`B\01.mp4`: []byte("bbbbbbbbbb"),
+		},
+	}
+	a.nas.dial = fakeNASDialWithShare(share)
+	a.open = func(string) (*ui.VideoPlayer, error) { return ui.NewVideoPlayer(&stillVideo{}) }
+	a.startNASConnection(nas.Server{Address: "192.168.1.10", Share: "Movies", User: "guest"})
+	if !a.nas.connected {
+		t.Fatalf("connect: %s", a.status)
+	}
+	now := time.Date(2026, 11, 21, 20, 0, 0, 0, time.UTC)
+	if !a.playNASFile("192.168.1.10", "Movies", `A\01.mp4`, "01.mp4") {
+		t.Fatalf("play A/01.mp4: %s", a.status)
+	}
+	a.recordHistory(a.player, now)
+	if !a.playNASFile("192.168.1.10", "Movies", `B\01.mp4`, "01.mp4") {
+		t.Fatalf("play B/01.mp4: %s", a.status)
+	}
+	a.recordHistory(a.player, now.Add(2*time.Second))
+	if len(a.history.entries) != 2 {
+		t.Fatalf("same-name files: %d entries, want 2: %+v", len(a.history.entries), a.history.entries)
+	}
+	paths := map[string]bool{}
+	for _, e := range a.history.entries {
+		if e.Name != "01.mp4" || !e.isNAS() {
+			t.Fatalf("same-name entry: %+v", e)
+		}
+		paths[e.VideoID] = true
+	}
+	if !paths[`A\01.mp4`] || !paths[`B\01.mp4`] {
+		t.Fatalf("history kept the wrong files: %v", paths)
+	}
+}
+
+// History written before Kind existed is still read right: a site whose
+// key happens to be "nas" stays a site, an smb:// record stays NAS, and
+// an explicit Kind wins over the address either way.
+func TestHistoryNASKindMigration(t *testing.T) {
+	site := historyEntry{
+		SiteKey: "nas", ConfigURL: "https://example.com/config", Name: "示例片",
+		VideoID: "7", Line: "线路", Episode: "第2集", Position: 30, Duration: 600,
+	}
+	if site.isNAS() {
+		t.Fatal("a legacy site with key nas was read as NAS")
+	}
+	if site.dedupKey() != titleKey(site.Name) {
+		t.Fatalf("legacy site dedup key: %q, want title key", site.dedupKey())
+	}
+	legacyNAS := historyEntry{
+		SiteKey: "nas", ConfigURL: "smb://192.168.1.10/Movies", Name: "示例.mp4",
+		VideoID: "示例.mp4", Line: "192.168.1.10", Episode: "正片", Position: 30, Duration: 600,
+	}
+	if !legacyNAS.isNAS() {
+		t.Fatal("a legacy smb:// record was not read as NAS")
+	}
+	if legacyNAS.dedupKey() == titleKey(legacyNAS.Name) {
+		t.Fatal("a legacy NAS record dedups by title")
+	}
+	if !(historyEntry{Kind: historyKindNAS, ConfigURL: "https://example.com/config"}).isNAS() {
+		t.Fatal("Kind nas with a site address was not read as NAS")
+	}
+	if (historyEntry{Kind: historyKindSite, ConfigURL: "smb://192.168.1.10/Movies"}).isNAS() {
+		t.Fatal("Kind site with an smb:// address was read as NAS")
+	}
+
+	// Resume must follow the same reading, not the key.
+	a := &app{}
+	defer a.close()
+	a.resume(site)
+	if a.status == "这条记录的 NAS 已移除或更换，重新添加后可继续播放" {
+		t.Fatalf("a legacy site resumed down the NAS branch: status=%q", a.status)
+	}
+	if a.status != "这条记录的片源已移除，重新添加后可继续播放" {
+		t.Fatalf("legacy site resume status: %q", a.status)
+	}
+	a.resume(legacyNAS)
+	if a.status != "这条记录的 NAS 已移除或更换，重新添加后可继续播放" {
+		t.Fatalf("legacy NAS resume status: %q player=%v", a.status, a.player != nil)
 	}
 }

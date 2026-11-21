@@ -239,7 +239,9 @@ func defaultDial(ctx context.Context, srv Server) (Session, error) {
 // The session and share are guarded by mu: Close only ever takes them
 // out of the client, never invalidating a share an in-flight Open or
 // ReadDir already holds, so closing while a file is being opened cannot
-// crash on a nil share.
+// crash on a nil share. gen counts closes: Dial only installs the
+// session it opened when no Close happened meanwhile, so a client closed
+// while dialling never ends up connected.
 type Client struct {
 	Server Server
 
@@ -247,6 +249,7 @@ type Client struct {
 	mu    sync.Mutex
 	sess  Session
 	share Share
+	gen   int
 }
 
 // New returns a client that dials the real server.
@@ -258,16 +261,22 @@ func NewWithDial(srv Server, dial DialFunc) *Client {
 	return &Client{Server: srv, dial: dial}
 }
 
-// Dial connects and mounts the share.
+// Dial connects and mounts the share. The network dial and mount run
+// outside the lock: a hung NAS must not block Close, which only needs
+// the lock briefly to take the session out. A Dial that returns after a
+// Close installs nothing.
 func (c *Client) Dial(ctx context.Context) error {
 	if err := c.Server.Validate(); err != nil {
 		return err
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.sess != nil {
+		c.mu.Unlock()
 		return nil
 	}
+	gen := c.gen
+	c.mu.Unlock()
+
 	sess, err := c.dial(ctx, c.Server)
 	if err != nil {
 		return err
@@ -277,8 +286,34 @@ func (c *Client) Dial(ctx context.Context) error {
 		_ = sess.Close()
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		releaseOpened(share, sess)
+		return err
+	}
+	c.mu.Lock()
+	if c.gen != gen || c.sess != nil {
+		c.mu.Unlock()
+		// Closed while dialling, or connected by someone else meanwhile:
+		// release what we just opened instead of installing it.
+		releaseOpened(share, sess)
+		if c.gen != gen {
+			return fmt.Errorf("内网盘已断开")
+		}
+		return nil
+	}
 	c.sess, c.share = sess, share
+	c.mu.Unlock()
 	return nil
+}
+
+// releaseOpened unmounts and closes a session that was opened but will
+// not be installed. The unmount is bounded so a dead NAS cannot stall
+// the caller.
+func releaseOpened(share Share, sess Session) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ = share.Unmount(ctx)
+	cancel()
+	_ = sess.Close()
 }
 
 // shareSnapshot returns the mounted share, or an error when the client is
@@ -335,6 +370,9 @@ func (c *Client) ReadDir(ctx context.Context, dir string) ([]Entry, error) {
 // Open opens a file for reading through the proxy. Directories are
 // rejected: browse them with ReadDir instead.
 func (c *Client) Open(ctx context.Context, path string) (*File, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	share, err := c.shareSnapshot()
 	if err != nil {
 		return nil, err
@@ -356,17 +394,19 @@ func (c *Client) Open(ctx context.Context, path string) (*File, error) {
 		_ = f.Close(ctx)
 		return nil, fmt.Errorf("%s 是文件夹", Base(path))
 	}
-	return &File{f: f, size: info.Size()}, nil
+	return &File{f: f, size: info.Size(), ctx: ctx}, nil
 }
 
 // Close unmounts the share and closes the session. Closing the client
 // does not close files already opened from it. The share and session are
 // taken out under the lock and released outside it, so an Open or ReadDir
-// that already holds the share keeps working on its own reference.
+// that already holds the share keeps working on its own reference, and
+// Close itself never waits on the network while holding the lock.
 func (c *Client) Close() error {
 	c.mu.Lock()
 	share, sess := c.share, c.sess
 	c.share, c.sess = nil, nil
+	c.gen++
 	c.mu.Unlock()
 	var err error
 	if share != nil {
@@ -387,21 +427,26 @@ func (c *Client) Close() error {
 
 // File is one open NAS file, read through the proxy with ReadAt. Size is
 // known from opening, so the proxy can answer Range requests without
-// another round trip.
+// another round trip. ctx is the request that opened the file: reads use
+// it, so stopping playback or seeking away interrupts a read that is
+// still waiting on the NAS instead of leaving it hanging on
+// context.Background(). The session itself is untouched by a cancelled
+// read: other requests keep using it.
 type File struct {
 	f    ShareFile
 	size int64
 	off  int64
+	ctx  context.Context
 }
 
 // ReadAt reads len(p) bytes from off.
 func (f *File) ReadAt(p []byte, off int64) (int, error) {
-	return f.f.ReadAt(context.Background(), p, off)
+	return f.f.ReadAt(f.ctx, p, off)
 }
 
 // Seek moves the read position for Read.
 func (f *File) Seek(off int64, whence int) (int64, error) {
-	pos, err := f.f.Seek(context.Background(), off, whence)
+	pos, err := f.f.Seek(f.ctx, off, whence)
 	if err == nil {
 		f.off = pos
 	}

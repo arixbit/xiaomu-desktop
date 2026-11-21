@@ -23,19 +23,23 @@ type nasPlaying struct {
 	Share  string
 	Path   string // backslash path inside the share
 	Name   string // display name
+	Token  string // playback token issued for this file, revoked on stop
 }
 
 // nasBrowser is the 内网盘 tab: the saved server, the live connection and
 // the directory on show. server, hasServer, client and connected are
 // guarded by mu: the UI thread writes them, and the proxy's HTTP
 // goroutines read them through openNASFile, so no field is ever read
-// without the lock. dir and entries stay on the UI thread only.
+// without the lock. dir and entries stay on the UI thread only. gen
+// counts disconnects and removals: a connect whose apply runs after one
+// must not resurrect the connection or save the server back.
 type nasBrowser struct {
 	mu        sync.Mutex
 	server    nas.Server
 	hasServer bool
 	client    *nas.Client
 	connected bool
+	gen       int
 	dir       string // backslash path, "" is the share root
 	entries   []nas.Entry
 
@@ -51,9 +55,13 @@ func (n *nasBrowser) fillForm(srv nas.Server) {
 }
 
 func (n *nasBrowser) closeClientLocked() {
-	if n.client != nil {
-		_ = n.client.Close()
-		n.client = nil
+	// The caller holds mu. Only the pointer is swapped out here; the
+	// network close runs in the background, so disconnecting or closing
+	// the window never waits on the NAS.
+	client := n.client
+	n.client = nil
+	if client != nil {
+		go func() { _ = client.Close() }()
 	}
 }
 
@@ -75,30 +83,59 @@ func (a *app) dialNAS(ctx context.Context, srv nas.Server) (*nas.Client, error) 
 // connection, or the new credentials would be saved without ever being
 // tried. Reconnecting therefore dials with the new credentials first and
 // only saves them once the root listing succeeds.
+//
+// The dial runs outside the lock: a NAS that does not answer must not
+// block the UI thread, which only needs this lock briefly to disconnect
+// or close. The lock is only for the cache check and for installing the
+// result.
 func (a *app) nasClient(ctx context.Context, srv nas.Server) (*nas.Client, error) {
 	a.nas.mu.Lock()
-	defer a.nas.mu.Unlock()
-	if a.nas.client != nil && a.nas.client.Server == srv {
-		return a.nas.client, nil
+	if c := a.nas.client; c != nil && c.Server == srv {
+		a.nas.mu.Unlock()
+		return c, nil
 	}
+	a.nas.mu.Unlock()
+
 	client, err := a.dialNAS(ctx, srv)
 	if err != nil {
 		return nil, err
 	}
-	a.nas.closeClientLocked()
+
+	a.nas.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		// Cancelled while dialling: do not install the client.
+		a.nas.mu.Unlock()
+		go func() { _ = client.Close() }()
+		return nil, err
+	}
+	if c := a.nas.client; c != nil && c.Server == srv {
+		// Another caller connected the same server while we dialled.
+		a.nas.mu.Unlock()
+		go func() { _ = client.Close() }()
+		return c, nil
+	}
+	old := a.nas.client
 	a.nas.client = client
+	a.nas.mu.Unlock()
+	if old != nil {
+		go func() { _ = old.Close() }()
+	}
 	return client, nil
 }
 
 // dropNASClient closes client if it is still the current one, for a
-// connection that turned out unusable.
+// connection that turned out unusable. Only the pointer is swapped out
+// under the lock; the network close runs in the background, so a drop
+// cannot hold the lock while the NAS is unresponsive.
 func (a *app) dropNASClient(client *nas.Client) {
 	a.nas.mu.Lock()
-	defer a.nas.mu.Unlock()
 	if a.nas.client == client {
-		_ = client.Close()
 		a.nas.client = nil
+		a.nas.mu.Unlock()
+		go func() { _ = client.Close() }()
+		return
 	}
+	a.nas.mu.Unlock()
 }
 
 func (a *app) closeNASClient() {
@@ -107,12 +144,30 @@ func (a *app) closeNASClient() {
 	a.nas.closeClientLocked()
 }
 
+// dropNASClientOnError drops the client unless the failure is a
+// cancelled request or a missing file: neither means the session is
+// dead. A cancelled request is a seek or a replaced job, not a dead NAS,
+// and dropping the client on it would close the session out from under
+// the other Range requests still reading.
+func (a *app) dropNASClientOnError(client *nas.Client, err error) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	a.dropNASClient(client)
+}
+
 // startNASConnection connects to srv, lists its root and saves it.
 func (a *app) startNASConnection(srv nas.Server) {
 	if err := srv.Validate(); err != nil {
 		a.status = err.Error()
 		return
 	}
+	a.nas.mu.Lock()
+	gen := a.nas.gen
+	a.nas.mu.Unlock()
 	a.run(jobNAS, "连接内网盘", func(ctx context.Context) (jobResult, error) {
 		client, err := a.nasClient(ctx, srv)
 		if err != nil {
@@ -120,11 +175,17 @@ func (a *app) startNASConnection(srv nas.Server) {
 		}
 		entries, err := client.ReadDir(ctx, "")
 		if err != nil {
-			a.dropNASClient(client)
+			a.dropNASClientOnError(client, err)
 			return jobResult{}, err
 		}
 		return jobResult{apply: func() {
 			a.nas.mu.Lock()
+			if a.nas.gen != gen {
+				// Removed or disconnected while connecting: do not
+				// resurrect the connection or save the server back.
+				a.nas.mu.Unlock()
+				return
+			}
 			a.nas.server, a.nas.hasServer = srv, true
 			a.nas.connected = true
 			a.nas.mu.Unlock()
@@ -164,11 +225,9 @@ func (a *app) browseNAS(dir string) {
 		if err != nil {
 			// The session may be dead (NAS rebooted, idle timeout):
 			// drop the client so the next attempt redials instead of
-			// failing on the dead session forever. A missing folder
-			// is not a dead session, so it keeps the client.
-			if !errors.Is(err, fs.ErrNotExist) {
-				a.dropNASClient(client)
-			}
+			// failing on the dead session forever. A cancelled
+			// request or a missing folder is not a dead session.
+			a.dropNASClientOnError(client, err)
 			return jobResult{}, err
 		}
 		return jobResult{apply: func() {
@@ -180,8 +239,12 @@ func (a *app) browseNAS(dir string) {
 // disconnectNAS drops the connection but keeps the saved server, so one
 // tap reconnects. A NAS file on show is stopped first: otherwise the
 // player keeps asking the proxy for ranges and the next request would
-// silently redial the NAS that was just disconnected.
+// silently redial the NAS that was just disconnected. The pending
+// connect job is cancelled first, so its apply cannot set connected
+// back on after this disconnect; the generation bump covers the same
+// for an apply that is already on its way.
 func (a *app) disconnectNAS() {
+	a.cancelJob(jobNAS)
 	if a.playingNAS != nil {
 		a.leavePlayer()
 	}
@@ -190,12 +253,18 @@ func (a *app) disconnectNAS() {
 	a.nas.mu.Lock()
 	a.nas.connected = false
 	a.nas.dir, a.nas.entries = "", nil
+	a.nas.gen++
 	a.nas.mu.Unlock()
 	a.closeNASClient()
+	if a.proxy != nil {
+		a.proxy.RevokeAllNASFiles()
+	}
 	a.status = "已断开内网盘"
 }
 
-// removeNAS disconnects and forgets the saved server entirely.
+// removeNAS disconnects and forgets the saved server entirely. The
+// pending connect job is cancelled by disconnectNAS, so its apply cannot
+// run afterwards and write the server back into nas.json.
 func (a *app) removeNAS() {
 	a.disconnectNAS()
 	a.nas.mu.Lock()
@@ -232,18 +301,28 @@ func (a *app) openNASFile(ctx context.Context, server, share, path string) (prox
 		// A dead session must not stick: drop the client so the next
 		// request redials. The player only retries a few times before
 		// giving up, so this cannot turn into a dial storm, and a NAS
-		// that comes back is picked up again. A missing file is not
-		// a dead session, so it keeps the client.
-		if !errors.Is(err, fs.ErrNotExist) {
-			a.dropNASClient(client)
-		}
+		// that comes back is picked up again. A cancelled request or
+		// a missing file is not a dead session.
+		a.dropNASClientOnError(client, err)
 		return nil, err
 	}
 	return f, nil
 }
 
+// revokePlayingNASToken revokes the playback token of the NAS file on
+// show, if any. Called when playback of that file ends for any reason:
+// leaving the player, switching to another title, disconnecting.
+func (a *app) revokePlayingNASToken() {
+	if a.playingNAS != nil && a.playingNAS.Token != "" && a.proxy != nil {
+		a.proxy.RevokeNASFile(a.playingNAS.Token)
+	}
+}
+
 // playNASFile plays one NAS file through the loopback proxy, like a
 // direct URL, and records which NAS file it is for the play history.
+// The proxy URL carries only a random token bound to this one file:
+// no other path on the share can be read with it, and the token dies
+// when playback stops.
 func (a *app) playNASFile(server, share, path, name string) bool {
 	a.prepareExternalPlayback()
 	if a.proxy == nil {
@@ -255,7 +334,12 @@ func (a *app) playNASFile(server, share, path, name string) bool {
 		a.proxy = p
 	}
 	a.proxy.RegisterNASOpener(a.openNASFile)
-	wrapped := a.proxy.WrapNAS(server, share, path)
+	token, err := a.proxy.IssueNASFile(server, share, path)
+	if err != nil {
+		a.status = "无法生成播放令牌: " + err.Error()
+		return false
+	}
+	wrapped := a.proxy.WrapNAS(token)
 	if a.player != nil {
 		a.player.Close()
 		a.player = nil
@@ -266,12 +350,13 @@ func (a *app) playNASFile(server, share, path, name string) bool {
 	}
 	player, err := opener(wrapped)
 	if err != nil {
+		a.proxy.RevokeNASFile(token)
 		a.status = "无法打开: " + err.Error()
 		a.syncNowPlaying()
 		return false
 	}
 	a.adoptPlayer(player)
-	a.playingNAS = &nasPlaying{Server: server, Share: share, Path: path, Name: name}
+	a.playingNAS = &nasPlaying{Server: server, Share: share, Path: path, Name: name, Token: token}
 	a.playingName = name
 	a.playingSource, a.playingEpisode = "内网盘", "正片"
 	a.playingLive, a.playingDirect = false, false
@@ -284,7 +369,12 @@ func (a *app) playNASFile(server, share, path, name string) bool {
 // entry was recorded from.
 func (a *app) nasMatches(e historyEntry) bool {
 	srv, _, ok := nas.ParseSMBURL(e.ConfigURL)
-	return ok && a.nas.hasServer &&
+	if !ok {
+		return false
+	}
+	a.nas.mu.Lock()
+	defer a.nas.mu.Unlock()
+	return a.nas.hasServer &&
 		a.nas.server.Address == srv.Address && a.nas.server.Share == srv.Share
 }
 
@@ -312,13 +402,21 @@ func (a *app) resumeNAS(e historyEntry) {
 		}
 		f, err := client.Open(ctx, e.VideoID)
 		if err != nil {
-			if !errors.Is(err, fs.ErrNotExist) {
-				a.dropNASClient(client)
-			}
+			a.dropNASClientOnError(client, err)
 			return jobResult{}, err
 		}
 		_ = f.Close()
 		return jobResult{apply: func() {
+			// The NAS may have been disconnected while the file was
+			// being opened: do not start playback on a NAS that is
+			// no longer connected.
+			a.nas.mu.Lock()
+			connected := a.nas.connected
+			a.nas.mu.Unlock()
+			if !connected {
+				a.status = "内网盘未连接，重新连接后可继续播放"
+				return
+			}
 			if a.playNASFile(srv.Address, srv.Share, e.VideoID, e.Name) {
 				a.resumeAt = time.Duration(e.Position * float64(time.Second))
 			}

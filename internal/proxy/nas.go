@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +28,54 @@ type NASFile interface {
 // by the app, which owns the NAS connection; the proxy closes the file.
 type NASOpener func(ctx context.Context, server, share, path string) (NASFile, error)
 
+// nasBinding is one file bound to a playback token: the server, share and
+// share-relative path the token may open, and nothing else.
+type nasBinding struct {
+	server, share, path string
+}
+
+// IssueNASFile binds one NAS file to a fresh random token and returns it.
+// The token is 128 bits from crypto/rand, so it cannot be guessed; it
+// opens only the bound file, never any other path on the share.
+func (p *Proxy) IssueNASFile(server, share, path string) (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	token := hex.EncodeToString(raw[:])
+	p.mu.Lock()
+	if p.nasTokens == nil {
+		p.nasTokens = make(map[string]nasBinding)
+	}
+	p.nasTokens[token] = nasBinding{server, share, path}
+	p.mu.Unlock()
+	return token, nil
+}
+
+// WrapNAS returns the local URL that plays the file bound to token. The
+// URL carries only the token: no server, share or path for another local
+// process to reuse.
+func (p *Proxy) WrapNAS(token string) string {
+	return p.base + "/nas?token=" + url.QueryEscape(token)
+}
+
+// RevokeNASFile revokes one token. Revoking an unknown token is a no-op.
+func (p *Proxy) RevokeNASFile(token string) {
+	if token == "" {
+		return
+	}
+	p.mu.Lock()
+	delete(p.nasTokens, token)
+	p.mu.Unlock()
+}
+
+// RevokeAllNASFiles revokes every issued token.
+func (p *Proxy) RevokeAllNASFiles() {
+	p.mu.Lock()
+	p.nasTokens = nil
+	p.mu.Unlock()
+}
+
 // RegisterNASOpener sets the opener used by /nas. Registering again
 // replaces it.
 func (p *Proxy) RegisterNASOpener(op NASOpener) {
@@ -34,34 +84,34 @@ func (p *Proxy) RegisterNASOpener(op NASOpener) {
 	p.mu.Unlock()
 }
 
-// WrapNAS returns the local URL that plays one NAS file through the proxy.
-func (p *Proxy) WrapNAS(server, share, path string) string {
-	q := "server=" + url.QueryEscape(server) + "&share=" + url.QueryEscape(share) + "&path=" + url.QueryEscape(path)
-	return p.base + "/nas?" + q
-}
-
 // serveNAS serves one NAS file: full content, or the byte range the
-// player asked for. Missing parameters are 400, a missing file 404, a
-// NAS error 502 and an unsatisfiable range 416.
+// player asked for. The request carries only a playback token; the token
+// decides which file is served, so no caller can ask for another path.
+// An unknown or revoked token is 403, a missing file 404, a NAS error
+// 502 and an unsatisfiable range 416.
 func (p *Proxy) serveNAS(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method", http.StatusMethodNotAllowed)
 		return
 	}
-	q := r.URL.Query()
-	server, share, path := q.Get("server"), q.Get("share"), q.Get("path")
-	if server == "" || share == "" || path == "" {
-		http.Error(w, "缺少内网盘参数", http.StatusBadRequest)
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		http.Error(w, "缺少播放令牌", http.StatusForbidden)
 		return
 	}
 	p.mu.RLock()
+	binding, ok := p.nasTokens[token]
 	opener := p.nasOpener
 	p.mu.RUnlock()
+	if !ok {
+		http.Error(w, "播放令牌无效或已撤销", http.StatusForbidden)
+		return
+	}
 	if opener == nil {
 		http.Error(w, "内网盘未连接", http.StatusBadGateway)
 		return
 	}
-	f, err := opener(r.Context(), server, share, path)
+	f, err := opener(r.Context(), binding.server, binding.share, binding.path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			http.Error(w, "文件不存在", http.StatusNotFound)
@@ -73,7 +123,7 @@ func (p *Proxy) serveNAS(w http.ResponseWriter, r *http.Request) {
 	defer f.Close()
 	size := f.Size()
 	w.Header().Set("Accept-Ranges", "bytes")
-	if ct := nasContentType(path); ct != "" {
+	if ct := nasContentType(binding.path); ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
 	rg := r.Header.Get("Range")

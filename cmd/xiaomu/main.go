@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -44,7 +45,12 @@ type app struct {
 	// Only the latest navigation waits for a configuration still loading.
 	pendingLibrary func()
 
-	nav             []routeKind
+	nav []routeKind
+	// jobsMu guards jobs: a job's finish can run off the UI thread
+	// (in tests dispatch is nil), while cancelJob runs on the UI
+	// thread, so a slot's cancel function and generation are never
+	// touched without it.
+	jobsMu          sync.Mutex
 	jobs            [jobSlots]job
 	browser         browser
 	title           *titlePage
@@ -151,6 +157,9 @@ func (a *app) adoptPlayer(p *ui.VideoPlayer) {
 	a.playingFile = false
 	a.playingName = ""
 	a.playingSource, a.playingEpisode = "", ""
+	// A NAS file being replaced loses its playback token: only the file
+	// on show may be read through the proxy.
+	a.revokePlayingNASToken()
 	a.playingNAS = nil
 }
 
