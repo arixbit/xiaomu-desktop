@@ -19,7 +19,7 @@ func TestContinueWatchingDismissalSurvivesRecordingAndRestart(t *testing.T) {
 	if got := continueWatchingEntries(a.history.entries); len(got) != 6 || got[0].Name != "示例7" || got[5].Name != "示例2" {
 		t.Fatalf("recent titles = %+v", got)
 	}
-	a.dismissContinueWatching("《示例7》")
+	a.setContinueWatchingHidden(titleKey("《示例7》"), true)
 	a.history.note(historyEntry{Name: "示例7", Position: 31, Duration: 600})
 	a.flushHistory()
 	entries, err := readHistory(a.history.path)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
+	"github.com/arixbit/xiaomu-desktop/internal/nas"
 	"github.com/arixbit/xiaomu-desktop/internal/resolve"
 	"github.com/egoist/mygo/ui"
 )
@@ -31,6 +33,8 @@ type historyEntry struct {
 	ConfigURL  string    `json:"config_url"`
 	EntryKey   string    `json:"entry_key"`
 	SiteKey    string    `json:"site_key"`
+	Kind       string    `json:"kind,omitempty"`
+	NASShare   string    `json:"nas_share,omitempty"` // share name, with the server address in Line
 	Origin     string    `json:"origin,omitempty"`
 	VideoID    string    `json:"video_id"`
 	Line       string    `json:"line"`
@@ -39,6 +43,62 @@ type historyEntry struct {
 	Duration   float64   `json:"duration"`
 	Updated    time.Time `json:"updated"`
 	HomeHidden bool      `json:"home_hidden,omitempty"`
+}
+
+// historyKindNAS marks an entry recorded from a NAS file; historyKindSite
+// marks one recorded from a library site. Kind is the only type check:
+// a site whose key happens to be "nas" must never be mistaken for one.
+const (
+	historyKindNAS  = "nas"
+	historyKindSite = "site"
+)
+
+// isNAS reports whether the entry is a NAS file. Entries written before
+// Kind existed are recognised by their smb:// address, so an old site
+// record is never misread either.
+func (e historyEntry) isNAS() bool {
+	switch e.Kind {
+	case historyKindNAS:
+		return true
+	case historyKindSite:
+		return false
+	default:
+		return strings.HasPrefix(e.ConfigURL, "smb://")
+	}
+}
+
+// nasLocation reads the saved server and share. Older records stored a
+// literal smb:// address with no URL encoding, so preserve the original
+// share characters when recovering their identity.
+func (e historyEntry) nasLocation() (server, share string) {
+	if e.NASShare != "" {
+		return e.Line, e.NASShare
+	}
+	addr, ok := strings.CutPrefix(e.ConfigURL, "smb://")
+	if !ok {
+		return "", ""
+	}
+	server, share, _ = strings.Cut(addr, "/")
+	return server, share
+}
+
+func matchesNASHistory(e historyEntry, srv nas.Server) bool {
+	server, share := e.nasLocation()
+	return e.isNAS() && server != "" && share != "" && server == srv.Address && share == srv.Share
+}
+
+func nasHistoryKey(server, share, path string) string {
+	return "nas\x00" + server + "\x00" + share + "\x00" + path
+}
+
+// dedupKey identifies a site title by name and a NAS file by its server,
+// share and relative path.
+func (e historyEntry) dedupKey() string {
+	if e.isNAS() {
+		server, share := e.nasLocation()
+		return nasHistoryKey(server, share, e.VideoID)
+	}
+	return titleKey(e.Name)
 }
 
 func (e historyEntry) finished() bool {
@@ -71,12 +131,12 @@ type historyStore struct {
 	saved   time.Time
 }
 
-// note records an entry, replacing the one of the same title.
+// note records an entry, replacing the one with the same dedup key.
 func (h *historyStore) note(e historyEntry) {
-	key := titleKey(e.Name)
+	key := e.dedupKey()
 	kept := h.entries[:0:0]
 	for _, old := range h.entries {
-		if titleKey(old.Name) != key {
+		if old.dedupKey() != key {
 			kept = append(kept, old)
 		} else {
 			e.HomeHidden = old.HomeHidden
@@ -146,8 +206,40 @@ func (a *app) flushHistory() {
 }
 
 // recordHistory notes once a second where the episode on show is, and writes
-// it to disk now and then; leaving the player writes it too.
+// it to disk now and then; leaving the player writes it too. A NAS file is
+// recorded the same way, with the server and share as its marker instead
+// of a library site.
 func (a *app) recordHistory(p *ui.VideoPlayer, now time.Time) {
+	if a.playingNAS != nil {
+		if now.Sub(a.history.noted) < time.Second {
+			return
+		}
+		position, duration := p.Position().Seconds(), p.Duration().Seconds()
+		if p.Ended() && duration > 0 {
+			position = duration
+		}
+		a.history.noted = now
+		np := a.playingNAS
+		shareURL := url.URL{Scheme: "smb", Host: np.Server, Path: "/" + np.Share}
+		a.history.note(historyEntry{
+			Name:      np.Name,
+			ConfigURL: shareURL.String(),
+			SiteKey:   historyKindNAS,
+			Kind:      historyKindNAS,
+			NASShare:  np.Share,
+			Origin:    "内网盘",
+			VideoID:   np.Path,
+			Line:      np.Server,
+			Episode:   "正片",
+			Position:  position,
+			Duration:  duration,
+			Updated:   now,
+		})
+		if now.Sub(a.history.saved) >= historySaveGap {
+			a.flushHistory()
+		}
+		return
+	}
 	t := a.title
 	if !a.hasEpisodes() || a.playingEpisode == "" || now.Sub(a.history.noted) < time.Second {
 		return
@@ -163,6 +255,7 @@ func (a *app) recordHistory(p *ui.VideoPlayer, now time.Time) {
 		ConfigURL: configURL(t.item.Entry),
 		EntryKey:  entryKey(t.item.Entry),
 		SiteKey:   t.item.Entry.Site.Key,
+		Kind:      historyKindSite,
 		Origin:    t.item.Entry.Label(),
 		VideoID:   string(t.item.Video.ID),
 		Line:      a.playingSource,
@@ -191,7 +284,11 @@ func entryKey(entry library.Entry) string {
 }
 
 // historyAvailable reports whether the entry's source is still imported.
+// A NAS entry is available while the same server and share are saved.
 func (a *app) historyAvailable(e historyEntry) bool {
+	if e.isNAS() {
+		return a.nasMatches(e)
+	}
 	return a.configAvailable(e.ConfigURL)
 }
 
@@ -241,7 +338,12 @@ func resumePoint(detail catalog.Detail, e historyEntry) (line int, episode catal
 }
 
 // resume plays an entry from where it stopped, straight into the player.
+// A NAS entry never goes through the library: it reopens its own file.
 func (a *app) resume(e historyEntry) {
+	if e.isNAS() {
+		a.resumeNAS(e)
+		return
+	}
 	preferred := a.sourceMemory.entries[titleKey(e.Name)].Preferred
 	originalAvailable := a.historyAvailable(e)
 	preferSaved := preferred.VideoID != "" && a.configAvailable(preferred.ConfigURL)
@@ -401,7 +503,7 @@ func (a *app) historyView(c *ui.Context) {
 
 func (a *app) historyRow(c *ui.Context, i int, e historyEntry) {
 	available := a.historyAvailable(e)
-	ui.Row(c).Key(titleKey(e.Name)).FillWidth().Padding(10, 14, 10, 10).Gap(14).Radius(18).
+	ui.Row(c).Key(e.dedupKey()).FillWidth().Padding(10, 14, 10, 10).Gap(14).Radius(18).
 		AlignItems(ui.Center).Background(surface).Children(func() {
 		ui.Box(c).Size(60, 90).Radius(10).Clip().Background(ui.Hex("#24242c")).Children(func() {
 			if poster := a.poster(e.Pic); poster != nil {
@@ -417,6 +519,9 @@ func (a *app) historyRow(c *ui.Context, i int, e historyEntry) {
 			origin := e.Origin
 			if !available {
 				origin = "片源已移除"
+				if e.isNAS() {
+					origin = "内网盘已移除或更换"
+				}
 			}
 			ui.Text(c, origin).FontSize(12).TextColor(textMuted).SingleLine()
 		})

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -44,13 +45,19 @@ type app struct {
 	// Only the latest navigation waits for a configuration still loading.
 	pendingLibrary func()
 
-	nav             []routeKind
+	nav []routeKind
+	// jobsMu guards jobs: a job's finish can run off the UI thread
+	// (in tests dispatch is nil), while cancelJob runs on the UI
+	// thread, so a slot's cancel function and generation are never
+	// touched without it.
+	jobsMu          sync.Mutex
 	jobs            [jobSlots]job
 	browser         browser
 	title           *titlePage
 	library         libraryBrowser
 	discovery       discoveryBrowser
 	live            liveBrowser
+	nas             nasBrowser
 	history         historyStore
 	favorites       favoriteStore
 	searchHistory   searchHistoryStore
@@ -73,6 +80,9 @@ type app struct {
 
 	playingLive   bool
 	playingDirect bool
+	// playingNAS is the NAS file on show, if any; playingName is its
+	// display name.
+	playingNAS *nasPlaying
 	// playingFile is set for a local file opened from the file manager; playingName
 	// is that file's name, shown in the header and Now Playing.
 	playingFile    bool
@@ -123,12 +133,19 @@ func (a *app) play() {
 	}
 }
 
+func (a *app) closeCurrentPlayer() {
+	a.revokePlayingNASToken()
+	a.playingNAS = nil
+	if a.player != nil {
+		a.player.Close()
+		a.player = nil
+	}
+}
+
 // adoptPlayer makes p the current player and resets the per-play state.
 // Episode replacements close the old player here, once the new one opens.
 func (a *app) adoptPlayer(p *ui.VideoPlayer) {
-	if a.player != nil {
-		a.player.Close()
-	}
+	a.closeCurrentPlayer()
 	a.player = p
 	a.applyPlayerPreferences(p)
 	a.playbackWait = playbackWait{}
@@ -177,9 +194,8 @@ func (a *app) openPlaybackURL(raw string, headers map[string]string, keepCurrent
 	} else {
 		p.SetHeaders(headers)
 	}
-	if !keepCurrent && a.player != nil {
-		a.player.Close()
-		a.player = nil
+	if !keepCurrent {
+		a.closeCurrentPlayer()
 	}
 	opener := a.open
 	if opener == nil {
@@ -307,6 +323,7 @@ func main() {
 			})
 		})
 		a.restoreSavedSource()
+		a.restoreNAS()
 		// Library actions wait separately for the asynchronous restore.
 		a.drainPending()
 		win.OnClosed(a.close)
