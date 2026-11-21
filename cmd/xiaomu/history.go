@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
+	"github.com/arixbit/xiaomu-desktop/internal/nas"
 	"github.com/arixbit/xiaomu-desktop/internal/resolve"
 	"github.com/egoist/mygo/ui"
 )
@@ -32,6 +34,7 @@ type historyEntry struct {
 	EntryKey   string    `json:"entry_key"`
 	SiteKey    string    `json:"site_key"`
 	Kind       string    `json:"kind,omitempty"`
+	NASShare   string    `json:"nas_share,omitempty"` // share name, with the server address in Line
 	Origin     string    `json:"origin,omitempty"`
 	VideoID    string    `json:"video_id"`
 	Line       string    `json:"line"`
@@ -64,12 +67,36 @@ func (e historyEntry) isNAS() bool {
 	}
 }
 
-// dedupKey is what note() replaces: a site title by name, a NAS file by
-// server, share and relative path, so two folders' 01.mp4 stay separate
-// instead of overwriting each other.
+// nasLocation reads the saved server and share. Older records stored a
+// literal smb:// address with no URL encoding, so preserve the original
+// share characters when recovering their identity.
+func (e historyEntry) nasLocation() (server, share string) {
+	if e.NASShare != "" {
+		return e.Line, e.NASShare
+	}
+	addr, ok := strings.CutPrefix(e.ConfigURL, "smb://")
+	if !ok {
+		return "", ""
+	}
+	server, share, _ = strings.Cut(addr, "/")
+	return server, share
+}
+
+func matchesNASHistory(e historyEntry, srv nas.Server) bool {
+	server, share := e.nasLocation()
+	return e.isNAS() && server != "" && share != "" && server == srv.Address && share == srv.Share
+}
+
+func nasHistoryKey(server, share, path string) string {
+	return "nas\x00" + server + "\x00" + share + "\x00" + path
+}
+
+// dedupKey identifies a site title by name and a NAS file by its server,
+// share and relative path.
 func (e historyEntry) dedupKey() string {
 	if e.isNAS() {
-		return "nas\x00" + e.ConfigURL + "\x00" + e.VideoID
+		server, share := e.nasLocation()
+		return nasHistoryKey(server, share, e.VideoID)
 	}
 	return titleKey(e.Name)
 }
@@ -193,15 +220,13 @@ func (a *app) recordHistory(p *ui.VideoPlayer, now time.Time) {
 		}
 		a.history.noted = now
 		np := a.playingNAS
-		// NAS files are keyed by server, share and relative path in
-		// VideoID, not by title: two folders' 01.mp4 are different
-		// files. The episode is fixed at 正片: a NAS file has no
-		// episode list, so there is nothing to split by.
+		shareURL := url.URL{Scheme: "smb", Host: np.Server, Path: "/" + np.Share}
 		a.history.note(historyEntry{
 			Name:      np.Name,
-			ConfigURL: "smb://" + np.Server + "/" + np.Share,
+			ConfigURL: shareURL.String(),
 			SiteKey:   historyKindNAS,
 			Kind:      historyKindNAS,
+			NASShare:  np.Share,
 			Origin:    "内网盘",
 			VideoID:   np.Path,
 			Line:      np.Server,

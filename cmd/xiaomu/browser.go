@@ -192,6 +192,7 @@ func (a *app) closeSession(s source.Session) {
 
 func (a *app) close() {
 	a.closed = true
+	a.closeNASClient()
 	a.cancelSourceSpeedTest()
 	a.posters.close()
 	a.pending, a.pendingLibrary = nil, nil
@@ -211,12 +212,8 @@ func (a *app) close() {
 		a.status = "测速记录保存失败：" + err.Error()
 	}
 	a.closeSite()
-	a.closeNASClient()
 	a.clearTitle()
-	if a.player != nil {
-		a.player.Close()
-		a.player = nil
-	}
+	a.closeCurrentPlayer()
 	a.syncNowPlaying()
 	if a.proxy != nil {
 		_ = a.proxy.Close()

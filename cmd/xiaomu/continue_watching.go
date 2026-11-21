@@ -20,29 +20,22 @@ func continueWatchingEntries(history []historyEntry) []historyEntry {
 	return entries
 }
 
-func (h *historyStore) setContinueHidden(name string, hidden bool) bool {
-	for i := range h.entries {
-		if titleKey(h.entries[i].Name) == titleKey(name) && h.entries[i].HomeHidden != hidden {
-			h.entries[i].HomeHidden = hidden
-			h.dirty = true
-			return true
+func (a *app) setContinueWatchingHidden(key string, hidden bool) {
+	for i := range a.history.entries {
+		entry := &a.history.entries[i]
+		if entry.dedupKey() == key && entry.HomeHidden != hidden {
+			entry.HomeHidden = hidden
+			a.history.dirty = true
+			a.flushHistory()
+			return
 		}
-	}
-	return false
-}
-
-func (a *app) dismissContinueWatching(name string) {
-	if a.history.setContinueHidden(name, true) {
-		a.flushHistory()
 	}
 }
 
 // Starting this title again restores its home shortcut. Periodic history
 // recording alone does not undo a dismissal.
 func (a *app) revealContinueWatching(name string) {
-	if a.history.setContinueHidden(name, false) {
-		a.flushHistory()
-	}
+	a.setContinueWatchingHidden(titleKey(name), false)
 }
 
 func (a *app) continueWatchingStrip(c *ui.Context) {
@@ -61,7 +54,7 @@ func (a *app) continueWatchingStrip(c *ui.Context) {
 		ui.ScrollHorizontal(c).FillWidth().Gap(12).Children(func() {
 			for _, e := range entries {
 				available := a.historyAvailable(e)
-				ui.Row(c).Key("continue-" + titleKey(e.Name)).Width(268).Padding(10).Gap(10).
+				ui.Row(c).Key("continue-" + e.dedupKey()).Width(268).Padding(10).Gap(10).
 					Radius(14).Background(surface).Children(func() {
 					poster := ui.Box(c).Size(60, 90).Radius(8).Clip().Background(ui.Hex("#24242c")).
 						Cursor(ui.CursorPointer).Label("继续观看 " + e.Name).Disabled(!available)
@@ -89,7 +82,7 @@ func (a *app) continueWatchingStrip(c *ui.Context) {
 							a.resume(e)
 						}
 						if glassButton(c, "从这里移除").AlignSelf(ui.Start).Label("从继续观看移除 " + e.Name).Clicked() {
-							a.dismissContinueWatching(e.Name)
+							a.setContinueWatchingHidden(e.dedupKey(), true)
 						}
 					})
 					if poster.Clicked() {

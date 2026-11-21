@@ -64,6 +64,8 @@ func (w countingWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
+func (w countingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 // BytesServed is how many media bytes this proxy has handed to players.
 func (p *Proxy) BytesServed() int64 { return p.served.Load() }
 

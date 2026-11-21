@@ -6,9 +6,12 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeNASFile struct {
@@ -59,6 +62,8 @@ func nasTestProxy(t *testing.T) *Proxy {
 			return &fakeNASFile{data: []byte("0123456789")}, nil
 		case `纪录片.mov`:
 			return &fakeNASFile{data: []byte("abcdefgh")}, nil
+		case "empty.mp4":
+			return &fakeNASFile{}, nil
 		case "没有这个文件.mp4":
 			return nil, fs.ErrNotExist
 		default:
@@ -175,6 +180,15 @@ func TestNASRangeErrorsAndHead(t *testing.T) {
 	if resp.StatusCode != http.StatusPartialContent || len(body) != 0 ||
 		resp.Header.Get("Content-Range") != "bytes 2-5/10" {
 		t.Fatalf("HEAD range: status %d body %d Content-Range %q", resp.StatusCode, len(body), resp.Header.Get("Content-Range"))
+	}
+
+	url = nasURL(t, p, "192.168.1.10", "Movies", "empty.mp4")
+	req = httptest.NewRequest(http.MethodGet, url, nil)
+	req.Header.Set("Range", "bytes=-3")
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+	if w.Code != http.StatusRequestedRangeNotSatisfiable || w.Header().Get("Content-Range") != "bytes */0" {
+		t.Fatalf("empty suffix range: status %d Content-Range %q", w.Code, w.Header().Get("Content-Range"))
 	}
 }
 
@@ -313,4 +327,141 @@ func TestNASTokenScopeAndRevocation(t *testing.T) {
 	}
 	// Revoking an unknown token is a no-op, not a panic.
 	p.RevokeNASFile("0123456789abcdef0123456789abcdef")
+}
+
+type blockedNASFile struct {
+	fakeNASFile
+	ctx   context.Context
+	reads chan<- context.Context
+}
+
+func (f *blockedNASFile) ReadAt(_ []byte, _ int64) (int, error) {
+	f.reads <- f.ctx
+	<-f.ctx.Done()
+	return 0, f.ctx.Err()
+}
+
+func TestNASActiveReadCancellation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	reads := make(chan context.Context, 3)
+	p := &Proxy{}
+	p.RegisterNASOpener(func(ctx context.Context, _, _, _ string) (NASFile, error) {
+		return &blockedNASFile{fakeNASFile: fakeNASFile{data: []byte("0123456789")}, ctx: ctx, reads: reads}, nil
+	})
+	tokenA, err := p.IssueNASFile("example.com", "Movies", "first.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenB, err := p.IssueNASFile("example.com", "Movies", "second.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type activeRead struct {
+		ctx    context.Context
+		cancel context.CancelFunc
+		done   <-chan struct{}
+	}
+	start := func(token, byteRange string) activeRead {
+		requestCtx, cancel := context.WithCancel(ctx)
+		t.Cleanup(cancel)
+		req := httptest.NewRequestWithContext(requestCtx, http.MethodGet, p.WrapNAS(token), nil)
+		if byteRange != "" {
+			req.Header.Set("Range", byteRange)
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			p.ServeHTTP(httptest.NewRecorder(), req)
+		}()
+		select {
+		case readCtx := <-reads:
+			return activeRead{ctx: readCtx, cancel: cancel, done: done}
+		case <-ctx.Done():
+			t.Fatal("playback request never started reading")
+			return activeRead{}
+		}
+	}
+	awaitCanceled := func(read activeRead) {
+		select {
+		case <-read.done:
+			if err := read.ctx.Err(); !errors.Is(err, context.Canceled) {
+				t.Fatalf("read context error = %v, want canceled", err)
+			}
+		case <-ctx.Done():
+			t.Fatal("canceled playback request did not return")
+		}
+	}
+	a := start(tokenA, "bytes=0-3")
+	b := start(tokenB, "")
+	seek := start(tokenB, "bytes=2-5")
+	seek.cancel()
+	awaitCanceled(seek)
+	if err := b.ctx.Err(); err != nil {
+		t.Fatalf("canceling one range canceled another request for that token: %v", err)
+	}
+	p.RevokeNASFile(tokenA)
+	awaitCanceled(a)
+	if err := b.ctx.Err(); err != nil {
+		t.Fatalf("revoking one token canceled another token's request: %v", err)
+	}
+	p.RevokeAllNASFiles()
+	awaitCanceled(b)
+}
+
+type blockedNASWriter struct {
+	*httptest.ResponseRecorder
+	ctx         context.Context
+	writing     chan struct{}
+	interrupted chan struct{}
+}
+
+func (w *blockedNASWriter) Write([]byte) (int, error) {
+	close(w.writing)
+	select {
+	case <-w.interrupted:
+		return 0, os.ErrDeadlineExceeded
+	case <-w.ctx.Done():
+		return 0, w.ctx.Err()
+	}
+}
+
+func (w *blockedNASWriter) SetWriteDeadline(time.Time) error {
+	close(w.interrupted)
+	return nil
+}
+
+func TestNASRevocationInterruptsWrite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	p := &Proxy{}
+	p.RegisterNASOpener(func(context.Context, string, string, string) (NASFile, error) {
+		return &fakeNASFile{data: []byte("0123456789")}, nil
+	})
+	token, err := p.IssueNASFile("example.com", "Movies", "video.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, p.WrapNAS(token), nil)
+	req.Header.Set("Range", "bytes=2-5")
+	w := &blockedNASWriter{
+		ResponseRecorder: httptest.NewRecorder(), ctx: ctx,
+		writing: make(chan struct{}), interrupted: make(chan struct{}),
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.ServeHTTP(w, req)
+	}()
+	select {
+	case <-w.writing:
+	case <-ctx.Done():
+		t.Fatal("playback response never started writing")
+	}
+	p.RevokeNASFile(token)
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("revocation did not interrupt the blocked response")
+	}
 }

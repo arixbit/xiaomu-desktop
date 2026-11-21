@@ -133,12 +133,19 @@ func (a *app) play() {
 	}
 }
 
+func (a *app) closeCurrentPlayer() {
+	a.revokePlayingNASToken()
+	a.playingNAS = nil
+	if a.player != nil {
+		a.player.Close()
+		a.player = nil
+	}
+}
+
 // adoptPlayer makes p the current player and resets the per-play state.
 // Episode replacements close the old player here, once the new one opens.
 func (a *app) adoptPlayer(p *ui.VideoPlayer) {
-	if a.player != nil {
-		a.player.Close()
-	}
+	a.closeCurrentPlayer()
 	a.player = p
 	a.applyPlayerPreferences(p)
 	a.playbackWait = playbackWait{}
@@ -157,10 +164,6 @@ func (a *app) adoptPlayer(p *ui.VideoPlayer) {
 	a.playingFile = false
 	a.playingName = ""
 	a.playingSource, a.playingEpisode = "", ""
-	// A NAS file being replaced loses its playback token: only the file
-	// on show may be read through the proxy.
-	a.revokePlayingNASToken()
-	a.playingNAS = nil
 }
 
 // playURL opens HTTP media through the proxy. The caller publishes Now
@@ -191,9 +194,8 @@ func (a *app) openPlaybackURL(raw string, headers map[string]string, keepCurrent
 	} else {
 		p.SetHeaders(headers)
 	}
-	if !keepCurrent && a.player != nil {
-		a.player.Close()
-		a.player = nil
+	if !keepCurrent {
+		a.closeCurrentPlayer()
 	}
 	opener := a.open
 	if opener == nil {

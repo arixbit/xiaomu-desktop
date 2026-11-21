@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // NASFile is one open NAS file served to the player. The proxy only ever
@@ -32,6 +33,8 @@ type NASOpener func(ctx context.Context, server, share, path string) (NASFile, e
 // share-relative path the token may open, and nothing else.
 type nasBinding struct {
 	server, share, path string
+	ctx                 context.Context
+	cancel              context.CancelFunc
 }
 
 // IssueNASFile binds one NAS file to a fresh random token and returns it.
@@ -43,11 +46,12 @@ func (p *Proxy) IssueNASFile(server, share, path string) (string, error) {
 		return "", err
 	}
 	token := hex.EncodeToString(raw[:])
+	ctx, cancel := context.WithCancel(context.Background())
 	p.mu.Lock()
 	if p.nasTokens == nil {
 		p.nasTokens = make(map[string]nasBinding)
 	}
-	p.nasTokens[token] = nasBinding{server, share, path}
+	p.nasTokens[token] = nasBinding{server: server, share: share, path: path, ctx: ctx, cancel: cancel}
 	p.mu.Unlock()
 	return token, nil
 }
@@ -59,19 +63,25 @@ func (p *Proxy) WrapNAS(token string) string {
 	return p.base + "/nas?token=" + url.QueryEscape(token)
 }
 
-// RevokeNASFile revokes one token. Revoking an unknown token is a no-op.
+// RevokeNASFile revokes one token and interrupts its active requests.
 func (p *Proxy) RevokeNASFile(token string) {
 	if token == "" {
 		return
 	}
 	p.mu.Lock()
-	delete(p.nasTokens, token)
+	if binding, ok := p.nasTokens[token]; ok {
+		delete(p.nasTokens, token)
+		binding.cancel()
+	}
 	p.mu.Unlock()
 }
 
-// RevokeAllNASFiles revokes every issued token.
+// RevokeAllNASFiles revokes all tokens and interrupts their active requests.
 func (p *Proxy) RevokeAllNASFiles() {
 	p.mu.Lock()
+	for _, binding := range p.nasTokens {
+		binding.cancel()
+	}
 	p.nasTokens = nil
 	p.mu.Unlock()
 }
@@ -111,8 +121,33 @@ func (p *Proxy) serveNAS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "内网盘未连接", http.StatusBadGateway)
 		return
 	}
-	f, err := opener(r.Context(), binding.server, binding.share, binding.path)
+	// Cancellation must be visible to SMB as soon as this token is
+	// revoked, even if the write-deadline callback hasn't run yet.
+	ctx, cancel := context.WithCancel(binding.ctx)
+	defer cancel()
+	stopRequest := context.AfterFunc(r.Context(), cancel)
+	defer stopRequest()
+	revoked := make(chan struct{})
+	stop := context.AfterFunc(binding.ctx, func() {
+		// The handler can be blocked writing to the player instead of
+		// reading SMB. Interrupt the write as well as the file read.
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now())
+		close(revoked)
+	})
+	defer func() {
+		if !stop() {
+			// The response writer is valid only while this handler runs.
+			<-revoked
+		}
+	}()
+	if ctx.Err() != nil || r.Context().Err() != nil {
+		return
+	}
+	f, err := opener(ctx, binding.server, binding.share, binding.path)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		if errors.Is(err, fs.ErrNotExist) {
 			http.Error(w, "文件不存在", http.StatusNotFound)
 			return
@@ -121,6 +156,9 @@ func (p *Proxy) serveNAS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
+	if ctx.Err() != nil {
+		return
+	}
 	size := f.Size()
 	w.Header().Set("Accept-Ranges", "bytes")
 	if ct := nasContentType(binding.path); ct != "" {
@@ -156,7 +194,7 @@ func (p *Proxy) serveNAS(w http.ResponseWriter, r *http.Request) {
 // open-ended ("bytes=n-") forms are accepted; anything else, or a range
 // past the end of the file, is rejected.
 func parseRange(header string, size int64) (start, length int64, ok bool) {
-	if !strings.HasPrefix(header, "bytes=") || strings.Contains(header, ",") {
+	if size <= 0 || !strings.HasPrefix(header, "bytes=") || strings.Contains(header, ",") {
 		return 0, 0, false
 	}
 	spec := strings.TrimPrefix(header, "bytes=")

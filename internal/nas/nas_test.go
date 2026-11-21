@@ -420,6 +420,77 @@ func (s *blockingSession) Mount(ctx context.Context, share string) (Share, error
 
 func (s *blockingSession) Close() error { return nil }
 
+type fileCloseProbe struct {
+	fakeNASFile
+	cancelStat context.CancelFunc
+	called     bool
+	ctxErr     error
+	deadline   time.Time
+}
+
+func (f *fileCloseProbe) Stat(ctx context.Context) (os.FileInfo, error) {
+	if f.cancelStat != nil {
+		f.cancelStat()
+		return nil, ctx.Err()
+	}
+	return f.fakeNASFile.Stat(ctx)
+}
+
+func (f *fileCloseProbe) Close(ctx context.Context) error {
+	f.called = true
+	f.ctxErr = ctx.Err()
+	f.deadline, _ = ctx.Deadline()
+	return nil
+}
+
+type fileCloseProbeShare struct {
+	fakeShare
+	file *fileCloseProbe
+}
+
+func (s *fileCloseProbeShare) Open(context.Context, string) (ShareFile, error) {
+	return s.file, nil
+}
+
+func TestNASFileCleanupUsesIndependentDeadline(t *testing.T) {
+	for _, name := range []string{"stat canceled", "request canceled after open"} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			probe := &fileCloseProbe{}
+			if name == "stat canceled" {
+				probe.cancelStat = cancel
+			}
+			share := &fileCloseProbeShare{file: probe}
+			client := NewWithDial(Server{Address: "example.com", Share: "Movies"}, func(context.Context, Server) (Session, error) {
+				return &blockingSession{share: share}, nil
+			})
+			if err := client.Dial(ctx); err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+
+			file, err := client.Open(ctx, "movie.mp4")
+			if probe.cancelStat != nil {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("Open after canceled Stat = %v, want context.Canceled", err)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				cancel()
+				if err := file.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if remaining := time.Until(probe.deadline); !probe.called || probe.ctxErr != nil || remaining <= 0 || remaining > 5*time.Second {
+				t.Fatalf("Close called=%v context error=%v remaining=%v, want independent deadline", probe.called, probe.ctxErr, remaining)
+			}
+		})
+	}
+}
+
 // A read that is still waiting on the NAS ends when its request is
 // cancelled, instead of hanging until the NAS answers.
 func TestFileReadCancelledByContext(t *testing.T) {

@@ -115,10 +115,7 @@ func (a *app) openLocalFile(path string) bool {
 		a.openLocal = video.Open
 	}
 	a.prepareExternalPlayback()
-	if a.player != nil {
-		a.player.Close()
-		a.player = nil
-	}
+	a.closeCurrentPlayer()
 	p, err := a.openLocal(path)
 	if err != nil {
 		a.status = "打开文件失败：" + err.Error()

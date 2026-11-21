@@ -540,18 +540,11 @@ func (a *app) leavePlayer() {
 	a.cancelJob(jobPlay)
 	a.clearPanelChoice()
 	a.flushHistory()
-	if a.player != nil {
-		a.player.Close()
-		a.player = nil
-	}
+	a.closeCurrentPlayer()
 	a.syncNowPlaying()
 	a.playingLive, a.playingDirect = false, false
 	a.playingFile = false
 	a.playingName = ""
-	// Leaving the player ends the NAS playback: its token dies here, so
-	// the file cannot be read through the proxy afterwards.
-	a.revokePlayingNASToken()
-	a.playingNAS = nil
 	a.playerOverlay = playerOverlayState{}
 	a.playerPointer = playerPointerState{}
 	a.playbackWait = playbackWait{}

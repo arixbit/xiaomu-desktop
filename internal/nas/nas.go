@@ -291,12 +291,13 @@ func (c *Client) Dial(ctx context.Context) error {
 		return err
 	}
 	c.mu.Lock()
-	if c.gen != gen || c.sess != nil {
+	disconnected := c.gen != gen
+	if disconnected || c.sess != nil {
 		c.mu.Unlock()
 		// Closed while dialling, or connected by someone else meanwhile:
 		// release what we just opened instead of installing it.
 		releaseOpened(share, sess)
-		if c.gen != gen {
+		if disconnected {
 			return fmt.Errorf("内网盘已断开")
 		}
 		return nil
@@ -387,11 +388,11 @@ func (c *Client) Open(ctx context.Context, path string) (*File, error) {
 	}
 	info, err := f.Stat(ctx)
 	if err != nil {
-		_ = f.Close(ctx)
+		_ = closeShareFile(ctx, f)
 		return nil, err
 	}
 	if info.IsDir() {
-		_ = f.Close(ctx)
+		_ = closeShareFile(ctx, f)
 		return nil, fmt.Errorf("%s 是文件夹", Base(path))
 	}
 	return &File{f: f, size: info.Size(), ctx: ctx}, nil
@@ -464,4 +465,12 @@ func (f *File) Read(p []byte) (int, error) {
 func (f *File) Size() int64 { return f.size }
 
 // Close closes the file. It does not close the client.
-func (f *File) Close() error { return f.f.Close(context.Background()) }
+func (f *File) Close() error { return closeShareFile(f.ctx, f.f) }
+
+func closeShareFile(ctx context.Context, file ShareFile) error {
+	// A canceled read still owns the remote file handle. Give CLOSE its
+	// own deadline so it can run without holding the HTTP request open indefinitely.
+	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return file.Close(closeCtx)
+}
