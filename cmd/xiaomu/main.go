@@ -51,6 +51,7 @@ type app struct {
 	library         libraryBrowser
 	discovery       discoveryBrowser
 	live            liveBrowser
+	nas             nasBrowser
 	history         historyStore
 	favorites       favoriteStore
 	searchHistory   searchHistoryStore
@@ -73,6 +74,9 @@ type app struct {
 
 	playingLive   bool
 	playingDirect bool
+	// playingNAS is the NAS file on show, if any; playingName is its
+	// display name.
+	playingNAS *nasPlaying
 	// playingFile is set for a local file opened from the file manager; playingName
 	// is that file's name, shown in the header and Now Playing.
 	playingFile    bool
@@ -147,6 +151,7 @@ func (a *app) adoptPlayer(p *ui.VideoPlayer) {
 	a.playingFile = false
 	a.playingName = ""
 	a.playingSource, a.playingEpisode = "", ""
+	a.playingNAS = nil
 }
 
 // playURL opens HTTP media through the proxy. The caller publishes Now
@@ -289,6 +294,7 @@ func main() {
 			})
 		})
 		a.restoreSavedSource()
+		a.restoreNAS()
 		// Library actions wait separately for the asynchronous restore.
 		a.drainPending()
 		win.OnClosed(a.close)

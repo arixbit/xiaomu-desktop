@@ -141,6 +141,9 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 	if a.playingFile {
 		name = a.playingName
 	}
+	if a.playingNAS != nil {
+		name = a.playingNAS.Name
+	}
 	top := float32(12)
 	if bar := c.TitleBar(); bar.Bottom+8 > top {
 		top = bar.Bottom + 8
@@ -548,6 +551,7 @@ func (a *app) leavePlayer() {
 	a.playingLive, a.playingDirect = false, false
 	a.playingFile = false
 	a.playingName = ""
+	a.playingNAS = nil
 	a.playerOverlay = playerOverlayState{}
 	a.playerPointer = playerPointerState{}
 	a.playbackWait = playbackWait{}

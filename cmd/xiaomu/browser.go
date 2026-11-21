@@ -42,6 +42,7 @@ const (
 	jobSite                  // browsing one site
 	jobTitle                 // reading a title from one of its sources
 	jobPlay                  // resolving an episode into media
+	jobNAS                   // connecting to the NAS or listing a folder
 	jobSlots
 )
 
@@ -186,6 +187,7 @@ func (a *app) close() {
 		a.status = "测速记录保存失败：" + err.Error()
 	}
 	a.closeSite()
+	a.closeNASClient()
 	a.clearTitle()
 	if a.player != nil {
 		a.player.Close()

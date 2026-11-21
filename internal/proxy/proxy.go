@@ -41,6 +41,7 @@ type Proxy struct {
 	headers     map[string]string
 	client      *http.Client
 	readTimeout time.Duration
+	nasOpener   NASOpener
 
 	// served counts the media bytes written to players. The proxy
 	// only ever serves playback, so this is the video's throughput;
@@ -128,6 +129,10 @@ func (p *Proxy) Close() error {
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w = countingWriter{ResponseWriter: w, served: &p.served}
+	if r.URL.Path == "/nas" {
+		p.serveNAS(w, r)
+		return
+	}
 	if r.URL.Path != "/u" {
 		http.NotFound(w, r)
 		return

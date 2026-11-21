@@ -146,8 +146,37 @@ func (a *app) flushHistory() {
 }
 
 // recordHistory notes once a second where the episode on show is, and writes
-// it to disk now and then; leaving the player writes it too.
+// it to disk now and then; leaving the player writes it too. A NAS file is
+// recorded the same way, with the server and share as its marker instead
+// of a library site.
 func (a *app) recordHistory(p *ui.VideoPlayer, now time.Time) {
+	if a.playingNAS != nil {
+		if now.Sub(a.history.noted) < time.Second {
+			return
+		}
+		position, duration := p.Position().Seconds(), p.Duration().Seconds()
+		if p.Ended() && duration > 0 {
+			position = duration
+		}
+		a.history.noted = now
+		np := a.playingNAS
+		a.history.note(historyEntry{
+			Name:      np.Name,
+			ConfigURL: "smb://" + np.Server + "/" + np.Share,
+			SiteKey:   "nas",
+			Origin:    "内网盘",
+			VideoID:   np.Path,
+			Line:      np.Server,
+			Episode:   "正片",
+			Position:  position,
+			Duration:  duration,
+			Updated:   now,
+		})
+		if now.Sub(a.history.saved) >= historySaveGap {
+			a.flushHistory()
+		}
+		return
+	}
 	t := a.title
 	if !a.hasEpisodes() || a.playingEpisode == "" || now.Sub(a.history.noted) < time.Second {
 		return
@@ -191,7 +220,11 @@ func entryKey(entry library.Entry) string {
 }
 
 // historyAvailable reports whether the entry's source is still imported.
+// A NAS entry is available while the same server and share are saved.
 func (a *app) historyAvailable(e historyEntry) bool {
+	if e.SiteKey == "nas" {
+		return a.nasMatches(e)
+	}
 	return a.configAvailable(e.ConfigURL)
 }
 
@@ -241,7 +274,12 @@ func resumePoint(detail catalog.Detail, e historyEntry) (line int, episode catal
 }
 
 // resume plays an entry from where it stopped, straight into the player.
+// A NAS entry never goes through the library: it reopens its own file.
 func (a *app) resume(e historyEntry) {
+	if e.SiteKey == "nas" {
+		a.resumeNAS(e)
+		return
+	}
 	preferred := a.sourceMemory.entries[titleKey(e.Name)].Preferred
 	originalAvailable := a.historyAvailable(e)
 	preferSaved := preferred.VideoID != "" && a.configAvailable(preferred.ConfigURL)
@@ -417,6 +455,9 @@ func (a *app) historyRow(c *ui.Context, i int, e historyEntry) {
 			origin := e.Origin
 			if !available {
 				origin = "片源已移除"
+				if e.SiteKey == "nas" {
+					origin = "内网盘已移除或更换"
+				}
 			}
 			ui.Text(c, origin).FontSize(12).TextColor(textMuted).SingleLine()
 		})
