@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
@@ -164,7 +163,7 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 			ui.Text(c, name).SingleLine().TextColor(playerText).TextShadow(0, 1, 4, playerInk)
 		})
 		if hasEpisodes {
-			panelLabel, closeLabel := "线路与选集", "收起选集"
+			panelLabel, closeLabel := "换源与选集", "收起选集"
 			if a.playingLive {
 				panelLabel, closeLabel = "频道列表", "收起频道"
 			}
@@ -328,25 +327,11 @@ func (a *app) playerPanel(c *ui.Context) ui.Element {
 		if !a.hasEpisodes() { // the header left the player earlier in this frame
 			return
 		}
-		candidates := a.candidates()
-		tabs := []string{"选集"}
-		if len(candidates) > 1 {
-			tabs = append(tabs, "换源")
-		}
-		skipTab := len(tabs)
-		tabs = append(tabs, "跳过")
-		if a.panelTab < 0 || a.panelTab >= len(tabs) {
-			a.panelTab = 0
-		}
-		ui.Segmented(c, &a.panelTab, tabs...).Label("面板内容")
-		if a.panelTab == skipTab {
+		ui.Segmented(c, &a.panelTab, "选集", "跳过").Label("面板内容")
+		if a.panelTab == 1 {
 			ui.Scroll(c).FillWidth().Grow(1).Gap(10).Children(func() {
 				a.panelSeriesSkips(c)
 			})
-			return
-		}
-		if a.panelTab == 1 && len(candidates) > 1 {
-			a.panelSources(c, candidates)
 			return
 		}
 		a.panelEpisodes(c)
@@ -364,15 +349,22 @@ func panelButton(c *ui.Context, label string, selected bool) ui.Element {
 }
 
 func (a *app) panelEpisodes(c *ui.Context) {
-	detail := a.title.detail
-	currentSource, _, playing := a.currentEpisode()
-	if a.panelSource < 0 || a.panelSource >= len(detail.Sources) {
-		a.panelSource = 0
-		if playing {
-			a.panelSource = currentSource
-		}
-	}
 	ui.Scroll(c).FillWidth().Grow(1).Gap(8).Children(func() {
+		a.panelSources(c, a.candidates())
+		detail := a.title.detail
+		if choice := a.panelChoice; choice != nil {
+			if choice.message != "" {
+				ui.Text(c, choice.message).FontSize(12)
+			}
+			detail = choice.detail
+		}
+		if detail == nil || len(detail.Sources) == 0 {
+			return
+		}
+		if a.panelSource < 0 || a.panelSource >= len(detail.Sources) {
+			a.panelSource, _, _ = a.currentEpisode()
+		}
+		selectedLine := a.panelSource
 		ui.Text(c, "线路").Bold()
 		for i, source := range detail.Sources {
 			name := source.Name
@@ -380,19 +372,15 @@ func (a *app) panelEpisodes(c *ui.Context) {
 				name = fmt.Sprintf("线路 %d", i+1)
 			}
 			if panelButton(c, name, i == a.panelSource).Key(fmt.Sprintf("player-source-%d", i)).Clicked() {
-				if _, index, requested, at, ok := a.recoveryEpisode(); ok {
-					if _, candidate, found := matchEpisode(catalog.Detail{Sources: detail.Sources[i : i+1]}, requested.Name, index); found {
-						a.playEpisodeAt(source.Name, candidate, at)
-					}
-				}
-				a.panelSource = i
+				selectedLine = i
+				a.selectPanelLine(detail, i)
 			}
 		}
 		ui.Text(c, "选集").Bold()
-		selected := detail.Sources[a.panelSource]
+		selected := detail.Sources[selectedLine]
 		ui.Row(c).FillWidth().Wrap().Gap(6).Children(func() {
 			for i, episode := range selected.Episodes {
-				active := selected.Name == a.playingSource && episode.Name == a.playingEpisode
+				active := a.panelChoice == nil && selected.Name == a.playingSource && episode.Name == a.playingEpisode
 				button := ui.Button(c, episodeButtonLabel(episode.Name)).Key(fmt.Sprintf("player-episode-%d", i)).MinWidth(52).Radius(12)
 				if active {
 					button.Background(ui.RGB(255, 255, 255)).TextColor(playerInk)
@@ -400,7 +388,7 @@ func (a *app) panelEpisodes(c *ui.Context) {
 					button.Material(glass.Glass{Style: glass.Clear, Tint: ui.RGBA(55, 50, 92, 0.51), Interactive: true}).TextColor(playerText)
 				}
 				if button.Clicked() {
-					a.playEpisode(selected.Name, episode)
+					a.playPanelEpisode(selectedLine, episode, 0)
 				}
 			}
 		})
@@ -413,19 +401,56 @@ func (a *app) panelEpisodes(c *ui.Context) {
 	})
 }
 
-// panelSources lists the other sites that have the title; choosing one
-// keeps the episode and the position.
+// Keep the source visible above its lines even when only one site is known.
 func (a *app) panelSources(c *ui.Context, candidates []library.Item) {
-	ui.Text(c, "换来源后从当前集、当前进度继续播放").FontSize(12)
-	ui.Scroll(c).FillWidth().Grow(1).Gap(6).Children(func() {
-		for _, item := range candidates {
-			key := itemKey(item)
-			current := itemKey(a.title.item) == key
-			if panelButton(c, item.Entry.Label(), current).Key(key).Label("换到 "+item.Entry.Label()).Clicked() && !current {
-				a.switchSource(item)
+	t := a.title
+	scan := &t.lookup
+	if titleKey(a.library.search.query) == titleKey(t.name) {
+		scan = &a.library.search
+	}
+	ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "来源").Bold().Grow(1)
+		if a.library.root == nil || scan.running {
+			return
+		}
+		switch {
+		case len(scan.more) > 0:
+			if ui.Button(c, "查找更多来源").Clicked() {
+				a.startScan(scan, scan.query, true)
+			}
+		case scan.query == "":
+			if ui.Button(c, "查找其他来源").Clicked() {
+				a.startScan(scan, t.name, false)
+			}
+		case scan.stopped || scan.progress.Failed > 0 || scan.progress.Cooling > 0:
+			if ui.Button(c, "重新查找").Clicked() {
+				a.reloadScan(scan)
 			}
 		}
 	})
+	item := t.item
+	if a.panelChoice != nil {
+		item = a.panelChoice.item
+	}
+	if len(candidates) > 1 {
+		retry := a.panelChoice != nil && a.panelChoice.detail == nil && !a.running(jobPlay)
+		ui.MenuButton(c, item.Entry.Label(), func(m *ui.Menu) {
+			for _, candidate := range candidates {
+				key := itemKey(candidate)
+				selected := item.Entry.Config != nil && itemKey(item) == key
+				if m.Item(candidate.Entry.Label()).ID(key).Radio(selected).Disabled(selected && !retry).Chosen() {
+					a.switchSource(candidate)
+				}
+			}
+		}).Label("选择来源").FillWidth()
+	} else if label := item.Entry.Label(); label != "" {
+		ui.Text(c, label)
+	}
+	if scan.running {
+		ui.Text(c, fmt.Sprintf("正在查找来源 · %d/%d", scan.progress.Completed, scan.progress.Total)).FontSize(12)
+	} else if scan.query != "" && len(candidates) == 1 && len(scan.more) == 0 {
+		ui.Text(c, "暂未找到其他来源").FontSize(12)
+	}
 }
 
 // panelChannels changes the channel without leaving the player.
@@ -496,7 +521,7 @@ func (a *app) trackPlayback(c *ui.Context, p *ui.VideoPlayer) {
 }
 
 func (a *app) advanceEpisode(p *ui.VideoPlayer, now time.Time) {
-	if !a.hasEpisodes() || !a.autoNext || a.autoNextPending || a.running(jobPlay) || a.playFailure != nil || p.Err() != nil {
+	if !a.hasEpisodes() || !a.autoNext || a.autoNextPending || a.running(jobPlay) || a.panelChoice != nil && a.panelOpen || a.playFailure != nil || p.Err() != nil {
 		a.episodeEnd = playbackEnd{}
 		return
 	}
@@ -539,6 +564,7 @@ func (a *app) currentEpisode() (sourceIndex, episodeIndex int, ok bool) {
 
 func (a *app) leavePlayer() {
 	a.cancelJob(jobPlay)
+	a.clearPanelChoice()
 	a.flushHistory()
 	if a.player != nil {
 		a.player.Close()

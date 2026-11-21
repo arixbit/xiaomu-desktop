@@ -118,12 +118,14 @@ func (p *Proxy) Header(name string) string {
 	return ""
 }
 
-// Close stops the listener.
+// Close stops the listener and releases upstream connections from this playback.
 func (p *Proxy) Close() error {
 	if p.srv == nil {
 		return nil
 	}
-	return p.srv.Close()
+	err := p.srv.Close()
+	p.client.CloseIdleConnections()
+	return err
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {

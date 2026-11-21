@@ -17,6 +17,52 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+func TestNativePlayerSwitchesSiteAtCurrentPosition(t *testing.T) {
+	dir := os.Getenv("XIAOMU_NATIVE_MEDIA_DIR")
+	if dir == "" {
+		t.Skip("requires local h264.mp4 and hevc.mp4 fixtures")
+	}
+	media := httptest.NewServer(http.FileServer(http.Dir(dir)))
+	t.Cleanup(media.Close)
+	a, other := playerWithTwoSites(t, "备用线", "02$"+media.URL+"/h264.mp4#01$"+media.URL+"/hevc.mp4")
+	a.title.seeds = append(a.title.seeds, other)
+	a.open, a.autoNext = nil, false
+	a.startEpisode(catalog.Playback{URL: media.URL + "/h264.mp4"}, "线路", a.title.detail.Sources[0].Episodes[0], 2*time.Second)
+	tt := ui.NewTester(a.view, 1120, 760)
+	waitForPlayback := func(at time.Duration) {
+		t.Helper()
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			tt.Frame()
+			p := a.player
+			if p == nil || p.Err() != nil {
+				t.Fatalf("native player failed: %v", tt.Texts())
+			}
+			if w, h := p.Size(); w > 0 && h > 0 && p.Ready() && a.resumeAt == 0 && p.Position() >= at {
+				return
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		t.Fatalf("native playback did not reach %s: %v", at, tt.Texts())
+	}
+	waitForPlayback(3 * time.Second)
+	before := a.playbackPosition()
+	if err := tt.Click("换源与选集"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("选择来源"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.ChooseMenuItem("乙站"); err != nil {
+		t.Fatal(err)
+	}
+	if a.title.item.Entry.Site.Key != "乙站" || a.playingSource != "备用线" || a.playingEpisode != "01" || a.playbackPosition() < before {
+		t.Fatalf("source switch lost episode or position: %v at %s", tt.Texts(), a.playbackPosition())
+	}
+	waitForPlayback(before + time.Second)
+	t.Logf("switched at %s and reached %s on the new source", before, a.playbackPosition())
+}
+
 // This opt-in test uses generated, silent h264.mp4 and hevc.mp4 files. It
 // exercises the real system decoder and loopback proxy, not a mocked player.
 func TestNativeVODRecoveryAndPreferences(t *testing.T) {

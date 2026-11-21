@@ -90,6 +90,7 @@ type app struct {
 	speedAt         time.Time
 	speedText       string
 	panelSource     int
+	panelChoice     *playerSourceChoice
 	panelTab        int
 	panelOpen       bool
 	panelTouched    bool
@@ -123,8 +124,7 @@ func (a *app) play() {
 }
 
 // adoptPlayer makes p the current player and resets the per-play state.
-// playURL and openLocalFile share it; both close the old player before
-// opening, so a failed open still leaves no player, as before.
+// Episode replacements close the old player here, once the new one opens.
 func (a *app) adoptPlayer(p *ui.VideoPlayer) {
 	if a.player != nil {
 		a.player.Close()
@@ -152,23 +152,32 @@ func (a *app) adoptPlayer(p *ui.VideoPlayer) {
 // playURL opens HTTP media through the proxy. The caller publishes Now
 // Playing after assigning the episode, channel or direct-play state.
 func (a *app) playURL(raw string, headers map[string]string) bool {
+	return a.openPlaybackURL(raw, headers, false)
+}
+
+// A replacement episode stages its headers on a separate proxy so the old player
+// can keep using its own session until the new media actually opens.
+func (a *app) openPlaybackURL(raw string, headers map[string]string, keepCurrent bool) bool {
 	raw = strings.TrimSpace(raw)
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		a.status = "请输入 http 或 https 播放地址"
 		return false
 	}
-	if a.proxy == nil {
-		p, err := proxy.Start(nil)
+	p := a.proxy
+	if p == nil || keepCurrent {
+		p, err = proxy.Start(headers)
 		if err != nil {
 			a.status = "代理启动失败: " + err.Error()
 			return false
 		}
-		a.proxy = p
+		if !keepCurrent {
+			a.proxy = p
+		}
+	} else {
+		p.SetHeaders(headers)
 	}
-	a.proxy.SetHeaders(headers)
-	wrapped := a.proxy.Wrap(raw)
-	if a.player != nil {
+	if !keepCurrent && a.player != nil {
 		a.player.Close()
 		a.player = nil
 	}
@@ -176,13 +185,22 @@ func (a *app) playURL(raw string, headers map[string]string) bool {
 	if opener == nil {
 		opener = video.OpenURL
 	}
-	player, err := opener(wrapped)
+	player, err := opener(p.Wrap(raw))
 	if err != nil {
+		if keepCurrent {
+			p.Close()
+		}
 		a.status = "无法打开: " + err.Error()
 		a.syncNowPlaying()
 		return false
 	}
 	a.adoptPlayer(player)
+	if keepCurrent {
+		if a.proxy != nil {
+			a.proxy.Close()
+		}
+		a.proxy = p
+	}
 	a.playingLive, a.playingDirect = false, false
 	a.status = "正在播放"
 	return true

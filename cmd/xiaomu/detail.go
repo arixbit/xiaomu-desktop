@@ -24,6 +24,7 @@ type titlePage struct {
 	name, pic      string
 	score          string            // Douban score, when the opener knew one
 	seeds          []library.Item    // sources known when the page opened
+	lookup         libraryScan       // exact-title lookup without replacing the search page
 	failed         map[string]string // source → why it could not be read
 	auto           bool              // open the first source that reads
 	searchFallback bool              // a saved source may have disappeared
@@ -88,6 +89,8 @@ func (a *app) clearTitle() {
 	a.cancelJob(jobTitle)
 	a.cancelJob(jobPlay)
 	if a.title != nil {
+		a.stopScan(&a.title.lookup)
+		a.clearPanelChoice()
 		a.closeSession(a.title.session)
 		a.title = nil
 	}
@@ -110,10 +113,16 @@ func (a *app) candidates() []library.Item {
 		seen[itemKey(item)] = true
 	}
 	key := titleKey(t.name)
-	for _, item := range a.library.search.items {
-		if titleKey(item.Video.Name) == key && !seen[itemKey(item)] {
-			seen[itemKey(item)] = true
-			out = append(out, item)
+	if t.item.Entry.Config != nil && !seen[itemKey(t.item)] {
+		seen[itemKey(t.item)] = true
+		out = append(out, t.item)
+	}
+	for _, items := range [][]library.Item{a.library.search.items, t.lookup.items} {
+		for _, item := range items {
+			if titleKey(item.Video.Name) == key && !seen[itemKey(item)] {
+				seen[itemKey(item)] = true
+				out = append(out, item)
+			}
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -315,6 +324,7 @@ func (a *app) loadEpisode(line string, episode catalog.Episode, at time.Duration
 	if t == nil || t.session == nil {
 		return
 	}
+	a.clearPanelChoice()
 	session := t.session
 	videoID := string(t.item.Video.ID)
 	refresh = refresh && videoID != ""
@@ -381,11 +391,33 @@ func (a *app) startEpisode(play catalog.Playback, line string, episode catalog.E
 	}
 	a.sourceAttempt.line, a.sourceAttempt.episode = line, episode.Name
 	a.flushHistory()
-	if !a.playURL(play.URL, play.Headers) {
+	if !a.openEpisodeMedia(play) {
 		a.failSourceAttempt()
 		a.playFailure = &episodeFailure{line: line, episode: episode, at: at, err: fmt.Errorf("%s", a.status)}
+		if a.player != nil {
+			a.player.Pause()
+		}
 		return
 	}
+	a.notePlayingEpisode(line, episode, at)
+}
+
+// An open episode panel stays in place across line and source changes,
+// including in compact windows and fullscreen.
+func (a *app) openEpisodeMedia(play catalog.Playback) bool {
+	replacing := a.player != nil
+	open, touched := a.panelOpen, a.panelTouched
+	if !a.openPlaybackURL(play.URL, play.Headers, replacing) {
+		return false
+	}
+	if replacing {
+		a.panelOpen, a.panelTouched = open, touched
+	}
+	return true
+}
+
+func (a *app) notePlayingEpisode(line string, episode catalog.Episode, at time.Duration) {
+	t := a.title
 	a.playingSource, a.playingEpisode, a.resumeAt = line, episode.Name, at
 	a.syncNowPlaying()
 	a.sourceAttempt.player = a.player
@@ -415,51 +447,6 @@ func matchEpisode(detail catalog.Detail, name string, index int) (line int, epis
 		return 0, detail.Sources[0].Episodes[index], true
 	}
 	return 0, catalog.Episode{}, false
-}
-
-// switchSource keeps the episode playing, from another site that has the title.
-func (a *app) switchSource(item library.Item) {
-	t := a.title
-	if t == nil {
-		return
-	}
-	_, index, episode, at, ok := a.recoveryEpisode()
-	if !ok {
-		return
-	}
-	name := episode.Name
-	assets := strings.TrimSpace(a.browser.assets)
-	resolver := resolve.Resolver{Sniff: a.sniffPage, Parsers: entryParsers(item.Entry)}
-	a.cancelJob(jobTitle)
-	a.beginSourceAttempt(item, "", name)
-	a.run(jobPlay, "切换来源", func(ctx context.Context) (jobResult, error) {
-		start := time.Now()
-		session, detail, err := openItem(ctx, item, assets)
-		elapsed := time.Since(start)
-		if err != nil {
-			return jobResult{}, err
-		}
-		line, episode, ok := matchEpisode(detail, name, index)
-		if !ok {
-			session.Close()
-			return jobResult{}, fmt.Errorf("这个来源没有对应的分集")
-		}
-		play, err := resolvePlay(ctx, session, resolver, detail.Sources[line].Name, episode)
-		if err != nil {
-			session.Close()
-			return jobResult{}, err
-		}
-		return jobResult{discard: session.Close, apply: func() {
-			a.closeSession(t.session)
-			t.session, t.detail, t.item, t.auto = session, &detail, item, false
-			t.line, t.chunk = line, 0
-			a.recordLatency(item.Entry.Key(), elapsed)
-			a.startEpisode(play, detail.Sources[line].Name, episode, at)
-		}}, nil
-	}, func(err error) {
-		a.failSourceAttempt()
-		a.status = jobError("切换来源", err)
-	})
 }
 
 // playNextLine retries the episode on the title's next play line.
