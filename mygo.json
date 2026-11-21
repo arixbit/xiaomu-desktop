@@ -1,7 +1,7 @@
 {
   "name": "Xiaomu",
   "identifier": "dev.arixbit.xiaomu",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "main": "./cmd/xiaomu",
   "icon": "resources/icon.png",
   "urlSchemes": ["xiaomu"],

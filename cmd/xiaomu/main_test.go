@@ -4,8 +4,50 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
+
+func TestWindowBoundsInWorkArea(t *testing.T) {
+	work := mygo.Rectangle{Width: 1024, Height: 720}
+	tests := []struct {
+		name   string
+		bounds mygo.Rectangle
+		work   mygo.Rectangle
+		want   mygo.Rectangle
+	}{
+		{
+			name:   "oversized window on a small display",
+			bounds: mygo.Rectangle{X: -48, Y: -20, Width: 1120, Height: 760},
+			work:   work,
+			want:   work,
+		},
+		{
+			name:   "saved position clipped on a secondary display",
+			bounds: mygo.Rectangle{X: -2300, Y: 470, Width: 800, Height: 600},
+			work:   mygo.Rectangle{X: -2240, Y: 32, Width: 1280, Height: 900},
+			want:   mygo.Rectangle{X: -2240, Y: 332, Width: 800, Height: 600},
+		},
+		{
+			name:   "preserve visible position and size",
+			bounds: mygo.Rectangle{X: 80, Y: 45, Width: 800, Height: 600},
+			work:   work,
+			want:   mygo.Rectangle{X: 80, Y: 45, Width: 800, Height: 600},
+		},
+		{
+			name:   "no display reported",
+			bounds: mygo.Rectangle{X: 80, Y: 45, Width: 800, Height: 600},
+			want:   mygo.Rectangle{X: 80, Y: 45, Width: 800, Height: 600},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := windowBoundsInWorkArea(tt.bounds, tt.work); got != tt.want {
+				t.Errorf("fitted bounds = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestPlayRejectsEmpty(t *testing.T) {
 	a := &app{open: func(string) (*ui.VideoPlayer, error) {

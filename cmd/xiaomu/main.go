@@ -4,6 +4,7 @@ package main
 import (
 	"log"
 	"net/url"
+	"runtime"
 	"strings"
 	"time"
 
@@ -263,6 +264,12 @@ func main() {
 		})
 		a.window = win
 		a.dispatch = win.Update
+		if runtime.GOOS == "windows" {
+			// The content under the caption buttons always has a dark background.
+			win.SetWindowButtonsTheme(mygo.ThemeDark)
+			fitMainWindow(win)
+			win.OnUnmaximize(func() { win.Update(func() { fitMainWindow(win) }) })
+		}
 		a.initDiscovery()
 		a.restoreHistory()
 		a.restoreFavorites()
@@ -273,7 +280,14 @@ func main() {
 		a.restoreSourceMemory()
 		a.setFullScreen(win.IsFullScreen())
 		win.OnEnterFullScreen(func() { win.Update(func() { a.setFullScreen(true) }) })
-		win.OnLeaveFullScreen(func() { win.Update(func() { a.setFullScreen(false) }) })
+		win.OnLeaveFullScreen(func() {
+			win.Update(func() {
+				a.setFullScreen(false)
+				if runtime.GOOS == "windows" {
+					fitMainWindow(win)
+				}
+			})
+		})
 		a.restoreSavedSource()
 		// Library actions wait separately for the asynchronous restore.
 		a.drainPending()
@@ -282,4 +296,28 @@ func main() {
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// MyGo can center an oversized window outside the Windows work area or
+// restore a saved rectangle that is only partially visible.
+func fitMainWindow(win *mygo.Window) {
+	if win.IsMaximized() || win.IsFullScreen() {
+		return
+	}
+	bounds := win.Bounds()
+	work := mygo.Screen.DisplayMatching(bounds).WorkArea
+	if fitted := windowBoundsInWorkArea(bounds, work); fitted != bounds {
+		win.SetBounds(fitted)
+	}
+}
+
+func windowBoundsInWorkArea(bounds, work mygo.Rectangle) mygo.Rectangle {
+	if work.Width <= 0 || work.Height <= 0 || bounds.Width <= 0 || bounds.Height <= 0 {
+		return bounds
+	}
+	bounds.Width = min(bounds.Width, work.Width)
+	bounds.Height = min(bounds.Height, work.Height)
+	bounds.X = min(max(bounds.X, work.X), work.X+work.Width-bounds.Width)
+	bounds.Y = min(max(bounds.Y, work.Y), work.Y+work.Height-bounds.Height)
+	return bounds
 }

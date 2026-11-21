@@ -375,7 +375,7 @@ func (a *app) historyView(c *ui.Context) {
 	}
 	ui.Column(c).Fill().Gap(14).Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "只保存在这台 Mac 上").FontSize(13).TextColor(textMuted).Grow(1)
+			ui.Text(c, "只保存在本机").FontSize(13).TextColor(textMuted).Grow(1)
 			if glassButton(c, "清空历史").Clicked() {
 				h.entries, h.dirty = nil, true
 				a.flushHistory()

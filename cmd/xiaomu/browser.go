@@ -418,7 +418,7 @@ func (a *app) welcomeView(c *ui.Context) {
 	ui.Column(c).Fill().Center().Children(func() {
 		ui.Column(c).Width(540).MaxWidth(540).Padding(30).Gap(18).Radius(30).Material(glassPane).Children(func() {
 			ui.Text(c, "添加片源，开始观看").FontSize(30).Bold()
-			ui.Text(c, "小幕不内置任何片源。粘贴你自己的配置地址，影片和直播就会出现在这里。地址只保存在这台 Mac 上。").
+			ui.Text(c, "小幕不内置任何片源。粘贴你自己的配置地址，影片和直播就会出现在这里。地址只保存在本机。").
 				TextColor(textMuted)
 			ui.TextInput(c, &b.configURL).Label("配置地址").Placeholder("https://example.com/config.json").FillWidth()
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {

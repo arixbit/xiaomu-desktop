@@ -167,7 +167,7 @@ func (a *app) homeView(c *ui.Context) {
 		if a.library.root == nil {
 			ui.Column(c).FillWidth().Padding(20).Gap(12).Radius(22).Material(glassPane).Children(func() {
 				ui.Text(c, "添加片源，继续观看").FontSize(22).Bold()
-				ui.Text(c, "观看记录和追剧仍保存在这台 Mac 上。重新添加片源后即可继续播放。").TextColor(textMuted)
+				ui.Text(c, "观看记录和追剧仍保存在本机。重新添加片源后即可继续播放。").TextColor(textMuted)
 				if primaryButton(c, "添加片源").AlignSelf(ui.Start).Clicked() {
 					a.browser.importOpen = true
 				}
