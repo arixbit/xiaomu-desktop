@@ -19,10 +19,30 @@ type liveBrowser struct {
 	sources                  []iptv.Source
 	selectedSource           int
 	channels                 []iptv.Channel
+	channelList              ui.ListState
+	panelChannelList         ui.ListState
 	playingChannel           int
 	playingStream            int
 	attempts                 int
 	started                  time.Time
+}
+
+func (l *liveBrowser) filteredChannels(withQuery bool) []int {
+	query := ""
+	if withQuery {
+		query = strings.ToLower(strings.TrimSpace(l.query))
+	}
+	indices := make([]int, 0, len(l.channels))
+	for i, channel := range l.channels {
+		if l.group != "" && channel.Group != l.group {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(channel.Name), query) {
+			continue
+		}
+		indices = append(indices, i)
+	}
+	return indices
 }
 
 func (a *app) setLiveSources(sources []iptv.Source) {
@@ -30,6 +50,7 @@ func (a *app) setLiveSources(sources []iptv.Source) {
 	a.live.channels = nil
 	a.live.selectedSource = -1
 	a.live.group, a.live.query = "", ""
+	a.live.channelList, a.live.panelChannelList = ui.ListState{}, ui.ListState{}
 }
 
 // showLive loads what the live tab needs when it comes on show.
@@ -108,6 +129,7 @@ func (a *app) loadLiveSource(index int) {
 		return jobResult{apply: func() {
 			a.live.channels, a.live.selectedSource = channels, index
 			a.live.group, a.live.query = "", ""
+			a.live.channelList, a.live.panelChannelList = ui.ListState{}, ui.ListState{}
 		}}, nil
 	}, nil)
 }
@@ -186,7 +208,9 @@ func (a *app) liveView(c *ui.Context) {
 					}
 				}
 			})
-			ui.SearchField(c, &live.query).Label("频道搜索").Placeholder("搜索频道").Width(240).Radius(20).Material(glassControl)
+			if ui.SearchField(c, &live.query).Label("频道搜索").Placeholder("搜索频道").Width(240).Radius(20).Material(glassControl).Changed() {
+				live.channelList = ui.ListState{}
+			}
 		})
 		if len(live.channels) == 0 {
 			if a.running(jobLive) {
@@ -199,7 +223,10 @@ func (a *app) liveView(c *ui.Context) {
 		ui.Row(c).Grow(1).FillWidth().MinHeight(0).Gap(16).Children(func() {
 			ui.Scroll(c).Width(168).FillHeight().Gap(2).Children(func() {
 				if listRow(c, "全部频道", live.group == "").Clicked() {
-					live.group = ""
+					if live.group != "" {
+						live.group = ""
+						live.channelList, live.panelChannelList = ui.ListState{}, ui.ListState{}
+					}
 				}
 				seen := map[string]bool{}
 				for _, channel := range live.channels {
@@ -208,28 +235,30 @@ func (a *app) liveView(c *ui.Context) {
 					}
 					seen[channel.Group] = true
 					if listRow(c, channel.Group, live.group == channel.Group).Clicked() {
-						live.group = channel.Group
+						if live.group != channel.Group {
+							live.group = channel.Group
+							live.channelList, live.panelChannelList = ui.ListState{}, ui.ListState{}
+						}
 					}
 				}
 			})
-			ui.Scroll(c).Grow(1).MinWidth(0).FillHeight().Gap(8).Children(func() {
-				query, visible := strings.ToLower(strings.TrimSpace(live.query)), 0
-				for i, channel := range live.channels {
-					if live.group != "" && channel.Group != live.group || !strings.Contains(strings.ToLower(channel.Name), query) {
-						continue
-					}
-					visible++
-					row := ui.Row(c).Key(fmt.Sprintf("live-channel-%d", i)).FillWidth().Padding(12, 16).Gap(12).Radius(16).
-						AlignItems(ui.Center).Background(surface).Cursor(ui.CursorPointer).Label("播放 " + channel.Name)
-					row.Children(func() {
-						ui.Text(c, channel.Name).Bold().SingleLine()
-						ui.Text(c, fmt.Sprintf("%s · %d 条线路", channel.Group, len(channel.Streams))).FontSize(12).TextColor(textMuted).SingleLine()
-					})
-					if row.Clicked() {
-						a.playLiveChannel(i, 0)
-					}
+			indices := live.filteredChannels(true)
+			live.channelList.Key = func(row int) any { return indices[row] }
+			live.channelList.Label = func(row int) string { return live.channels[indices[row]].Name }
+			ui.List(c, &live.channelList, len(indices), func(rowIndex int) {
+				i := indices[rowIndex]
+				channel := live.channels[i]
+				row := ui.Row(c).Key(fmt.Sprintf("live-channel-%d", i)).FillWidth().Padding(12, 16).Gap(12).Radius(16).
+					AlignItems(ui.Center).Background(surface).Cursor(ui.CursorPointer).Label("播放 " + channel.Name)
+				row.Children(func() {
+					ui.Text(c, channel.Name).Bold().SingleLine()
+					ui.Text(c, fmt.Sprintf("%s · %d 条线路", channel.Group, len(channel.Streams))).FontSize(12).TextColor(textMuted).SingleLine()
+				})
+				if row.Clicked() {
+					a.playLiveChannel(i, 0)
 				}
-				if visible == 0 {
+			}).Grow(1).MinWidth(0).FillHeight().Gap(8).Children(func() {
+				if len(indices) == 0 {
 					ui.Text(c, "没有找到频道，可换个关键词或重新选择分组。").TextColor(textMuted)
 				}
 			})

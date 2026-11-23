@@ -19,7 +19,8 @@ const (
 	maxPosterBytes       = 6 << 20
 	posterWorkers        = 4
 	posterQueueLimit     = 32
-	posterPixelLimit     = 2048 * 2048
+	posterMaxSide        = 640
+	posterPixelLimit     = 8 << 20
 	posterDimensionLimit = 4096
 	posterCacheBytes     = 64 << 20
 	posterFailureLimit   = 256
@@ -310,12 +311,13 @@ func readPoster(req *http.Request) (*posterResource, error) {
 	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > posterDimensionLimit || cfg.Height > posterDimensionLimit || cfg.Width > posterPixelLimit/cfg.Height {
 		return nil, fmt.Errorf("海报尺寸 %d×%d 超出预算", cfg.Width, cfg.Height)
 	}
-	img, err := ui.DecodeImage(data)
+	img, err := ui.DecodeBitmapScaled(data, posterMaxSide)
 	if req.Context().Err() != nil {
 		return nil, req.Context().Err()
 	}
 	if err != nil {
 		return nil, err
 	}
-	return &posterResource{image: img, retained: posterRetainedBytes(img, len(data))}, nil
+	// DecodeBitmapScaled drops the encoded source bytes and keeps only scaled pixels.
+	return &posterResource{image: img, retained: posterRetainedBytes(img, 0)}, nil
 }

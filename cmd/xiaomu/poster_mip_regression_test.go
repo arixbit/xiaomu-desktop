@@ -7,13 +7,19 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func TestFixPosterMipAccounting(t *testing.T) {
 	for _, size := range []struct {
-		w, h   int
-		pixels int64
-	}{{1, 4096, 8191}, {513, 511, 350036}} {
+		w, h         int
+		wantW, wantH int
+		pixels       int64
+	}{
+		{1, 4096, 1, 640, 1281},
+		{513, 511, 513, 511, 350036},
+	} {
 		t.Run(fmt.Sprintf("%dx%d", size.w, size.h), func(t *testing.T) {
 			data := fixPNG(t, size.w, size.h)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(data) }))
@@ -26,17 +32,21 @@ func TestFixPosterMipAccounting(t *testing.T) {
 			if len(a.posters.images) != 1 {
 				t.Fatal("normal image did not load")
 			}
-			// Both the original and revised cache are exercised through the same UI path.
+			gotW, gotH := ui.ImageSize(a.posters.images[srv.URL+"/poster.png"])
+			if int(gotW) != size.wantW || int(gotH) != size.wantH {
+				t.Fatalf("scaled size=%vx%v want=%dx%d", gotW, gotH, size.wantW, size.wantH)
+			}
+			// DecodeBitmapScaled drops encoded source bytes and retains only scaled pixels plus mip levels.
 			var retained int64
 			if field := reflect.ValueOf(a.posters).FieldByName("retained"); field.IsValid() {
 				retained = field.Int()
 			} else {
-				retained = int64(size.w * size.h * 4)
+				retained = int64(size.wantW * size.wantH * 4)
 			}
-			want := size.pixels*4 + int64(len(data))
-			t.Logf("reserved=%d required=%d (original pixels plus all ceil-halved levels and encoded source)", retained, want)
-			if retained < want {
-				t.Errorf("cache undercounts retained image bytes: %d < %d", retained, want)
+			want := size.pixels * 4
+			t.Logf("reserved=%d required=%d (scaled pixels plus all ceil-halved levels)", retained, want)
+			if retained != want {
+				t.Errorf("cache retained image bytes=%d want=%d", retained, want)
 			}
 		})
 	}

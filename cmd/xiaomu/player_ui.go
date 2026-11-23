@@ -434,17 +434,17 @@ func (a *app) panelSources(c *ui.Context, candidates []library.Item) {
 func (a *app) panelChannels(c *ui.Context) {
 	live := &a.live
 	ui.Text(c, "频道").FontSize(18).Bold()
-	ui.Scroll(c).FillWidth().Grow(1).Gap(6).Children(func() {
-		for i, channel := range live.channels {
-			if live.group != "" && channel.Group != live.group {
-				continue
-			}
-			current := i == live.playingChannel
-			if panelButton(c, channel.Name, current).Key(fmt.Sprintf("panel-channel-%d", i)).Label("切换到 "+channel.Name).Clicked() && !current {
-				a.playLiveChannel(i, 0)
-			}
+	indices := live.filteredChannels(false)
+	live.panelChannelList.Key = func(row int) any { return indices[row] }
+	live.panelChannelList.Label = func(row int) string { return live.channels[indices[row]].Name }
+	ui.List(c, &live.panelChannelList, len(indices), func(row int) {
+		i := indices[row]
+		channel := live.channels[i]
+		current := i == live.playingChannel
+		if panelButton(c, channel.Name, current).Key(fmt.Sprintf("panel-channel-%d", i)).Label("切换到 "+channel.Name).Clicked() && !current {
+			a.playLiveChannel(i, 0)
 		}
-	})
+	}).FillWidth().Grow(1).MinHeight(0).Gap(6)
 }
 
 // playerFailure offers the ways out of an episode that does not play.
