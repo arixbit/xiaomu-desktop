@@ -60,8 +60,13 @@ func TestReadPlaybackPreferencesDefaultsAndInvalidFile(t *testing.T) {
 		{`{"volume":4,"rate":-1}`, defaultPlayerPreferences(), false},
 		{`{"danmaku":{"enabled":true,"api":"https://example.com/api/v2","size":999,"opacity":-1}}`, playerPreferences{
 			Volume: 1, Rate: 1, AutoNext: true,
-			Danmaku: danmakuPreferences{Enabled: true, API: "https://example.com/api/v2", Size: 22, Opacity: 0.85},
+			Danmaku: danmakuPreferences{Enabled: true, API: "https://example.com/api/v2", Size: 22, Opacity: 0.85, Speed: 0.5, Area: 0.5},
 		}, false},
+		{`{"danmaku":{"speed":0.25,"area":0.75}}`, playerPreferences{
+			Volume: 1, Rate: 1, AutoNext: true,
+			Danmaku: danmakuPreferences{Size: 22, Opacity: 0.85, Speed: 0.25, Area: 0.75},
+		}, false},
+		{`{"danmaku":{"speed":0,"area":2}}`, defaultPlayerPreferences(), false},
 		{`{`, defaultPlayerPreferences(), true},
 	} {
 		if err := os.WriteFile(path, []byte(tc.data), 0600); err != nil {

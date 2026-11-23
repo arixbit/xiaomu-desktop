@@ -91,14 +91,26 @@ func TestNativeDanmakuLiveDefaultService(t *testing.T) {
 		t.Fatalf("downloaded comments did not paint above native video: %d new bright pixels", changed)
 	}
 	if path := os.Getenv("XIAOMU_DANMAKU_LIVE_IMAGE"); path != "" {
-		file, err := os.Create(path)
-		if err != nil {
+		saveImage := func(path string) {
+			file, err := os.Create(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encodeErr, closeErr := png.Encode(file, tt.Image()), file.Close()
+			if encodeErr != nil || closeErr != nil {
+				t.Fatalf("save live rendering: %v, %v", encodeErr, closeErr)
+			}
+		}
+		saveImage(path)
+		if err := tt.Click("弹幕"); err != nil {
 			t.Fatal(err)
 		}
-		encodeErr, closeErr := png.Encode(file, after), file.Close()
-		if encodeErr != nil || closeErr != nil {
-			t.Fatalf("save live rendering: %v, %v", encodeErr, closeErr)
+		for _, label := range []string{"弹幕滚动速度", "弹幕显示区域"} {
+			if _, ok := tt.Find(label); !ok {
+				t.Fatalf("display setting missing: %s", label)
+			}
 		}
+		saveImage(strings.TrimSuffix(path, filepath.Ext(path)) + "-settings.png")
 	}
 	t.Logf("Default service: %d candidates, %d comments; AVPlayer %dx%d, %d new bright text pixels", len(a.danmaku.episodes), len(a.danmaku.comments), w, h, changed)
 }

@@ -342,10 +342,32 @@ func TestDanmakuDialogFitsMinimumWindow(t *testing.T) {
 	if err := tt.Click("弹幕"); err != nil {
 		t.Fatal(err)
 	}
-	for _, label := range []string{"弹幕开关", "弹幕字号", "弹幕片名", "弹幕集数", "搜索弹幕", "服务设置（可选）", "完成"} {
+	for _, label := range []string{"弹幕开关", "弹幕字号", "弹幕滚动速度", "弹幕显示区域", "完成"} {
 		r, ok := tt.Find(label)
 		if !ok || r.H < 12 || r.Y < 0 || r.Y+r.H > 420 {
 			t.Fatalf("%s is outside the window: %+v", label, r)
 		}
+	}
+	viewport, ok := tt.Find("弹幕设置内容")
+	if !ok {
+		t.Fatal("settings cannot scroll")
+	}
+	tt.Scroll(viewport.X+viewport.W/2, viewport.Y+viewport.H/2, 0, 200)
+	if err := tt.Click("服务设置（可选）"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.danmaku.advanced {
+		t.Fatal("service settings are unreachable in the small window")
+	}
+	tt.Scroll(viewport.X+viewport.W/2, viewport.Y+viewport.H/2, 0, 200)
+	r, ok := tt.Find("弹幕服务地址")
+	if !ok || r.Y < viewport.Y || r.Y+r.H > viewport.Y+viewport.H {
+		t.Fatalf("service address cannot scroll into view: %+v, viewport=%+v", r, viewport)
+	}
+	if err := tt.Click("完成"); err != nil {
+		t.Fatal(err)
+	}
+	if a.danmaku.open {
+		t.Fatal("the close button scrolled out of reach")
 	}
 }

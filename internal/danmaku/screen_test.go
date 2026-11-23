@@ -31,7 +31,7 @@ func TestScreenUsesMediaTimeForPauseSeekAndResize(t *testing.T) {
 		{"seek forward", 21 * time.Second, 800, 1, 687.5},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			frame := screen.Frame(tc.at, tc.width, 400, 20, measure)
+			frame := screen.Frame(tc.at, tc.width, 400, 20, 1, measure)
 			if len(frame) != tc.count || math.Abs(float64(frame[0].X-tc.x)) > 0.01 {
 				t.Fatalf("frame = %+v, want count=%d x=%v", frame, tc.count, tc.x)
 			}
@@ -41,7 +41,7 @@ func TestScreenUsesMediaTimeForPauseSeekAndResize(t *testing.T) {
 		})
 	}
 	screen.Reset(nil)
-	if got := screen.Frame(0, 800, 400, 20, measure); len(got) != 0 {
+	if got := screen.Frame(0, 800, 400, 20, 1, measure); len(got) != 0 {
 		t.Fatalf("old episode retained: %+v", got)
 	}
 }
@@ -59,7 +59,7 @@ func TestScreenAvoidsOverlappingAndCatchUp(t *testing.T) {
 		}
 		return 100
 	}
-	frame := screen.Frame(4*time.Second, 800, 30, 20, measure)
+	frame := screen.Frame(4*time.Second, 800, 30, 20, 1, measure)
 	if len(frame) != 2 || frame[0].Text != "short" || frame[1].Text != "next" {
 		t.Fatalf("lane schedule = %+v", frame)
 	}
@@ -76,7 +76,7 @@ func TestScreenBoundsDenseComments(t *testing.T) {
 	var screen Screen
 	screen.Reset(comments)
 	measured := 0
-	frame := screen.Frame(0, 800, 30, 20, func(string) float32 {
+	frame := screen.Frame(0, 800, 30, 20, 1, func(string) float32 {
 		measured++
 		return 100
 	})

@@ -37,6 +37,7 @@ type Screen struct {
 	next                int
 	position            time.Duration
 	width, height, size float32
+	scrollLifetime      time.Duration
 	initialized         bool
 }
 
@@ -46,19 +47,21 @@ func (s *Screen) Reset(comments []Comment) {
 }
 
 // Frame returns visible comments. measure must use the requested font size.
-// The returned slice belongs to Screen and is reused by the next frame.
-func (s *Screen) Frame(at time.Duration, width, height, size float32, measure func(string) float32) []Sprite {
-	if width <= 0 || height < size*1.4 || size <= 0 {
+// speed is the scrolling multiplier, from 0.25 to 1.5; fixed comments keep
+// their duration. The returned slice is reused by the next frame.
+func (s *Screen) Frame(at time.Duration, width, height, size, speed float32, measure func(string) float32) []Sprite {
+	if width <= 0 || height < size*1.4 || size <= 0 || speed < 0.25 || speed > 1.5 || math.IsNaN(float64(speed)) {
 		return nil
 	}
-	if !s.initialized || at < s.position || at-s.position > time.Second || width != s.width || height != s.height || size != s.size {
-		s.width, s.height, s.size = width, height, size
+	duration := time.Duration(float64(scrollLifetime) / float64(speed))
+	if !s.initialized || at < s.position || at-s.position > time.Second || width != s.width || height != s.height || size != s.size || duration != s.scrollLifetime {
+		s.width, s.height, s.size, s.scrollLifetime = width, height, size, duration
 		s.initialized = true
 		s.active = s.active[:0]
 		rows := min(12, int(height/(size*1.4)))
 		fixed := rows / 4
 		s.scroll, s.top, s.bottom = make([]lane, rows-2*fixed), make([]lane, fixed), make([]lane, fixed)
-		s.next, _ = slices.BinarySearchFunc(s.comments, max(at-scrollLifetime, 0), func(c Comment, t time.Duration) int {
+		s.next, _ = slices.BinarySearchFunc(s.comments, max(at-duration, 0), func(c Comment, t time.Duration) int {
 			if c.Time < t {
 				return -1
 			}
@@ -69,11 +72,11 @@ func (s *Screen) Frame(at time.Duration, width, height, size float32, measure fu
 		})
 	}
 	s.position = at
-	s.active = slices.DeleteFunc(s.active, func(c activeComment) bool { return at-c.Time >= lifetime(c.Mode) })
+	s.active = slices.DeleteFunc(s.active, func(c activeComment) bool { return at-c.Time >= s.lifetime(c.Mode) })
 	for s.next < len(s.comments) && s.comments[s.next].Time <= at {
 		comment := s.comments[s.next]
 		s.next++
-		if at-comment.Time >= lifetime(comment.Mode) {
+		if at-comment.Time >= s.lifetime(comment.Mode) {
 			continue
 		}
 		s.schedule(comment, measure)
@@ -86,7 +89,7 @@ func (s *Screen) Frame(at time.Duration, width, height, size float32, measure fu
 		y := float32(c.row) * lineHeight
 		switch c.Mode {
 		case 1:
-			x = width - (width+c.width)*age/float32(scrollLifetime.Seconds())
+			x = width - (width+c.width)*age/float32(duration.Seconds())
 			y += float32(len(s.top)) * lineHeight
 		case 4:
 			y = height - float32(c.row+1)*lineHeight
@@ -97,6 +100,7 @@ func (s *Screen) Frame(at time.Duration, width, height, size float32, measure fu
 }
 
 func (s *Screen) schedule(comment Comment, measure func(string) float32) {
+	seconds := float32(s.scrollLifetime.Seconds())
 	rows := s.scroll
 	if comment.Mode == 4 {
 		rows = s.bottom
@@ -112,7 +116,7 @@ func (s *Screen) schedule(comment Comment, measure func(string) float32) {
 				if comment.Time-previous.at < fixedLifetime {
 					continue
 				}
-			} else if elapsed < float32(scrollLifetime.Seconds()) && (s.width+previous.width)*elapsed/8 < previous.width+12 {
+			} else if elapsed < seconds && (s.width+previous.width)*elapsed/seconds < previous.width+12 {
 				continue
 			}
 		}
@@ -122,9 +126,9 @@ func (s *Screen) schedule(comment Comment, measure func(string) float32) {
 				return
 			}
 		}
-		if comment.Mode == 1 && previous.used && elapsed < 8 {
+		if comment.Mode == 1 && previous.used && elapsed < seconds {
 			// A wider, faster comment must not catch the previous one's tail.
-			if s.width-(s.width+textWidth)*(8-elapsed)/8 < 12 {
+			if s.width-(s.width+textWidth)*(seconds-elapsed)/seconds < 12 {
 				continue
 			}
 		}
@@ -142,9 +146,9 @@ func (s *Screen) Next() time.Duration {
 	return 0
 }
 
-func lifetime(mode int) time.Duration {
+func (s *Screen) lifetime(mode int) time.Duration {
 	if mode == 1 {
-		return scrollLifetime
+		return s.scrollLifetime
 	}
 	return fixedLifetime
 }
