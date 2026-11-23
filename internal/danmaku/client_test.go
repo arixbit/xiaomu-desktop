@@ -109,6 +109,30 @@ func TestClientErrorsAndCancellation(t *testing.T) {
 	}
 }
 
+func TestLoadSourceCommentURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawQuery != "episode=2&token=example-only" {
+			t.Errorf("source comment URL was rewritten: %s", r.URL)
+		}
+		io.WriteString(w, `<i><d p="1,1,25,16777215">片源弹幕</d></i>`)
+	}))
+	defer server.Close()
+	comments, err := Load(context.Background(), server.URL+"/comments/2.xml?episode=2&token=example-only")
+	if err != nil || len(comments) != 1 || comments[0].Text != "片源弹幕" {
+		t.Fatalf("source comments = %+v, err=%v", comments, err)
+	}
+	for _, address := range []string{"", "file:///tmp/comments.xml", "https://user:example-only@example.com/comments.xml"} {
+		if _, err := Load(context.Background(), address); err == nil {
+			t.Errorf("invalid source URL was accepted: %s", address)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := Load(ctx, server.URL+"/comments.xml"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("source request did not honor cancellation: %v", err)
+	}
+}
+
 func TestClientBoundsResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		chunk := strings.Repeat("x", 64<<10)

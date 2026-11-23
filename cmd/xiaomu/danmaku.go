@@ -37,8 +37,9 @@ func (p danmakuPreferences) normalized() danmakuPreferences {
 }
 
 type danmakuState struct {
-	open                    bool
+	open, advanced          bool
 	address, query, title   string
+	sourceURL               string
 	episodeQuery            string
 	message, preferredAnime string
 	episodes                []danmaku.Episode
@@ -58,7 +59,7 @@ func (a *app) cancelDanmakuJob() {
 func (a *app) stopDanmaku() {
 	a.cancelDanmakuJob()
 	s := &a.danmaku
-	s.open, s.message = false, ""
+	s.open, s.advanced, s.message, s.sourceURL = false, false, "", ""
 	s.episodes, s.selected, s.comments = nil, nil, nil
 	s.screen.Reset(nil)
 }
@@ -77,9 +78,37 @@ func (a *app) startDanmaku() {
 	if number := danmakuNumber(a.playingEpisode); number > 0 {
 		s.episodeQuery = strconv.Itoa(number)
 	}
-	if a.preferences.Danmaku.Enabled && a.preferences.Danmaku.API != "" {
-		a.searchDanmaku(true)
+	if a.preferences.Danmaku.Enabled {
+		a.loadCurrentDanmaku()
 	}
+}
+
+func (a *app) loadCurrentDanmaku() {
+	s := &a.danmaku
+	if a.preferences.Danmaku.API != "" {
+		a.searchDanmaku(true)
+		return
+	}
+	if s.sourceURL == "" {
+		s.message = "当前片源未提供弹幕，可尝试换源"
+		return
+	}
+	address := s.sourceURL
+	s.message = "正在加载片源弹幕…"
+	a.run(jobDanmaku, "加载弹幕", func(ctx context.Context) (jobResult, error) {
+		comments, err := danmaku.Load(ctx, address)
+		if err != nil {
+			return jobResult{}, err
+		}
+		return jobResult{apply: func() {
+			s.selected, s.comments = nil, comments
+			s.screen.Reset(comments)
+			s.message = fmt.Sprintf("已加载 %d 条片源弹幕", len(comments))
+			if len(comments) == 0 {
+				s.message = "这一集暂无弹幕"
+			}
+		}}, nil
+	}, a.failDanmaku)
 }
 
 func (a *app) searchDanmaku(automatic bool) {
@@ -148,7 +177,7 @@ func (a *app) searchDanmaku(automatic bool) {
 				a.applyDanmaku(selected, comments)
 			}
 		}}, nil
-	}, func(err error) { s.message = jobError("获取弹幕", err) })
+	}, a.failDanmaku)
 }
 
 func (a *app) loadDanmakuEpisode(episode danmaku.Episode) {
@@ -164,7 +193,14 @@ func (a *app) loadDanmakuEpisode(episode danmaku.Episode) {
 			return jobResult{}, err
 		}
 		return jobResult{apply: func() { a.applyDanmaku(episode, comments) }}, nil
-	}, func(err error) { a.danmaku.message = jobError("获取弹幕", err) })
+	}, a.failDanmaku)
+}
+
+func (a *app) failDanmaku(err error) {
+	a.danmaku.message = jobError("获取弹幕", err)
+	if a.status == "匹配弹幕…" || a.status == "加载弹幕…" {
+		a.status = ""
+	}
 }
 
 func (a *app) applyDanmaku(episode danmaku.Episode, comments []danmaku.Comment) {
@@ -208,21 +244,7 @@ func (a *app) danmakuDialog(c *ui.Context) {
 		_, height := c.Size()
 		panel.Width(540).MaxWidth(540).MaxHeight(height - 32).Padding(22).Gap(12).Radius(24).Material(glass.Glass{})
 		ui.Text(c, "弹幕设置").FontSize(22).Bold()
-		ui.Text(c, "填写兼容弹弹play的服务地址，按片名和分集查找弹幕。").FontSize(13)
-		ui.TextInput(c, &s.address).Label("弹幕服务地址").Placeholder("https://example.com/api/v2").FillWidth()
-		if primaryButton(c, "保存并匹配").Clicked() {
-			if _, err := danmaku.NewClient(s.address); err != nil {
-				s.message = err.Error()
-			} else {
-				a.stopDanmaku()
-				s.open = true
-				a.preferences.Danmaku.API = strings.TrimSpace(s.address)
-				a.preferences.Danmaku.Enabled = true
-				s.preferredAnime = ""
-				a.savePreferences()
-				a.searchDanmaku(true)
-			}
-		}
+		ui.Text(c, "跟随当前片源和分集加载弹幕。").FontSize(13)
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "显示弹幕").Grow(1)
 			if ui.Switch(c, &a.preferences.Danmaku.Enabled).Label("弹幕开关").Changed() {
@@ -230,7 +252,7 @@ func (a *app) danmakuDialog(c *ui.Context) {
 					a.cancelDanmakuJob()
 					s.message = "弹幕已关闭"
 				} else if len(s.comments) == 0 {
-					a.searchDanmaku(true)
+					a.loadCurrentDanmaku()
 				}
 				a.savePreferences()
 			}
@@ -248,25 +270,16 @@ func (a *app) danmakuDialog(c *ui.Context) {
 				a.savePreferences()
 			}
 		})
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			titleChanged := ui.TextInput(c, &s.query).Label("弹幕片名").Grow(1).Changed()
-			ui.Text(c, "集数").FontSize(13)
-			episodeChanged := ui.TextInput(c, &s.episodeQuery).Label("弹幕集数").Placeholder("可留空").Width(80).Changed()
-			if titleChanged || episodeChanged {
-				a.cancelDanmakuJob()
-				s.episodes, s.message = nil, ""
-				if titleChanged {
-					s.preferredAnime = ""
-				}
-			}
-			if glassButton(c, "搜索弹幕").Disabled(a.running(jobDanmaku)).Clicked() {
-				a.searchDanmaku(false)
-			}
-		})
+		if glassButton(c, "手动匹配（可选）").FillWidth().Clicked() {
+			s.advanced = !s.advanced
+		}
+		if s.advanced {
+			a.manualDanmaku(c)
+		}
 		if s.message != "" {
 			ui.Text(c, s.message).FontSize(12)
 		}
-		if len(s.episodes) > 0 {
+		if s.advanced && len(s.episodes) > 0 {
 			ui.List(c, &s.list, len(s.episodes), func(i int) {
 				episode := s.episodes[i]
 				selected := s.selected != nil && s.selected.ID == episode.ID
@@ -280,6 +293,47 @@ func (a *app) danmakuDialog(c *ui.Context) {
 				s.open = false
 			}
 		})
+	})
+}
+
+func (a *app) manualDanmaku(c *ui.Context) {
+	s := &a.danmaku
+	ui.Text(c, "自定义服务可按片名和集数重新匹配，留空使用片源弹幕。").FontSize(12)
+	ui.TextInput(c, &s.address).Label("弹幕服务地址").Placeholder("自定义服务地址（可选）").FillWidth()
+	if primaryButton(c, "保存并匹配").Clicked() {
+		address := strings.TrimSpace(s.address)
+		_, err := danmaku.NewClient(address)
+		if address != "" && err != nil {
+			s.message = err.Error()
+		} else {
+			a.cancelDanmakuJob()
+			s.episodes, s.selected, s.comments = nil, nil, nil
+			s.screen.Reset(nil)
+			a.preferences.Danmaku.API = address
+			a.preferences.Danmaku.Enabled = true
+			s.preferredAnime = ""
+			a.savePreferences()
+			a.loadCurrentDanmaku()
+		}
+	}
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		titleChanged := ui.TextInput(c, &s.query).Label("弹幕片名").Grow(1).Changed()
+		ui.Text(c, "集数").FontSize(13)
+		episodeChanged := ui.TextInput(c, &s.episodeQuery).Label("弹幕集数").Placeholder("可留空").Width(80).Changed()
+		if titleChanged || episodeChanged {
+			a.cancelDanmakuJob()
+			s.episodes, s.message = nil, ""
+			if titleChanged {
+				s.preferredAnime = ""
+			}
+		}
+		if glassButton(c, "搜索弹幕").Disabled(a.running(jobDanmaku)).Clicked() {
+			if a.preferences.Danmaku.API == "" {
+				s.message = "当前使用片源弹幕，手动搜索需先保存自定义服务"
+			} else {
+				a.searchDanmaku(false)
+			}
+		}
 	})
 }
 

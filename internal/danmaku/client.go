@@ -91,6 +91,21 @@ func (c *Client) Search(ctx context.Context, title, episode string) ([]Episode, 
 	return episodes, nil
 }
 
+// Load downloads the comment URL returned in a site's player result.
+// Media cookies and authorization headers are not sent to the comment host.
+func Load(ctx context.Context, address string) ([]Comment, error) {
+	u, err := url.Parse(strings.TrimSpace(address))
+	if err != nil || u.Hostname() == "" || u.User != nil || u.Fragment != "" || u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("片源返回的弹幕地址无效")
+	}
+	client := &Client{HTTP: &http.Client{Transport: netproxy.Transport(), Timeout: 20 * time.Second}}
+	data, err := client.get(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	return Parse(data)
+}
+
 // Comments downloads all timed comments for an episode.
 func (c *Client) Comments(ctx context.Context, id string) ([]Comment, error) {
 	if !validID(id) {

@@ -409,6 +409,7 @@ func (a *app) openEpisodeMedia(play catalog.Playback) bool {
 	if replacing {
 		a.panelOpen, a.panelTouched = open, touched
 	}
+	a.danmaku.sourceURL = play.Danmaku
 	return true
 }
 

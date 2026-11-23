@@ -84,6 +84,7 @@ type Playback struct {
 	Parse   bool
 	JX      bool
 	PlayURL string
+	Danmaku string
 }
 
 // Session owns one site's runtime. Calls and Close are serialized.
@@ -293,6 +294,7 @@ func ReadPlayback(raw string) (Playback, error) {
 		Parse   ID                `json:"parse"`
 		JX      ID                `json:"jx"`
 		PlayURL string            `json:"playUrl"`
+		Danmaku string            `json:"danmaku"`
 	}
 	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
 		return Playback{}, fmt.Errorf("读取播放地址：%w", err)
@@ -303,5 +305,6 @@ func ReadPlayback(raw string) (Playback, error) {
 	}
 	return Playback{URL: u.String(), Headers: doc.Header,
 		Parse: doc.Parse != "" && doc.Parse != "0",
-		JX:    doc.JX != "" && doc.JX != "0", PlayURL: doc.PlayURL}, nil
+		JX:    doc.JX != "" && doc.JX != "0", PlayURL: doc.PlayURL,
+		Danmaku: strings.TrimSpace(doc.Danmaku)}, nil
 }
