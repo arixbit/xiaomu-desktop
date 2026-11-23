@@ -12,6 +12,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/video"
 
+	"github.com/arixbit/xiaomu-desktop/internal/danmaku"
 	"github.com/arixbit/xiaomu-desktop/internal/proxy"
 )
 
@@ -27,6 +28,8 @@ type app struct {
 	posters posterCache
 	proxy   *proxy.Proxy
 	open    func(string) (*ui.VideoPlayer, error)
+
+	newDanmakuClient func(string) (*danmaku.Client, error)
 	// openLocal plays a file from disk directly, without the proxy.
 	// addRecent records a file in the system's recent documents.
 	// notify posts a system notification; nowPlaying publishes to the

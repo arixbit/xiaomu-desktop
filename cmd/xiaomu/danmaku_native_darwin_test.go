@@ -27,9 +27,9 @@ func TestNativeDanmakuOverVideo(t *testing.T) {
 	t.Cleanup(media.Close)
 	a := newPlayerTestApp(t)
 	a.preferences = defaultPlayerPreferences()
-	a.preferences.Danmaku.Enabled = true
 	a.autoNext = false
 	a.startEpisode(catalog.Playback{URL: media.URL + "/h264.mp4"}, "线路", a.title.detail.Sources[0].Episodes[0], 0)
+	a.preferences.Danmaku.Enabled = true
 	tt := ui.NewTester(a.view, 1120, 760)
 	deadline := time.Now().Add(10 * time.Second)
 	for !a.player.Ready() && a.player.Err() == nil && time.Now().Before(deadline) {

@@ -31,25 +31,6 @@ func danmakuTestServer(t *testing.T, calls *atomic.Int32) *httptest.Server {
 	return server
 }
 
-func TestDanmakuSettingsDoNotRequireService(t *testing.T) {
-	a := newPlayerTestApp(t)
-	a.preferences = defaultPlayerPreferences()
-	a.startDanmaku()
-	tt := ui.NewTester(a.view, 1120, 760)
-	if err := tt.Click("弹幕"); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := tt.Find("弹幕服务地址"); ok {
-		t.Fatal("ordinary users are asked to supply a comment service")
-	}
-	if err := tt.Click("弹幕开关"); err != nil {
-		t.Fatal(err)
-	}
-	if !a.preferences.Danmaku.Enabled || !tt.HasText("当前片源未提供弹幕，可尝试换源") {
-		t.Fatalf("missing-source state is unclear: %v", tt.Texts())
-	}
-}
-
 func TestDanmakuPlayerSettingsAndEpisodeTransition(t *testing.T) {
 	a := newPlayerTestApp(t)
 	a.preferences = defaultPlayerPreferences()
@@ -64,7 +45,7 @@ func TestDanmakuPlayerSettingsAndEpisodeTransition(t *testing.T) {
 	if err := tt.Click("弹幕"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.Click("手动匹配（可选）"); err != nil {
+	if err := tt.Click("服务设置（可选）"); err != nil {
 		t.Fatal(err)
 	}
 	a.danmaku.address = server.URL
@@ -156,9 +137,6 @@ func TestDanmakuRejectsStaleJobResults(t *testing.T) {
 				if action == "edit title" {
 					label, text = "弹幕片名", "另一部片"
 				}
-				if err := tt.Click("手动匹配（可选）"); err != nil {
-					t.Fatal(err)
-				}
 				if err := tt.Click(label); err != nil {
 					t.Fatal(err)
 				}
@@ -248,7 +226,7 @@ func TestDanmakuManualEpisodeSearch(t *testing.T) {
 	if err := tt.Click("弹幕"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.Click("手动匹配（可选）"); err != nil {
+	if err := tt.Click("服务设置（可选）"); err != nil {
 		t.Fatal(err)
 	}
 	if a.danmaku.episodeQuery != "1" {
@@ -308,7 +286,7 @@ func TestDanmakuEpisodeSearchValidation(t *testing.T) {
 			a.preferences.Danmaku.API = server.URL
 			a.startDanmaku()
 			tt := ui.NewTester(a.view, 1120, 760)
-			for _, label := range []string{"弹幕", "手动匹配（可选）", "弹幕集数"} {
+			for _, label := range []string{"弹幕", "弹幕集数"} {
 				if err := tt.Click(label); err != nil {
 					t.Fatal(err)
 				}
@@ -364,7 +342,7 @@ func TestDanmakuDialogFitsMinimumWindow(t *testing.T) {
 	if err := tt.Click("弹幕"); err != nil {
 		t.Fatal(err)
 	}
-	for _, label := range []string{"弹幕开关", "弹幕字号", "手动匹配（可选）", "完成"} {
+	for _, label := range []string{"弹幕开关", "弹幕字号", "弹幕片名", "弹幕集数", "搜索弹幕", "服务设置（可选）", "完成"} {
 		r, ok := tt.Find(label)
 		if !ok || r.H < 12 || r.Y < 0 || r.Y+r.H > 420 {
 			t.Fatalf("%s is outside the window: %+v", label, r)

@@ -16,6 +16,10 @@ import (
 
 const maxResponseBytes = 16 << 20
 
+// DefaultAPI is the public deployment linked by the open source danmu_api_x
+// project: https://github.com/Bear-biscuit/danmu_api_x. It needs no account or key.
+const DefaultAPI = "https://danmuapi-gamma-two.vercel.app"
+
 // Episode is a selectable search result from a Dandanplay-compatible service.
 type Episode struct {
 	ID      string
@@ -24,15 +28,20 @@ type Episode struct {
 	Name    string
 }
 
-// Client uses only the service address supplied by the user.
+// Client uses the built-in public service unless the user supplies an address.
 type Client struct {
 	base *url.URL
 	HTTP *http.Client
 }
 
 // NewClient accepts a service root or its /api/v2 address, including a path prefix.
+// An empty address selects DefaultAPI.
 func NewClient(address string) (*Client, error) {
-	u, err := url.Parse(strings.TrimSpace(address))
+	address = strings.TrimSpace(address)
+	if address == "" {
+		address = DefaultAPI
+	}
+	u, err := url.Parse(address)
 	if err != nil || u == nil || u.Hostname() == "" || u.User != nil || u.Fragment != "" || u.Scheme != "http" && u.Scheme != "https" {
 		return nil, fmt.Errorf("请输入 http 或 https 弹幕服务地址")
 	}

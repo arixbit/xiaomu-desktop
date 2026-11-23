@@ -79,8 +79,17 @@ func TestClientSearchEpisodeParameter(t *testing.T) {
 	}
 }
 
+func TestClientUsesPublicDefault(t *testing.T) {
+	for _, address := range []string{"", " \t"} {
+		client, err := NewClient(address)
+		if err != nil || client.base.String() != DefaultAPI+"/api/v2" {
+			t.Fatalf("default client = %+v, err=%v", client, err)
+		}
+	}
+}
+
 func TestClientErrorsAndCancellation(t *testing.T) {
-	for _, address := range []string{"", "file:///tmp/comments", "https://user:pass@example.com", "https://example.com/#fragment"} {
+	for _, address := range []string{"file:///tmp/comments", "https://user:pass@example.com", "https://example.com/#fragment"} {
 		if _, err := NewClient(address); err == nil {
 			t.Errorf("accepted %q", address)
 		}
