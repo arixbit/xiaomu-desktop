@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -29,6 +30,7 @@ func defaultDanmakuPreferences() danmakuPreferences {
 }
 
 func (p danmakuPreferences) normalized() danmakuPreferences {
+	p.API = strings.TrimSpace(p.API)
 	if math.IsNaN(p.Size) || p.Size < 14 || p.Size > 36 {
 		p.Size = 22
 	}
@@ -59,9 +61,6 @@ type danmakuState struct {
 
 func (a *app) cancelDanmakuJob() {
 	a.cancelJob(jobDanmaku)
-	if a.status == "匹配弹幕…" || a.status == "加载弹幕…" {
-		a.status = ""
-	}
 }
 
 func (a *app) stopDanmaku() {
@@ -99,12 +98,13 @@ func (a *app) loadCurrentDanmaku() {
 	}
 	address := s.sourceURL
 	s.message = "正在加载片源弹幕…"
-	a.run(jobDanmaku, "加载弹幕", func(ctx context.Context) (jobResult, error) {
+	a.run(jobDanmaku, "", func(ctx context.Context) (jobResult, error) {
 		comments, err := danmaku.Load(ctx, address)
 		if err != nil {
 			return jobResult{}, err
 		}
 		return jobResult{apply: func() {
+			s.episodes, s.list = nil, ui.ListState{}
 			s.selected, s.comments = nil, comments
 			s.screen.Reset(comments)
 			s.message = fmt.Sprintf("已加载 %d 条片源弹幕", len(comments))
@@ -150,13 +150,16 @@ func (a *app) searchDanmaku(automatic bool) {
 		s.message = err.Error()
 		return
 	}
-	_, index, _ := a.currentEpisode()
+	_, index, ok := a.currentEpisode()
+	if !ok {
+		index = -1
+	}
 	name, preferred := a.playingEpisode, s.preferredAnime
 	if episode != "" {
 		name = episode
 	}
 	s.message = "正在匹配弹幕…"
-	a.run(jobDanmaku, "匹配弹幕", func(ctx context.Context) (jobResult, error) {
+	a.run(jobDanmaku, "", func(ctx context.Context) (jobResult, error) {
 		episodes, err := client.Search(ctx, query, episode)
 		if err != nil {
 			return jobResult{}, err
@@ -198,19 +201,29 @@ func (a *app) loadDanmakuEpisode(episode danmaku.Episode) {
 		return
 	}
 	a.danmaku.message = "正在加载弹幕…"
-	a.run(jobDanmaku, "加载弹幕", func(ctx context.Context) (jobResult, error) {
+	a.run(jobDanmaku, "", func(ctx context.Context) (jobResult, error) {
 		comments, err := client.Comments(ctx, episode.ID)
 		if err != nil {
 			return jobResult{}, err
 		}
-		return jobResult{apply: func() { a.applyDanmaku(episode, comments) }}, nil
+		return jobResult{apply: func() {
+			if !a.preferences.Danmaku.Enabled {
+				a.preferences.Danmaku.Enabled = true
+				a.savePreferences()
+			}
+			a.applyDanmaku(episode, comments)
+		}}, nil
 	}, a.failDanmaku)
 }
 
 func (a *app) failDanmaku(err error) {
-	a.danmaku.message = jobError("获取弹幕", err)
-	if a.status == "匹配弹幕…" || a.status == "加载弹幕…" {
-		a.status = ""
+	switch {
+	case errors.Is(err, context.Canceled):
+		a.danmaku.message = "已取消弹幕请求"
+	case errors.Is(err, context.DeadlineExceeded):
+		a.danmaku.message = "弹幕请求超时，请重试或更换弹幕服务"
+	default:
+		a.danmaku.message = "获取弹幕失败：" + err.Error()
 	}
 }
 
@@ -365,13 +378,17 @@ func (a *app) danmakuSearchControls(c *ui.Context) {
 	})
 }
 
-func danmakuArea(picture, bounds ui.Rect, fraction float32) ui.Rect {
-	top := max(picture.Y+12, bounds.Y+72)
-	bottom := min(picture.Y+picture.H-12, picture.Y+picture.H*fraction, bounds.Y+bounds.H-132)
-	return ui.Rect{X: picture.X, Y: top, W: picture.W, H: max(float32(0), bottom-top)}
+func danmakuArea(picture, bounds ui.Rect, fraction float32, avoidControls bool) ui.Rect {
+	top, limit := picture.Y+12, picture.Y+picture.H-12
+	if avoidControls {
+		top = max(top, bounds.Y+72)
+		limit = min(limit, bounds.Y+bounds.H-132)
+	}
+	usable := max(float32(0), limit-top)
+	return ui.Rect{X: picture.X, Y: top, W: picture.W, H: usable * fraction}
 }
 
-func (a *app) danmakuOverlay(c *ui.Context, player *ui.VideoPlayer) {
+func (a *app) danmakuOverlay(c *ui.Context, player *ui.VideoPlayer, avoidControls bool) {
 	if !a.preferences.Danmaku.Enabled || len(a.danmaku.comments) == 0 || !a.hasEpisodes() {
 		return
 	}
@@ -382,7 +399,7 @@ func (a *app) danmakuOverlay(c *ui.Context, player *ui.VideoPlayer) {
 		w, h := player.Size()
 		picture := playerPictureRect(r, w, h)
 		settings := a.preferences.Danmaku.normalized()
-		area := danmakuArea(picture, r, float32(settings.Area))
+		area := danmakuArea(picture, r, float32(settings.Area), avoidControls)
 		size := float32(settings.Size)
 		if area.W <= 0 || area.H < size*1.4 {
 			return
@@ -413,11 +430,15 @@ func (a *app) danmakuOverlay(c *ui.Context, player *ui.VideoPlayer) {
 
 var danmakuEpisodeNumber = regexp.MustCompile(`(?i)^(?:第\s*|ep(?:isode)?\s*|e\s*)?0*([0-9]+)(?:\s*[集话話期]|\s*[:：._-]|\s|$)`)
 var danmakuNamedEpisode = regexp.MustCompile(`第\s*0*([0-9]+)\s*[集话話期]`)
+var danmakuTaggedEpisode = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])(?:s[0-9]+[\s._-]*)?(?:ep(?:isode)?[\s._-]*|e\s*)0*([0-9]+)(?:[^a-z0-9]|$)`)
 var danmakuYearSuffix = regexp.MustCompile(`\s*[（(][0-9]{4}[)）]\s*$`)
 var danmakuProviderSuffix = regexp.MustCompile(`(?i)\s*【[^】]+】\s*from\s+[a-z0-9_-]+\s*$`)
 
 func danmakuNumber(name string) int {
 	parts := danmakuNamedEpisode.FindStringSubmatch(name)
+	if len(parts) < 2 {
+		parts = danmakuTaggedEpisode.FindStringSubmatch(name)
+	}
 	if len(parts) < 2 {
 		parts = danmakuEpisodeNumber.FindStringSubmatch(strings.TrimSpace(name))
 	}
@@ -450,7 +471,7 @@ func matchDanmakuEpisode(episodes []danmaku.Episode, title, name string, index i
 		same := strings.TrimSpace(episode.Name) == strings.TrimSpace(name)
 		if number > 0 {
 			same = candidateNumber == number
-		} else if !same && candidateNumber > 0 {
+		} else if !same && index >= 0 && candidateNumber > 0 {
 			same = candidateNumber == index+1
 		}
 		if same {

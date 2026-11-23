@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -371,5 +373,131 @@ func TestDanmakuDialogFitsMinimumWindow(t *testing.T) {
 	}
 	if a.danmaku.open {
 		t.Fatal("the close button scrolled out of reach")
+	}
+}
+
+func TestDanmakuManualSelectionEnablesOverlayAndPersists(t *testing.T) {
+	a := newPlayerTestApp(t)
+	a.preferences = defaultPlayerPreferences()
+	a.preferencesPath = filepath.Join(t.TempDir(), "preferences.json")
+	var calls atomic.Int32
+	server := danmakuTestServer(t, &calls)
+	a.preferences.Danmaku.API = server.URL
+	a.startDanmaku()
+	tt := ui.NewTester(a.view, 1120, 760)
+	if err := tt.Click("弹幕"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("搜索弹幕"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("示例片 · 第1话 示例"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.preferences.Danmaku.Enabled {
+		t.Fatal("selecting an episode manually did not enable danmaku")
+	}
+	prefs, err := readPlayerPreferences(a.preferencesPath)
+	if err != nil || !prefs.Danmaku.Enabled {
+		t.Fatalf("enabled preference was not saved: %+v, err=%v", prefs.Danmaku, err)
+	}
+	if err := tt.Click("完成"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tt.Find("弹幕画面"); !ok {
+		t.Fatal("comment overlay did not appear after manual selection")
+	}
+}
+
+func TestDanmakuNumberParsesTaggedEpisodesWithoutFalsePositives(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want int
+	}{
+		{"【腾讯】剧名 EP03", 3},
+		{"【腾讯】剧名EP03", 3},
+		{"【qiyi】 剧名 E03 剧情", 3},
+		{"剧名 S01E03", 3},
+		{"Show.S02E12.1080p", 12},
+		{"Show.S01.E04", 4},
+		{"EP-05 特别篇", 5},
+		{"Episode 09", 9},
+		{"E03中字", 3},
+		{"【qiyi】 剧名第3集", 3},
+		{"Type2 测试", 0},
+		{"Phase3", 0},
+		{"Love2026", 0},
+		{"Movie 1080p", 0},
+		{"e2e 测试", 0},
+		{"Plus2E3", 0},
+		{"e-100 型号", 0},
+	} {
+		if got := danmakuNumber(tc.name); got != tc.want {
+			t.Errorf("danmakuNumber(%q) = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestDanmakuJobLeavesPlayerStatusQuietAndUsesDanmakuErrors(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-started:
+		default:
+			close(started)
+		}
+		<-release
+		io.WriteString(w, `{"animes":[]}`)
+	}))
+	t.Cleanup(server.Close)
+	a := newPlayerTestApp(t)
+	a.preferences = defaultPlayerPreferences()
+	a.preferences.Danmaku.Enabled, a.preferences.Danmaku.API = true, server.URL
+	a.status = "正在播放"
+	updates := make(chan func(), 1)
+	a.dispatch = func(update func()) { updates <- update }
+	a.startDanmaku()
+	<-started
+	tt := ui.NewTester(a.view, 1120, 760)
+	if a.status != "正在播放" || tt.HasText("匹配弹幕…") || tt.HasText("加载弹幕…") {
+		t.Fatalf("background danmaku job polluted player status: status=%q texts=%v", a.status, tt.Texts())
+	}
+	close(release)
+	(<-updates)()
+	if a.status != "正在播放" {
+		t.Fatalf("danmaku completion altered player status: %q", a.status)
+	}
+	a.failDanmaku(context.DeadlineExceeded)
+	if strings.Contains(a.danmaku.message, "站点") || !strings.Contains(a.danmaku.message, "弹幕") {
+		t.Fatalf("timeout error used site wording: %q", a.danmaku.message)
+	}
+}
+
+func TestMatchDanmakuEpisodeSkipsIndexFallbackWhenUnknown(t *testing.T) {
+	results := []danmaku.Episode{
+		{ID: "11", AnimeID: "a", Anime: "示例片", Name: "第1集"},
+		{ID: "12", AnimeID: "a", Anime: "示例片", Name: "第2集"},
+	}
+	if got, ok := matchDanmakuEpisode(results, "示例片", "番外篇", -1, ""); ok {
+		t.Fatalf("matched an episode without a known episode index: %+v", got)
+	}
+	if got, ok := matchDanmakuEpisode(results, "示例片", "番外篇", 0, ""); !ok || got.ID != "11" {
+		t.Fatalf("valid episode index fallback stopped working: %+v, ok=%v", got, ok)
+	}
+}
+
+func TestHasEpisodesExcludesNASAndLocalFilePlayback(t *testing.T) {
+	a := newPlayerTestApp(t)
+	if !a.hasEpisodes() {
+		t.Fatal("episode player should report episodes")
+	}
+	a.playingNAS = &nasPlaying{Name: "movie.mp4"}
+	if a.hasEpisodes() {
+		t.Fatal("NAS playback should not report title episodes or danmaku")
+	}
+	a.playingNAS = nil
+	a.playingFile = true
+	if a.hasEpisodes() {
+		t.Fatal("local file playback should not report title episodes or danmaku")
 	}
 }

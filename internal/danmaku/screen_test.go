@@ -84,3 +84,39 @@ func TestScreenBoundsDenseComments(t *testing.T) {
 		t.Fatalf("dense timeline: visible=%d, measured=%d", len(frame), measured)
 	}
 }
+
+func TestScreenKeepsFixedCommentsInShortAreas(t *testing.T) {
+	comments := []Comment{
+		{Time: 0, Mode: 1, Text: "scroll"},
+		{Time: 0, Mode: 5, Text: "top"},
+		{Time: 0, Mode: 4, Text: "bottom"},
+	}
+	measure := func(string) float32 { return 100 }
+	for _, tc := range []struct {
+		name     string
+		height   float32
+		separate bool
+	}{
+		{"one row", 30, false},
+		{"two rows", 60, false},
+		{"three rows", 90, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var screen Screen
+			screen.Reset(comments)
+			frame := screen.Frame(0, 800, tc.height, 20, 0.5, measure)
+			if len(frame) != 3 {
+				t.Fatalf("dropped fixed comments in short area: %+v", frame)
+			}
+			lineHeight := float32(20 * 1.4)
+			for _, sprite := range frame {
+				if sprite.Y < 0 || sprite.Y+lineHeight > tc.height+0.01 {
+					t.Fatalf("sprite out of vertical bounds [0, %v]: %+v", tc.height, sprite)
+				}
+			}
+			if tc.separate && (frame[1].Y >= frame[0].Y || frame[2].Y <= frame[0].Y) {
+				t.Fatalf("three-row layout should keep top, scroll and bottom separate: %+v", frame)
+			}
+		})
+	}
+}

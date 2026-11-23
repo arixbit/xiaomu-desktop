@@ -104,7 +104,7 @@ func (a *app) playerScreen(c *ui.Context) {
 						w, h := p.Size()
 						return a.fullScreen || playerPictureRect(r, w, h).Contains(x, y)
 					}).HandleInput(func(ev ui.InputEvent) bool { return a.handlePlayerPointer(p, ev) })
-				a.danmakuOverlay(c, p)
+				a.danmakuOverlay(c, p, showControls)
 				a.playerState(c, p)
 				if showControls {
 					a.playerControls(c, p, hasEpisodes, compact)
@@ -466,7 +466,7 @@ func (a *app) playerFailure(c *ui.Context, err error) {
 
 // hasEpisodes reports whether what plays is an episode of the title on show.
 func (a *app) hasEpisodes() bool {
-	return !a.playingDirect && !a.playingLive && a.title != nil && a.title.detail != nil && len(a.title.detail.Sources) > 0
+	return !a.playingDirect && !a.playingLive && !a.playingFile && a.playingNAS == nil && a.title != nil && a.title.detail != nil && len(a.title.detail.Sources) > 0
 }
 
 // trackPlayback seeks to where a resumed episode stopped, then keeps the

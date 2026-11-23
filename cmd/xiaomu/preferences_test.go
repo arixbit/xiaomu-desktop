@@ -67,6 +67,7 @@ func TestReadPlaybackPreferencesDefaultsAndInvalidFile(t *testing.T) {
 			Danmaku: danmakuPreferences{Size: 22, Opacity: 0.85, Speed: 0.25, Area: 0.75},
 		}, false},
 		{`{"danmaku":{"speed":0,"area":2}}`, defaultPlayerPreferences(), false},
+		{`{"danmaku":{"api":"  "}}`, defaultPlayerPreferences(), false},
 		{`{`, defaultPlayerPreferences(), true},
 	} {
 		if err := os.WriteFile(path, []byte(tc.data), 0600); err != nil {

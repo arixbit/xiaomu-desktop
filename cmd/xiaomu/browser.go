@@ -117,7 +117,9 @@ func (a *app) run(slot jobSlot, label string, work func(context.Context) (jobRes
 	j.cancel = cancel
 	gen := j.gen
 	a.jobsMu.Unlock()
-	a.status = label + "…"
+	if label != "" {
+		a.status = label + "…"
+	}
 	dispatch := a.dispatch
 	execute := func() {
 		result, err := work(ctx)
@@ -148,7 +150,7 @@ func (a *app) run(slot jobSlot, label string, work func(context.Context) (jobRes
 				}
 				return
 			}
-			if a.status == label+"…" {
+			if label != "" && a.status == label+"…" {
 				a.status = ""
 			}
 			if result.apply != nil {

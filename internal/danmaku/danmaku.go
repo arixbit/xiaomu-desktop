@@ -28,6 +28,7 @@ type Comment struct {
 // Parse accepts Dandanplay JSON or the standard Bilibili XML format.
 // Unsupported animation modes and malformed individual comments are skipped.
 func Parse(data []byte) ([]Comment, error) {
+	data = bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})
 	data = bytes.TrimSpace(data)
 	var comments []Comment
 	if bytes.HasPrefix(data, []byte("{")) {

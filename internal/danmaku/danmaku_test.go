@@ -12,7 +12,9 @@ func TestParseFormats(t *testing.T) {
 		name, data string
 	}{
 		{"json", `{"comments":[{"p":"2.5,1,16711680,user","m":"第二条"},{"p":"1,5,16777215,user","m":"第一条 & <你好>"},{"p":"3,4,255,user","m":"底部"}]}`},
+		{"json with bom", "\xef\xbb\xbf" + `{"comments":[{"p":"2.5,1,16711680,user","m":"第二条"},{"p":"1,5,16777215,user","m":"第一条 & <你好>"},{"p":"3,4,255,user","m":"底部"}]}`},
 		{"xml", `<i><d p="2.5,1,25,16711680,0,0,0,0">第二条</d><d p="1,5,25,16777215,0,0,0,0">第一条 &amp; &lt;你好&gt;</d><d p="3,4,25,255,0,0,0,0">底部</d></i>`},
+		{"xml with bom", "\xef\xbb\xbf" + `<i><d p="2.5,1,25,16711680,0,0,0,0">第二条</d><d p="1,5,25,16777215,0,0,0,0">第一条 &amp; &lt;你好&gt;</d><d p="3,4,25,255,0,0,0,0">底部</d></i>`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := Parse([]byte(tc.data))

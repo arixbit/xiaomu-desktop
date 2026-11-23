@@ -77,7 +77,7 @@ func TestDanmakuSourceFailureDoesNotBlockPlayback(t *testing.T) {
 	a.preferences.Danmaku.Enabled = true
 	a.open = func(string) (*ui.VideoPlayer, error) { return ui.NewVideoPlayer(&stillVideo{}) }
 	a.startEpisode(catalog.Playback{URL: "https://example.com/video.mp4", Danmaku: comments.URL}, "线路", a.title.detail.Sources[0].Episodes[0], 0)
-	if a.player == nil || !a.player.Playing() || a.playFailure != nil || a.status != "" || !strings.Contains(a.danmaku.message, "403") {
+	if a.player == nil || !a.player.Playing() || a.playFailure != nil || a.status != "正在播放" || !strings.Contains(a.danmaku.message, "403") {
 		t.Fatalf("comment failure interfered with media: status=%q, message=%q", a.status, a.danmaku.message)
 	}
 }

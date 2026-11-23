@@ -34,6 +34,7 @@ type Screen struct {
 	active              []activeComment
 	visible             []Sprite
 	scroll, top, bottom []lane
+	scrollTop           int
 	next                int
 	position            time.Duration
 	width, height, size float32
@@ -59,8 +60,13 @@ func (s *Screen) Frame(at time.Duration, width, height, size, speed float32, mea
 		s.initialized = true
 		s.active = s.active[:0]
 		rows := min(12, int(height/(size*1.4)))
-		fixed := rows / 4
-		s.scroll, s.top, s.bottom = make([]lane, rows-2*fixed), make([]lane, fixed), make([]lane, fixed)
+		fixed := max(1, rows/4)
+		scrollRows, scrollTop := rows, 0
+		if rows >= 3 {
+			scrollRows, scrollTop = rows-2*fixed, fixed
+		}
+		s.scrollTop = scrollTop
+		s.scroll, s.top, s.bottom = make([]lane, scrollRows), make([]lane, fixed), make([]lane, fixed)
 		s.next, _ = slices.BinarySearchFunc(s.comments, max(at-duration, 0), func(c Comment, t time.Duration) int {
 			if c.Time < t {
 				return -1
@@ -90,7 +96,7 @@ func (s *Screen) Frame(at time.Duration, width, height, size, speed float32, mea
 		switch c.Mode {
 		case 1:
 			x = width - (width+c.width)*age/float32(duration.Seconds())
-			y += float32(len(s.top)) * lineHeight
+			y += float32(s.scrollTop) * lineHeight
 		case 4:
 			y = height - float32(c.row+1)*lineHeight
 		}

@@ -44,14 +44,28 @@ func TestDanmakuAreaFollowsVideoHeightAndAvoidsControls(t *testing.T) {
 		fraction float32
 		bottom   float32
 	}{
-		{0.25, 210},
-		{0.5, 310},
-		{0.75, 410},
+		{0.25, 211},
+		{0.5, 300},
+		{0.75, 389},
 		{1, 478},
 	} {
-		got := danmakuArea(picture, bounds, tc.fraction)
+		got := danmakuArea(picture, bounds, tc.fraction, true)
 		if got.X != picture.X || got.W != picture.W || got.Y != 122 || got.Y+got.H != tc.bottom {
 			t.Fatalf("area=%v: got %+v, want bottom=%v", tc.fraction, got, tc.bottom)
 		}
+	}
+
+	// Minimum window with full-height video must still fit max font size at 25% area.
+	small := ui.Rect{X: 0, Y: 0, W: 640, H: 420}
+	gotSmall := danmakuArea(small, small, 0.25, true)
+	if gotSmall.Y != 72 || gotSmall.H < 36*1.4 {
+		t.Fatalf("small window 25%% area too short for max font size: %+v", gotSmall)
+	}
+
+	// Hidden fullscreen controls release the top and bottom control bands.
+	full := ui.Rect{X: 0, Y: 0, W: 1440, H: 900}
+	gotHidden := danmakuArea(full, full, 1, false)
+	if gotHidden.Y != 12 || gotHidden.Y+gotHidden.H != 888 {
+		t.Fatalf("hidden controls still deducted control height: %+v", gotHidden)
 	}
 }
