@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -251,11 +252,46 @@ func TestPlayerKeyboardLeavesTextInputAndModifiersAlone(t *testing.T) {
 	}
 	tt.ClickAt(500, 300)
 	for _, mods := range []ui.Modifiers{ui.Cmd, ui.Ctrl, ui.Alt, ui.Shift} {
-		for _, key := range []ui.Key{ui.KeySpace, ui.KeyLeft, ui.KeyRight, ui.KeyEscape} {
+		for _, key := range []ui.Key{ui.KeySpace, ui.KeyLeft, ui.KeyRight, ui.KeyEscape, ui.KeyD} {
 			tt.Key(mods, key)
 		}
 	}
-	if a.player.Playing() || a.player.Position() != 20*time.Second || !a.fullScreen {
+	if a.player.Playing() || a.player.Position() != 20*time.Second || !a.fullScreen || a.preferences.Danmaku.Enabled {
 		t.Fatal("modified keys triggered player shortcuts")
+	}
+}
+
+func TestPlayerKeyboardTogglesDanmakuWithD(t *testing.T) {
+	a := newKeyboardTestApp(t)
+	a.preferences = defaultPlayerPreferences()
+	var calls atomic.Int32
+	server := danmakuTestServer(t, &calls)
+	a.preferences.Danmaku.API = server.URL
+	a.startDanmaku()
+	tt := ui.NewTester(a.view, 1120, 760)
+	if a.preferences.Danmaku.Enabled || calls.Load() != 0 {
+		t.Fatal("danmaku should start disabled")
+	}
+	tt.Key(0, ui.KeyD)
+	if !a.preferences.Danmaku.Enabled || len(a.danmaku.comments) != 2 || calls.Load() != 2 {
+		t.Fatalf("D did not enable and load danmaku: enabled=%v comments=%d calls=%d", a.preferences.Danmaku.Enabled, len(a.danmaku.comments), calls.Load())
+	}
+	tt.KeyRepeat(0, ui.KeyD)
+	if !a.preferences.Danmaku.Enabled {
+		t.Fatal("holding D toggled danmaku repeatedly")
+	}
+	tt.Key(0, ui.KeyD)
+	if a.preferences.Danmaku.Enabled {
+		t.Fatal("second D press did not disable danmaku")
+	}
+	tt.Key(0, ui.KeyD)
+	if !a.preferences.Danmaku.Enabled || calls.Load() != 2 {
+		t.Fatalf("re-enabling loaded comments should not re-fetch: enabled=%v calls=%d", a.preferences.Danmaku.Enabled, calls.Load())
+	}
+	// Live playback ignores D.
+	a.playingLive = true
+	tt.Key(0, ui.KeyD)
+	if !a.preferences.Danmaku.Enabled {
+		t.Fatal("D toggled danmaku during live playback")
 	}
 }

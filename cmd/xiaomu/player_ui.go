@@ -104,6 +104,7 @@ func (a *app) playerScreen(c *ui.Context) {
 						w, h := p.Size()
 						return a.fullScreen || playerPictureRect(r, w, h).Contains(x, y)
 					}).HandleInput(func(ev ui.InputEvent) bool { return a.handlePlayerPointer(p, ev) })
+				a.danmakuOverlay(c, p, showControls)
 				a.playerState(c, p)
 				if showControls {
 					a.playerControls(c, p, hasEpisodes, compact)
@@ -124,6 +125,7 @@ func (a *app) playerScreen(c *ui.Context) {
 			a.playerPanel(c).Absolute().Top(70).Right(12).Bottom(bottom).Width(280)
 		}
 	})
+	a.danmakuDialog(c)
 }
 
 func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
@@ -230,14 +232,17 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 				if duration > 0 && !a.playingLive {
 					ui.Text(c, playerClock(p.Position())).FontSize(12)
 					position := p.Position().Seconds()
-					progress := ui.Slider(c, &position, 0, duration.Seconds()).Label("播放进度").Grow(1)
-					if progress.Pressed() {
-						a.playerOverlay.keepVisible = true
-					}
-					if progress.Changed() {
-						p.Seek(time.Duration(position * float64(time.Second)))
-						a.syncNowPlayingState()
-					}
+					ui.Column(c).Grow(1).Gap(2).Children(func() {
+						a.danmakuHighlightCurve(c, p, duration)
+						progress := ui.Slider(c, &position, 0, duration.Seconds()).Label("播放进度").FillWidth()
+						if progress.Pressed() {
+							a.playerOverlay.keepVisible = true
+						}
+						if progress.Changed() {
+							p.Seek(time.Duration(position * float64(time.Second)))
+							a.syncNowPlayingState()
+						}
+					})
 					ui.Text(c, playerClock(duration)).FontSize(12)
 				} else {
 					ui.Text(c, "直播").FontSize(12).Grow(1)
@@ -287,6 +292,7 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 					a.savePreferences()
 				}
 				ui.Spacer(c)
+				a.danmakuButton(c)
 				rate := p.Rate()
 				if rate <= 0 {
 					rate = 1
@@ -463,7 +469,7 @@ func (a *app) playerFailure(c *ui.Context, err error) {
 
 // hasEpisodes reports whether what plays is an episode of the title on show.
 func (a *app) hasEpisodes() bool {
-	return !a.playingDirect && !a.playingLive && a.title != nil && a.title.detail != nil && len(a.title.detail.Sources) > 0
+	return !a.playingDirect && !a.playingLive && !a.playingFile && a.playingNAS == nil && a.title != nil && a.title.detail != nil && len(a.title.detail.Sources) > 0
 }
 
 // trackPlayback seeks to where a resumed episode stopped, then keeps the

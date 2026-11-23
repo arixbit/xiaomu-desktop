@@ -49,7 +49,14 @@ func Direct(raw string) bool {
 	return false
 }
 
-func (r Resolver) Resolve(ctx context.Context, play catalog.Playback) (catalog.Playback, error) {
+func (r Resolver) Resolve(ctx context.Context, play catalog.Playback) (result catalog.Playback, err error) {
+	// Page parsers and native sniffers can replace the media result entirely.
+	// Keep the site's comment track unless the resolved result supplies one.
+	defer func() {
+		if err == nil && result.Danmaku == "" {
+			result.Danmaku = play.Danmaku
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return catalog.Playback{}, err
 	}

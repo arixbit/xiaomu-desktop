@@ -409,6 +409,7 @@ func (a *app) openEpisodeMedia(play catalog.Playback) bool {
 	if replacing {
 		a.panelOpen, a.panelTouched = open, touched
 	}
+	a.danmaku.sourceURL = play.Danmaku
 	return true
 }
 
@@ -419,6 +420,7 @@ func (a *app) notePlayingEpisode(line string, episode catalog.Episode, at time.D
 	a.sourceAttempt.player = a.player
 	a.revealContinueWatching(t.name)
 	a.updateFollowedTitle()
+	a.startDanmaku()
 }
 
 // matchEpisode finds in detail the episode a viewer was watching elsewhere:

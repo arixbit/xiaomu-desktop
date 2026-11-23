@@ -37,12 +37,13 @@ type browser struct {
 type jobSlot int
 
 const (
-	jobConfig jobSlot = iota // importing or refreshing a configuration
-	jobLive                  // importing a live list or reading its channels
-	jobSite                  // browsing one site
-	jobTitle                 // reading a title from one of its sources
-	jobPlay                  // resolving an episode into media
-	jobNAS                   // connecting to the NAS or listing a folder
+	jobConfig  jobSlot = iota // importing or refreshing a configuration
+	jobLive                   // importing a live list or reading its channels
+	jobSite                   // browsing one site
+	jobTitle                  // reading a title from one of its sources
+	jobPlay                   // resolving an episode into media
+	jobNAS                    // connecting to the NAS or listing a folder
+	jobDanmaku                // searching or loading this episode's comments
 	jobSlots
 )
 
@@ -116,7 +117,9 @@ func (a *app) run(slot jobSlot, label string, work func(context.Context) (jobRes
 	j.cancel = cancel
 	gen := j.gen
 	a.jobsMu.Unlock()
-	a.status = label + "…"
+	if label != "" {
+		a.status = label + "…"
+	}
 	dispatch := a.dispatch
 	execute := func() {
 		result, err := work(ctx)
@@ -147,7 +150,7 @@ func (a *app) run(slot jobSlot, label string, work func(context.Context) (jobRes
 				}
 				return
 			}
-			if a.status == label+"…" {
+			if label != "" && a.status == label+"…" {
 				a.status = ""
 			}
 			if result.apply != nil {

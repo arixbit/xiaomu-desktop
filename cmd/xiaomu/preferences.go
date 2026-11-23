@@ -11,13 +11,14 @@ import (
 )
 
 type playerPreferences struct {
-	Volume   float64 `json:"volume"`
-	Rate     float64 `json:"rate"`
-	AutoNext bool    `json:"auto_next"`
+	Volume   float64            `json:"volume"`
+	Rate     float64            `json:"rate"`
+	AutoNext bool               `json:"auto_next"`
+	Danmaku  danmakuPreferences `json:"danmaku"`
 }
 
 func defaultPlayerPreferences() playerPreferences {
-	return playerPreferences{Volume: 1, Rate: 1, AutoNext: true}
+	return playerPreferences{Volume: 1, Rate: 1, AutoNext: true, Danmaku: defaultDanmakuPreferences()}
 }
 
 func readPlayerPreferences(path string) (playerPreferences, error) {
@@ -40,6 +41,7 @@ func readPlayerPreferences(path string) (playerPreferences, error) {
 	default:
 		p.Rate = 1
 	}
+	p.Danmaku = p.Danmaku.normalized()
 	return p, nil
 }
 
@@ -62,6 +64,7 @@ func (a *app) ensurePreferences() {
 	if a.preferences.Rate == 0 {
 		a.preferences = defaultPlayerPreferences()
 	}
+	a.preferences.Danmaku = a.preferences.Danmaku.normalized()
 }
 
 func (a *app) savePreferences() {
