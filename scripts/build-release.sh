@@ -37,6 +37,16 @@ version=$(python3 -c 'import json; print(json.load(open("mygo.json"))["version"]
 
 go tool mygo build -platform darwin/universal -skip-notarize "$@"
 
+# MyGo v0.10.0 builds Xiaomu.app, the .dmg and the signed update archive, but no
+# longer produces the manual-install macOS .zip automatically. Package the freshly
+# signed app bundle with ditto so permissions, symlinks and signatures stay intact.
+if [ -d "build/darwin-universal/Xiaomu.app" ]; then
+  rm -f "build/darwin-universal/xiaomu-$version-macos-universal.zip"
+  ditto -c -k --sequesterRsrc --keepParent \
+    "build/darwin-universal/Xiaomu.app" \
+    "build/darwin-universal/xiaomu-$version-macos-universal.zip"
+fi
+
 missing=""
 for f in \
   "build/darwin-universal/xiaomu-$version.dmg" \
