@@ -30,8 +30,12 @@ func PDFH(html, expr string) string {
 	if html == "" || expr == "" {
 		return ""
 	}
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return ""
+	}
 	for _, part := range strings.Split(expr, "||") {
-		if v := pdfhOne(html, strings.TrimSpace(part)); v != "" {
+		if v := pdfhOne(doc, strings.TrimSpace(part)); v != "" {
 			return v
 		}
 	}
@@ -45,8 +49,12 @@ func PDFA(html, expr string) []string {
 	if html == "" || expr == "" {
 		return []string{}
 	}
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return []string{}
+	}
 	for _, part := range strings.Split(expr, "||") {
-		if got := pdfaOne(html, strings.TrimSpace(part)); len(got) > 0 {
+		if got := pdfaOne(doc, strings.TrimSpace(part)); len(got) > 0 {
 			return got
 		}
 	}
@@ -65,11 +73,7 @@ func PD(html, expr, base string) string {
 	return urljoin.Join(base, v)
 }
 
-func pdfhOne(html, expr string) string {
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-	if err != nil {
-		return ""
-	}
+func pdfhOne(doc *goquery.Document, expr string) string {
 	sel := doc.Selection
 	segs := splitAnd(expr)
 	for i, seg := range segs {
@@ -94,11 +98,7 @@ func pdfhOne(html, expr string) string {
 	return ""
 }
 
-func pdfaOne(html, expr string) []string {
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-	if err != nil {
-		return nil
-	}
+func pdfaOne(doc *goquery.Document, expr string) []string {
 	sel := doc.Selection
 	segs := splitAnd(expr)
 	for i, seg := range segs {

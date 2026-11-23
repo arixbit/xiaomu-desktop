@@ -196,14 +196,18 @@ func readPage(raw string, page int, err error) (Page, error) {
 	if err != nil {
 		return Page{}, err
 	}
+	return readPageBytes([]byte(raw), page)
+}
+
+func readPageBytes(raw []byte, page int) (Page, error) {
 	var doc struct {
 		List      []Video `json:"list"`
 		PageCount ID      `json:"pagecount"`
 	}
-	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+	if err := json.Unmarshal(raw, &doc); err != nil {
 		return Page{}, fmt.Errorf("读取影片列表：%w", err)
 	}
-	out := Page{}
+	out := Page{Videos: make([]Video, 0, len(doc.List))}
 	for _, video := range doc.List {
 		// drpy uses no_data as an empty-list placeholder, not a real video.
 		if video.ID != "" && video.ID != "no_data" {
@@ -230,6 +234,10 @@ func (s *Session) Detail(ctx context.Context, id string) (Detail, error) {
 }
 
 func readDetail(raw string) (Detail, error) {
+	return readDetailBytes([]byte(raw))
+}
+
+func readDetailBytes(raw []byte) (Detail, error) {
 	var doc struct {
 		List []struct {
 			Name    string `json:"vod_name"`
@@ -241,7 +249,7 @@ func readDetail(raw string) (Detail, error) {
 			URLs    string `json:"vod_play_url"`
 		} `json:"list"`
 	}
-	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+	if err := json.Unmarshal(raw, &doc); err != nil {
 		return Detail{}, fmt.Errorf("读取详情：%w", err)
 	}
 	if len(doc.List) == 0 {

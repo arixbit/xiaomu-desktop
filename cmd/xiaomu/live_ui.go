@@ -13,12 +13,27 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+type liveFilterCache struct {
+	ptr     *iptv.Channel
+	length  int
+	group   string
+	query   string
+	indices []int
+	valid   bool
+}
+
 type liveBrowser struct {
 	url, input, query, group string
 	importOpen, restore      bool
 	sources                  []iptv.Source
 	selectedSource           int
 	channels                 []iptv.Channel
+	groupsCache              []string
+	groupsCachePtr           *iptv.Channel
+	groupsCacheLen           int
+	groupsCacheValid         bool
+	filteredAllCache         liveFilterCache
+	filteredQueryCache       liveFilterCache
 	channelList              ui.ListState
 	panelChannelList         ui.ListState
 	playingChannel           int
@@ -27,12 +42,49 @@ type liveBrowser struct {
 	started                  time.Time
 }
 
+func channelsPtr(channels []iptv.Channel) *iptv.Channel {
+	if len(channels) == 0 {
+		return nil
+	}
+	return &channels[0]
+}
+
+func (l *liveBrowser) groups() []string {
+	ptr, n := channelsPtr(l.channels), len(l.channels)
+	if l.groupsCacheValid && l.groupsCachePtr == ptr && l.groupsCacheLen == n {
+		return l.groupsCache
+	}
+	seen := make(map[string]struct{}, 16)
+	groups := make([]string, 0, 16)
+	for _, channel := range l.channels {
+		if channel.Group == "" {
+			continue
+		}
+		if _, dup := seen[channel.Group]; dup {
+			continue
+		}
+		seen[channel.Group] = struct{}{}
+		groups = append(groups, channel.Group)
+	}
+	l.groupsCache = groups
+	l.groupsCachePtr = ptr
+	l.groupsCacheLen = n
+	l.groupsCacheValid = true
+	return groups
+}
+
 func (l *liveBrowser) filteredChannels(withQuery bool) []int {
 	query := ""
+	cache := &l.filteredAllCache
 	if withQuery {
 		query = strings.ToLower(strings.TrimSpace(l.query))
+		cache = &l.filteredQueryCache
 	}
-	indices := make([]int, 0, len(l.channels))
+	ptr, n := channelsPtr(l.channels), len(l.channels)
+	if cache.valid && cache.ptr == ptr && cache.length == n && cache.group == l.group && cache.query == query {
+		return cache.indices
+	}
+	indices := make([]int, 0, n)
 	for i, channel := range l.channels {
 		if l.group != "" && channel.Group != l.group {
 			continue
@@ -41,6 +93,14 @@ func (l *liveBrowser) filteredChannels(withQuery bool) []int {
 			continue
 		}
 		indices = append(indices, i)
+	}
+	*cache = liveFilterCache{
+		ptr:     ptr,
+		length:  n,
+		group:   l.group,
+		query:   query,
+		indices: indices,
+		valid:   true,
 	}
 	return indices
 }
@@ -228,15 +288,10 @@ func (a *app) liveView(c *ui.Context) {
 						live.channelList, live.panelChannelList = ui.ListState{}, ui.ListState{}
 					}
 				}
-				seen := map[string]bool{}
-				for _, channel := range live.channels {
-					if channel.Group == "" || seen[channel.Group] {
-						continue
-					}
-					seen[channel.Group] = true
-					if listRow(c, channel.Group, live.group == channel.Group).Clicked() {
-						if live.group != channel.Group {
-							live.group = channel.Group
+				for _, group := range live.groups() {
+					if listRow(c, group, live.group == group).Clicked() {
+						if live.group != group {
+							live.group = group
 							live.channelList, live.panelChannelList = ui.ListState{}, ui.ListState{}
 						}
 					}

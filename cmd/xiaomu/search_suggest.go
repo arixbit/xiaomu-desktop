@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/arixbit/xiaomu-desktop/internal/douban"
 )
 
 const (
@@ -13,11 +15,23 @@ const (
 	searchSuggestionLimit = 8  // rows in the suggestions popup
 )
 
+type suggestionCache struct {
+	queriesPtr *string
+	queriesLen int
+	moviePtr   *douban.Subject
+	movieLen   int
+	tvPtr      *douban.Subject
+	tvLen      int
+	items      []string
+	valid      bool
+}
+
 // searchHistoryStore keeps the viewer's recent searches, newest first, only
 // on this Mac. It never holds a config URL or a media address.
 type searchHistoryStore struct {
-	queries []string
-	path    string
+	queries     []string
+	path        string
+	suggestions suggestionCache
 }
 
 // record puts the query first, dropping an older spelling of the same title,
@@ -79,23 +93,60 @@ func (a *app) restoreSearchHistory() {
 // viewer's own recent searches first, then the Douban hot titles already
 // cached for the home page. Nothing here touches the network.
 func (a *app) searchSuggestions() []string {
-	seen := map[string]bool{}
-	var out []string
+	var qPtr *string
+	if len(a.searchHistory.queries) > 0 {
+		qPtr = &a.searchHistory.queries[0]
+	}
+	var mPtr *douban.Subject
+	movieSubjects := a.discovery.movie.feed.Subjects
+	if len(movieSubjects) > 0 {
+		mPtr = &movieSubjects[0]
+	}
+	var tPtr *douban.Subject
+	tvSubjects := a.discovery.tv.feed.Subjects
+	if len(tvSubjects) > 0 {
+		tPtr = &tvSubjects[0]
+	}
+	cache := &a.searchHistory.suggestions
+	if cache.valid &&
+		cache.queriesPtr == qPtr && cache.queriesLen == len(a.searchHistory.queries) &&
+		cache.moviePtr == mPtr && cache.movieLen == len(movieSubjects) &&
+		cache.tvPtr == tPtr && cache.tvLen == len(tvSubjects) {
+		return cache.items
+	}
+	total := len(a.searchHistory.queries) + len(movieSubjects) + len(tvSubjects)
+	seen := make(map[string]struct{}, total)
+	out := make([]string, 0, total)
 	add := func(name string) {
 		name = strings.TrimSpace(name)
-		if name == "" || seen[titleKey(name)] {
+		if name == "" {
 			return
 		}
-		seen[titleKey(name)] = true
+		k := titleKey(name)
+		if _, dup := seen[k]; dup {
+			return
+		}
+		seen[k] = struct{}{}
 		out = append(out, name)
 	}
 	for _, query := range a.searchHistory.queries {
 		add(query)
 	}
-	for _, list := range []*discoveryList{&a.discovery.movie, &a.discovery.tv} {
-		for _, subject := range list.feed.Subjects {
-			add(subject.Title)
-		}
+	for _, subject := range movieSubjects {
+		add(subject.Title)
+	}
+	for _, subject := range tvSubjects {
+		add(subject.Title)
+	}
+	*cache = suggestionCache{
+		queriesPtr: qPtr,
+		queriesLen: len(a.searchHistory.queries),
+		moviePtr:   mPtr,
+		movieLen:   len(movieSubjects),
+		tvPtr:      tPtr,
+		tvLen:      len(tvSubjects),
+		items:      out,
+		valid:      true,
 	}
 	return out
 }

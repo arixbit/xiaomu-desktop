@@ -271,13 +271,39 @@ func (p *directProvider) Search(ctx context.Context, title, episode string) ([]E
 			}
 		}
 		// Fall back to v1/detail only for entries that episodesv2 left empty.
+		var missing []v2ReqItem
 		for _, item := range batch {
 			key := v2Key{cat: item.CatID, entID: item.EntID, site: item.Site}
-			if len(fetchedEpisodes[key]) > 0 {
-				continue
+			if len(fetchedEpisodes[key]) == 0 {
+				missing = append(missing, item)
 			}
+		}
+		if len(missing) == 1 {
+			item := missing[0]
 			if urls := p.fetchDetailEpisodes(ctx, item.CatID, item.EntID, item.Site, targetEp); len(urls) > 0 {
-				fetchedEpisodes[key] = urls
+				fetchedEpisodes[v2Key{cat: item.CatID, entID: item.EntID, site: item.Site}] = urls
+			}
+		} else if len(missing) > 1 {
+			fallbackURLs := make([][]string, len(missing))
+			sem := make(chan struct{}, min(4, len(missing)))
+			var wg sync.WaitGroup
+			for i, item := range missing {
+				if ctx.Err() != nil {
+					break
+				}
+				wg.Add(1)
+				sem <- struct{}{}
+				go func(idx int, req v2ReqItem) {
+					defer wg.Done()
+					defer func() { <-sem }()
+					fallbackURLs[idx] = p.fetchDetailEpisodes(ctx, req.CatID, req.EntID, req.Site, targetEp)
+				}(i, item)
+			}
+			wg.Wait()
+			for i, item := range missing {
+				if len(fallbackURLs[i]) > 0 {
+					fetchedEpisodes[v2Key{cat: item.CatID, entID: item.EntID, site: item.Site}] = fallbackURLs[i]
+				}
 			}
 		}
 	}
@@ -903,19 +929,26 @@ func (p *directProvider) fetchSegments(ctx context.Context, urls []string, fetch
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	var all []Comment
 	succeeded := 0
+	total := 0
 	var firstErr error
 	for i := range urls {
 		if errs[i] == nil {
 			succeeded++
-			all = append(all, results[i]...)
+			total += len(results[i])
 		} else if firstErr == nil {
 			firstErr = errs[i]
 		}
 	}
 	if succeeded == 0 && firstErr != nil {
 		return nil, firstErr
+	}
+	all := make([]Comment, 0, total)
+	for i := range urls {
+		if errs[i] == nil && len(results[i]) > 0 {
+			all = append(all, results[i]...)
+			results[i] = nil
+		}
 	}
 	slices.SortStableFunc(all, func(a, b Comment) int {
 		return cmp.Compare(a.Time, b.Time)
@@ -1077,15 +1110,6 @@ func parsePlaylinkList(raw json.RawMessage) []string {
 		}
 	}
 	return out
-}
-
-func cleanCommentText(text string) string {
-	text = strings.Join(strings.Fields(text), " ")
-	runes := []rune(text)
-	if len(runes) > 200 {
-		text = string(runes[:200])
-	}
-	return text
 }
 
 func parseHexColor(raw string, fallback uint32) uint32 {

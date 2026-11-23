@@ -90,14 +90,102 @@ func (e historyEntry) progress() string {
 	return fmt.Sprintf("%s · 看到 %s / %s", episode, at, playerClock(time.Duration(e.Duration*float64(time.Second))))
 }
 
+type historyListRow struct {
+	heading string
+	key     string
+	label   string
+	entry   int
+}
+
 // historyStore keeps the newest entry of each title first. An empty path
 // keeps the history in memory only.
 type historyStore struct {
-	entries []historyEntry
-	path    string
-	dirty   bool
-	noted   time.Time
-	saved   time.Time
+	entries      []historyEntry
+	path         string
+	dirty        bool
+	noted        time.Time
+	saved        time.Time
+	list         ui.ListState
+	byTitle      map[string]int
+	byTitleHead  *historyEntry
+	byTitleLen   int
+	rowsCache    []historyListRow
+	rowsHead     *historyEntry
+	rowsLen      int
+	rowsDayStart time.Time
+}
+
+func (h *historyStore) findByTitle(name string) (historyEntry, bool) {
+	key := titleKey(name)
+	if key == "" || len(h.entries) == 0 {
+		return historyEntry{}, false
+	}
+	head := &h.entries[0]
+	if h.byTitle == nil || h.byTitleLen != len(h.entries) || h.byTitleHead != head {
+		h.rebuildTitleIndex()
+	}
+	if idx, ok := h.byTitle[key]; ok && idx < len(h.entries) {
+		e := h.entries[idx]
+		if !e.isNAS() && titleKey(e.Name) == key {
+			return e, true
+		}
+		h.rebuildTitleIndex()
+		if idx, ok := h.byTitle[key]; ok && idx < len(h.entries) {
+			return h.entries[idx], true
+		}
+	}
+	return historyEntry{}, false
+}
+
+func (h *historyStore) rebuildTitleIndex() {
+	idx := make(map[string]int, len(h.entries))
+	for i, e := range h.entries {
+		if e.isNAS() {
+			continue
+		}
+		k := titleKey(e.Name)
+		if _, exists := idx[k]; !exists {
+			idx[k] = i
+		}
+	}
+	h.byTitle = idx
+	h.byTitleLen = len(h.entries)
+	if len(h.entries) > 0 {
+		h.byTitleHead = &h.entries[0]
+	} else {
+		h.byTitleHead = nil
+	}
+}
+
+func (h *historyStore) listRows(now time.Time) []historyListRow {
+	localNow := now.Local()
+	dayStart := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, localNow.Location())
+	var head *historyEntry
+	if len(h.entries) > 0 {
+		head = &h.entries[0]
+	}
+	if h.rowsHead == head && h.rowsLen == len(h.entries) && h.rowsDayStart.Equal(dayStart) && len(h.rowsCache) > 0 {
+		return h.rowsCache
+	}
+	dayEnd := dayStart.AddDate(0, 0, 1)
+	rows := make([]historyListRow, 0, len(h.entries)+2)
+	heading := ""
+	for i, e := range h.entries {
+		group := "更早"
+		if !e.Updated.Before(dayStart) && e.Updated.Before(dayEnd) {
+			group = "今天"
+		}
+		if group != heading {
+			heading = group
+			rows = append(rows, historyListRow{heading: heading, key: "heading-" + heading, label: heading, entry: -1})
+		}
+		rows = append(rows, historyListRow{key: e.dedupKey(), label: e.Name, entry: i})
+	}
+	h.rowsCache = rows
+	h.rowsHead = head
+	h.rowsLen = len(h.entries)
+	h.rowsDayStart = dayStart
+	return rows
 }
 
 // note records an entry, replacing the one with the same dedup key.
@@ -115,6 +203,7 @@ func (h *historyStore) note(e historyEntry) {
 	if len(h.entries) > historyLimit {
 		h.entries = h.entries[:historyLimit]
 	}
+	h.byTitle, h.rowsCache = nil, nil
 	h.dirty = true
 }
 
@@ -123,6 +212,7 @@ func (h *historyStore) remove(i int) {
 		return
 	}
 	h.entries = append(h.entries[:i:i], h.entries[i+1:]...)
+	h.byTitle, h.rowsCache = nil, nil
 	h.dirty = true
 }
 
@@ -421,24 +511,23 @@ func (a *app) historyView(c *ui.Context) {
 			ui.Text(c, "只保存在本机").FontSize(13).TextColor(textMuted).Grow(1)
 			if glassButton(c, "清空历史").Clicked() {
 				h.entries, h.dirty = nil, true
+				h.byTitle, h.rowsCache, h.list = nil, nil, ui.ListState{}
 				a.flushHistory()
 			}
 		})
-		today := c.Now().Local().Format("2006-01-02")
-		ui.Scroll(c).Grow(1).FillWidth().Gap(8).Children(func() {
-			heading := ""
-			for i, e := range h.entries {
-				group := "更早"
-				if e.Updated.Local().Format("2006-01-02") == today {
-					group = "今天"
-				}
-				if group != heading {
-					heading = group
-					ui.Text(c, heading).Key("heading-"+heading).FontSize(16).Bold().Padding(6, 0, 0, 0)
-				}
-				a.historyRow(c, i, e)
+		rows := h.listRows(c.Now())
+		h.list.Key = func(row int) any { return rows[row].key }
+		h.list.Label = func(row int) string { return rows[row].label }
+		ui.List(c, &h.list, len(rows), func(row int) {
+			r := rows[row]
+			if r.entry < 0 {
+				ui.Text(c, r.heading).Key(r.key).FontSize(16).Bold().Padding(6, 0, 0, 0)
+				return
 			}
-		})
+			if r.entry < len(h.entries) {
+				a.historyRow(c, r.entry, h.entries[r.entry])
+			}
+		}).Grow(1).FillWidth().MinHeight(0).Gap(8)
 	})
 }
 

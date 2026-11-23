@@ -105,58 +105,113 @@ func (a *app) candidates() []library.Item {
 	if t == nil {
 		return nil
 	}
-	out := append([]library.Item(nil), t.seeds...)
-	seen := map[string]bool{}
-	for _, item := range out {
-		seen[itemKey(item)] = true
-	}
 	key := titleKey(t.name)
-	if t.item.Entry.Config != nil && !seen[itemKey(t.item)] {
-		seen[itemKey(t.item)] = true
-		out = append(out, t.item)
-	}
-	for _, item := range a.library.search.items {
-		if titleKey(item.Video.Name) == key && !seen[itemKey(item)] {
-			seen[itemKey(item)] = true
-			out = append(out, item)
+	s := &a.library.search
+	var searchMatches []library.Item
+	useIndex := false
+	if key != "" && len(s.items) > 0 && s.groupIndex != nil && s.groupIndexLen == len(s.items) && s.groupIndexHead == &s.items[0] {
+		useIndex = true
+		if idx, ok := s.groupIndex[key]; ok && idx < len(s.groups) {
+			searchMatches = s.groups[idx].items
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		return a.candidateLess(t, out[i], out[j])
+	capHint := len(t.seeds) + len(searchMatches) + 1
+	out := make([]library.Item, 0, capHint)
+	entryKeys := make([]string, 0, capHint)
+	seen := make(map[itemID]struct{}, capHint)
+	add := func(item library.Item) {
+		ek := entryKey(item.Entry)
+		id := itemID{entryKey: ek, videoID: item.Video.ID}
+		if _, dup := seen[id]; dup {
+			return
+		}
+		seen[id] = struct{}{}
+		out = append(out, item)
+		entryKeys = append(entryKeys, ek)
+	}
+	for _, item := range t.seeds {
+		add(item)
+	}
+	if t.item.Entry.Config != nil {
+		add(t.item)
+	}
+	if useIndex {
+		for _, item := range searchMatches {
+			add(item)
+		}
+	} else {
+		for _, item := range s.items {
+			if titleKey(item.Video.Name) == key {
+				add(item)
+			}
+		}
+	}
+	if len(out) <= 1 {
+		return out
+	}
+	memory := a.sourceMemory.entries[key]
+	type rankedCandidate struct {
+		item                library.Item
+		failed              bool
+		preferred           bool
+		consecutiveFailures int
+		hasSuccess          bool
+		startMS             int64
+		hasLatency          bool
+		latency             time.Duration
+	}
+	ranked := make([]rankedCandidate, len(out))
+	for i, item := range out {
+		ek := entryKeys[i]
+		ik := ""
+		if len(t.failed) > 0 || len(memory.Records) > 0 {
+			ik = ek + "\x00" + string(item.Video.ID)
+		}
+		var rec sourcePlaybackRecord
+		if len(memory.Records) > 0 {
+			rec = memory.Records[ik]
+		}
+		d, ok := a.latency.get(ek)
+		ranked[i] = rankedCandidate{
+			item:                item,
+			failed:              len(t.failed) > 0 && t.failed[ik] != "",
+			preferred:           memory.Preferred.matches(item),
+			consecutiveFailures: rec.ConsecutiveFailures,
+			hasSuccess:          rec.Successes > 0,
+			startMS:             rec.StartMS,
+			hasLatency:          ok,
+			latency:             d,
+		}
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		x, y := &ranked[i], &ranked[j]
+		if x.failed != y.failed {
+			return y.failed
+		}
+		if x.preferred != y.preferred {
+			return x.preferred
+		}
+		if x.consecutiveFailures != y.consecutiveFailures {
+			return x.consecutiveFailures < y.consecutiveFailures
+		}
+		if x.hasSuccess != y.hasSuccess {
+			return x.hasSuccess
+		}
+		if x.hasSuccess && x.startMS != y.startMS {
+			return x.startMS < y.startMS
+		}
+		if x.hasLatency != y.hasLatency {
+			return x.hasLatency
+		}
+		if x.hasLatency && x.latency != y.latency {
+			return x.latency < y.latency
+		}
+		return false
 	})
+	for i := range ranked {
+		out[i] = ranked[i].item
+	}
 	return out
-}
-
-// Equal sources keep their original order, as guaranteed by the stable sort.
-func (a *app) candidateLess(t *titlePage, x, y library.Item) bool {
-	fx, fy := t.failed[itemKey(x)] != "", t.failed[itemKey(y)] != ""
-	if fx != fy {
-		return fy
-	}
-	memory := a.sourceMemory.entries[titleKey(t.name)]
-	px, py := memory.Preferred.matches(x), memory.Preferred.matches(y)
-	if px != py {
-		return px
-	}
-	rx, ry := memory.Records[sourceMemoryItemKey(x)], memory.Records[sourceMemoryItemKey(y)]
-	if rx.ConsecutiveFailures != ry.ConsecutiveFailures {
-		return rx.ConsecutiveFailures < ry.ConsecutiveFailures
-	}
-	if (rx.Successes > 0) != (ry.Successes > 0) {
-		return rx.Successes > 0
-	}
-	if rx.Successes > 0 && ry.Successes > 0 && rx.StartMS != ry.StartMS {
-		return rx.StartMS < ry.StartMS
-	}
-	dx, okx := a.latency.get(x.Entry.Key())
-	dy, oky := a.latency.get(y.Entry.Key())
-	if okx != oky {
-		return okx
-	}
-	if okx && oky && dx != dy {
-		return dx < dy
-	}
-	return false
 }
 
 func (a *app) autoOpenTitle() {

@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -526,12 +525,20 @@ func (a *app) currentEpisode() (sourceIndex, episodeIndex int, ok bool) {
 	if a.title == nil || a.title.detail == nil || a.playingEpisode == "" {
 		return 0, 0, false
 	}
-	for i, source := range a.title.detail.Sources {
+	sources := a.title.detail.Sources
+	if i := a.playingSourceIdx; i >= 0 && i < len(sources) && sources[i].Name == a.playingSource {
+		eps := sources[i].Episodes
+		if j := a.playingEpisodeIdx; j >= 0 && j < len(eps) && eps[j].Name == a.playingEpisode {
+			return i, j, true
+		}
+	}
+	for i, source := range sources {
 		if source.Name != a.playingSource {
 			continue
 		}
 		for j, episode := range source.Episodes {
 			if episode.Name == a.playingEpisode {
+				a.playingSourceIdx, a.playingEpisodeIdx = i, j
 				return i, j, true
 			}
 		}
@@ -559,19 +566,75 @@ func (a *app) leavePlayer() {
 	}
 }
 
-var episodeNumber = regexp.MustCompile(`^(?:第\s*)?([0-9]+)\s*集(?:\s*(?:已完结|完结))?$|^([0-9]+)$`)
-
 // Keep the original name for playback and matching between sources.
+// Matches ^(?:第\s*)?([0-9]+)\s*集(?:\s*(?:已完结|完结))?$|^([0-9]+)$ without regex allocations.
 func episodeButtonLabel(name string) string {
-	parts := episodeNumber.FindStringSubmatch(strings.TrimSpace(name))
-	if parts == nil {
+	s := strings.TrimSpace(name)
+	if s == "" {
 		return name
 	}
-	digits := parts[1] + parts[2]
-	if number, err := strconv.Atoi(digits); err == nil {
-		return strconv.Itoa(number)
+	// Pure ASCII digits: ^([0-9]+)$
+	if isASCIIDigits(s) {
+		return trimNumericLabel(s, name)
 	}
-	return name
+	rest := s
+	if strings.HasPrefix(rest, "第") {
+		rest = skipRE2Space(rest[len("第"):])
+	}
+	digitEnd := 0
+	for digitEnd < len(rest) && rest[digitEnd] >= '0' && rest[digitEnd] <= '9' {
+		digitEnd++
+	}
+	if digitEnd == 0 {
+		return name
+	}
+	digits := rest[:digitEnd]
+	rest = skipRE2Space(rest[digitEnd:])
+	if !strings.HasPrefix(rest, "集") {
+		return name
+	}
+	rest = skipRE2Space(rest[len("集"):])
+	if rest != "" && rest != "已完结" && rest != "完结" {
+		return name
+	}
+	return trimNumericLabel(digits, name)
+}
+
+func isASCIIDigits(s string) bool {
+	for i := range len(s) {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func skipRE2Space(s string) string {
+	i := 0
+	for i < len(s) {
+		switch s[i] {
+		case ' ', '\t', '\n', '\f', '\r':
+			i++
+		default:
+			return s[i:]
+		}
+	}
+	return ""
+}
+
+func trimNumericLabel(digits, original string) string {
+	i := 0
+	for i < len(digits)-1 && digits[i] == '0' {
+		i++
+	}
+	trimmed := digits[i:]
+	// Preserve strconv.Atoi overflow fallback to original name.
+	if len(trimmed) > 18 {
+		if _, err := strconv.Atoi(trimmed); err != nil {
+			return original
+		}
+	}
+	return trimmed
 }
 
 func (a *app) livePlayerControls(c *ui.Context) {

@@ -200,24 +200,31 @@ func (a *app) startPosters() {
 
 func (a *app) poster(raw string) ui.ImageSource {
 	raw = strings.TrimSpace(raw)
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+	if raw == "" {
 		return nil
 	}
 	p := &a.posters
 	if img := p.images[raw]; img != nil {
 		// Keep repeatedly visible posters ahead of cold downloads. Otherwise
 		// scrolling can evict and decode the image that is still on screen.
-		for i, key := range p.order {
-			if key == raw {
-				copy(p.order[i:], p.order[i+1:])
-				p.order[len(p.order)-1] = raw
-				break
+		if n := len(p.order); n > 0 && p.order[n-1] != raw {
+			for i, key := range p.order {
+				if key == raw {
+					copy(p.order[i:], p.order[i+1:])
+					p.order[n-1] = raw
+					break
+				}
 			}
 		}
 		return img
 	}
-	p.expire(time.Now())
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil
+	}
+	if len(p.failed) > 0 {
+		p.expire(time.Now())
+	}
 	if p.pending[raw] || !p.failed[raw].IsZero() || a.dispatch == nil || a.closed {
 		return nil
 	}
