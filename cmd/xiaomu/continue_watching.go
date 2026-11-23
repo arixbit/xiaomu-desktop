@@ -9,7 +9,7 @@ const continueWatchingLimit = 6
 func continueWatchingEntries(history []historyEntry) []historyEntry {
 	entries := make([]historyEntry, 0, continueWatchingLimit)
 	for _, e := range history {
-		if e.HomeHidden || titleKey(e.Name) == "" {
+		if e.isNAS() || e.HomeHidden || titleKey(e.Name) == "" {
 			continue
 		}
 		entries = append(entries, e)

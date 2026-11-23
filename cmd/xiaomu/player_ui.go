@@ -142,9 +142,6 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 	if a.playingFile {
 		name = a.playingName
 	}
-	if a.playingNAS != nil {
-		name = a.playingNAS.Name
-	}
 	top := float32(12)
 	if bar := c.TitleBar(); bar.Bottom+8 > top {
 		top = bar.Bottom + 8
@@ -469,7 +466,7 @@ func (a *app) playerFailure(c *ui.Context, err error) {
 
 // hasEpisodes reports whether what plays is an episode of the title on show.
 func (a *app) hasEpisodes() bool {
-	return !a.playingDirect && !a.playingLive && !a.playingFile && a.playingNAS == nil && a.title != nil && a.title.detail != nil && len(a.title.detail.Sources) > 0
+	return !a.playingDirect && !a.playingLive && !a.playingFile && a.title != nil && a.title.detail != nil && len(a.title.detail.Sources) > 0
 }
 
 // trackPlayback seeks to where a resumed episode stopped, then keeps the

@@ -42,7 +42,6 @@ const (
 	jobSite                   // browsing one site
 	jobTitle                  // reading a title from one of its sources
 	jobPlay                   // resolving an episode into media
-	jobNAS                    // connecting to the NAS or listing a folder
 	jobDanmaku                // searching or loading this episode's comments
 	jobSlots
 )
@@ -195,7 +194,6 @@ func (a *app) closeSession(s source.Session) {
 
 func (a *app) close() {
 	a.closed = true
-	a.closeNASClient()
 	a.cancelSourceSpeedTest()
 	a.posters.close()
 	a.pending, a.pendingLibrary = nil, nil
