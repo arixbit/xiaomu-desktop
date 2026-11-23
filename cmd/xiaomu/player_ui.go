@@ -232,14 +232,17 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 				if duration > 0 && !a.playingLive {
 					ui.Text(c, playerClock(p.Position())).FontSize(12)
 					position := p.Position().Seconds()
-					progress := ui.Slider(c, &position, 0, duration.Seconds()).Label("播放进度").Grow(1)
-					if progress.Pressed() {
-						a.playerOverlay.keepVisible = true
-					}
-					if progress.Changed() {
-						p.Seek(time.Duration(position * float64(time.Second)))
-						a.syncNowPlayingState()
-					}
+					ui.Column(c).Grow(1).Gap(2).Children(func() {
+						a.danmakuHighlightCurve(c, p, duration)
+						progress := ui.Slider(c, &position, 0, duration.Seconds()).Label("播放进度").FillWidth()
+						if progress.Pressed() {
+							a.playerOverlay.keepVisible = true
+						}
+						if progress.Changed() {
+							p.Seek(time.Duration(position * float64(time.Second)))
+							a.syncNowPlayingState()
+						}
+					})
 					ui.Text(c, playerClock(duration)).FontSize(12)
 				} else {
 					ui.Text(c, "直播").FontSize(12).Grow(1)

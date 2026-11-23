@@ -49,7 +49,7 @@ func TestDanmakuAreaFollowsVideoHeightAndAvoidsControls(t *testing.T) {
 		{0.75, 389},
 		{1, 478},
 	} {
-		got := danmakuArea(picture, bounds, tc.fraction, true)
+		got := danmakuArea(picture, bounds, tc.fraction, true, false)
 		if got.X != picture.X || got.W != picture.W || got.Y != 122 || got.Y+got.H != tc.bottom {
 			t.Fatalf("area=%v: got %+v, want bottom=%v", tc.fraction, got, tc.bottom)
 		}
@@ -57,15 +57,21 @@ func TestDanmakuAreaFollowsVideoHeightAndAvoidsControls(t *testing.T) {
 
 	// Minimum window with full-height video must still fit max font size at 25% area.
 	small := ui.Rect{X: 0, Y: 0, W: 640, H: 420}
-	gotSmall := danmakuArea(small, small, 0.25, true)
+	gotSmall := danmakuArea(small, small, 0.25, true, false)
 	if gotSmall.Y != 72 || gotSmall.H < 36*1.4 {
 		t.Fatalf("small window 25%% area too short for max font size: %+v", gotSmall)
 	}
 
 	// Hidden fullscreen controls release the top and bottom control bands.
 	full := ui.Rect{X: 0, Y: 0, W: 1440, H: 900}
-	gotHidden := danmakuArea(full, full, 1, false)
+	gotHidden := danmakuArea(full, full, 1, false, false)
 	if gotHidden.Y != 12 || gotHidden.Y+gotHidden.H != 888 {
 		t.Fatalf("hidden controls still deducted control height: %+v", gotHidden)
+	}
+
+	// Subtitle protection reserves the bottom 14% of the picture even in fullscreen.
+	gotProtected := danmakuArea(full, full, 1, false, true)
+	if gotProtected.Y != 12 || gotProtected.Y+gotProtected.H != 900-900*0.14 {
+		t.Fatalf("subtitle protection did not reserve bottom band: %+v", gotProtected)
 	}
 }

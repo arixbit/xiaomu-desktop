@@ -501,3 +501,99 @@ func TestHasEpisodesExcludesNASAndLocalFilePlayback(t *testing.T) {
 		t.Fatal("local file playback should not report title episodes or danmaku")
 	}
 }
+
+func TestDanmakuOffsetControlsAndResetOnEpisodeChange(t *testing.T) {
+	a := newPlayerTestApp(t)
+	a.preferences = defaultPlayerPreferences()
+	a.preferences.Danmaku.Enabled = true
+	a.applyDanmaku(danmaku.Episode{ID: "101"}, []danmaku.Comment{{Time: 5 * time.Second, Mode: 5, Color: 0xffffff, Text: "五秒处弹幕"}})
+	tt := ui.NewTester(a.view, 1120, 760)
+	if err := tt.Click("弹幕"); err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"弹幕时间偏移 +5s", "弹幕时间偏移 -1s"} {
+		if err := tt.Click(label); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a.danmaku.offset != 4*time.Second || !tt.HasText("提前 4s") {
+		t.Fatalf("offset = %s, texts=%v", a.danmaku.offset, tt.Texts())
+	}
+	if err := tt.Click("弹幕时间偏移 -5s"); err != nil {
+		t.Fatal(err)
+	}
+	if a.danmaku.offset != -time.Second || !tt.HasText("推迟 1s") {
+		t.Fatalf("negative offset = %s, texts=%v", a.danmaku.offset, tt.Texts())
+	}
+	if err := tt.Click("重置弹幕时间偏移"); err != nil {
+		t.Fatal(err)
+	}
+	if a.danmaku.offset != 0 || !tt.HasText("0s") {
+		t.Fatalf("reset failed: offset=%s", a.danmaku.offset)
+	}
+	a.danmaku.offset = 5 * time.Second
+	a.stopDanmaku()
+	if a.danmaku.offset != 0 {
+		t.Fatalf("episode transition kept old offset: %s", a.danmaku.offset)
+	}
+}
+
+func TestDanmakuFiltersDensityAndHighlightCurve(t *testing.T) {
+	a := newKeyboardTestApp(t)
+	a.preferences = defaultPlayerPreferences()
+	a.preferencesPath = filepath.Join(t.TempDir(), "preferences.json")
+	a.preferences.Danmaku.Enabled = true
+	a.applyDanmaku(danmaku.Episode{ID: "101"}, []danmaku.Comment{
+		{Time: 0, Mode: 1, Color: 0xffffff, Text: "前方高能"},
+		{Time: time.Second, Mode: 1, Color: 0xffffff, Text: "前方高能"},
+		{Time: 0, Mode: 5, Color: 0xffffff, Text: "顶部弹幕"},
+		{Time: 0, Mode: 4, Color: 0xffffff, Text: "底部弹幕"},
+		{Time: 0, Mode: 1, Color: 0xff0000, Text: "彩色弹幕"},
+		{Time: 0, Mode: 1, Color: 0xffffff, Text: "这里有剧透"},
+	})
+	tt := ui.NewTester(a.view, 1120, 760)
+	if _, ok := tt.Find("弹幕高能曲线"); !ok {
+		t.Fatal("highlight curve did not appear for timed VOD comments")
+	}
+	if err := tt.Click("弹幕"); err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"屏蔽顶部", "屏蔽底部", "屏蔽彩色", "防挡字幕"} {
+		if err := tt.Click(label); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tt.Click("稀疏"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("弹幕屏蔽词"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("剧透")
+	prefs, err := readPlayerPreferences(a.preferencesPath)
+	if err != nil || !prefs.Danmaku.HideTop || !prefs.Danmaku.HideBottom || !prefs.Danmaku.HideColor || !prefs.Danmaku.ProtectSubtitle || prefs.Danmaku.Density != "low" || prefs.Danmaku.Blocked != "剧透" {
+		t.Fatalf("saved filter preferences = %+v, err=%v", prefs.Danmaku, err)
+	}
+	frame := a.danmaku.screen.Frame(time.Second, 800, 400, 20, 0.5, func(string) float32 { return 100 })
+	if len(frame) != 1 || frame[0].Text != "前方高能 ×2" {
+		t.Fatalf("filters and repeat merge did not apply live: %+v", frame)
+	}
+	// Turning off filters restores original comments without re-fetching.
+	for _, label := range []string{"屏蔽顶部", "屏蔽底部", "屏蔽彩色", "合并刷屏"} {
+		if err := tt.Click(label); err != nil {
+			t.Fatal(err)
+		}
+	}
+	frame = a.danmaku.screen.Frame(time.Second, 800, 400, 20, 0.5, func(string) float32 { return 100 })
+	if len(frame) != 5 {
+		t.Fatalf("disabling filters did not restore comments: %+v", frame)
+	}
+	if err := tt.Click("完成"); err != nil {
+		t.Fatal(err)
+	}
+	a.preferences.Danmaku.Enabled = false
+	tt.Frame()
+	if _, ok := tt.Find("弹幕高能曲线"); ok {
+		t.Fatal("highlight curve stayed visible while danmaku is disabled")
+	}
+}

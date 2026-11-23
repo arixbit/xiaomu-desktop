@@ -44,6 +44,10 @@ func (a *app) handleKeyboard(c *ui.Context) {
 		}
 		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 	}
+	if a.hasEpisodes() && c.Shortcut(0, ui.KeyD) && !c.ShortcutRepeated() {
+		a.toggleDanmaku()
+		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
+	}
 	if a.playingLive || p.Duration() <= 0 {
 		return
 	}

@@ -17,16 +17,23 @@ import (
 )
 
 type danmakuPreferences struct {
-	Enabled bool    `json:"enabled"`
-	API     string  `json:"api,omitempty"`
-	Size    float64 `json:"size"`
-	Opacity float64 `json:"opacity"`
-	Speed   float64 `json:"speed"`
-	Area    float64 `json:"area"`
+	Enabled         bool    `json:"enabled"`
+	API             string  `json:"api,omitempty"`
+	Size            float64 `json:"size"`
+	Opacity         float64 `json:"opacity"`
+	Speed           float64 `json:"speed"`
+	Area            float64 `json:"area"`
+	Density         string  `json:"density,omitempty"`
+	HideTop         bool    `json:"hide_top,omitempty"`
+	HideBottom      bool    `json:"hide_bottom,omitempty"`
+	HideColor       bool    `json:"hide_color,omitempty"`
+	MergeRepeat     bool    `json:"merge_repeat"`
+	ProtectSubtitle bool    `json:"protect_subtitle,omitempty"`
+	Blocked         string  `json:"blocked,omitempty"`
 }
 
 func defaultDanmakuPreferences() danmakuPreferences {
-	return danmakuPreferences{Size: 22, Opacity: 0.85, Speed: 0.5, Area: 0.5}
+	return danmakuPreferences{Size: 22, Opacity: 0.85, Speed: 0.5, Area: 0.5, MergeRepeat: true}
 }
 
 func (p danmakuPreferences) normalized() danmakuPreferences {
@@ -43,7 +50,24 @@ func (p danmakuPreferences) normalized() danmakuPreferences {
 	if math.IsNaN(p.Area) || p.Area < 0.25 || p.Area > 1 {
 		p.Area = 0.5
 	}
+	switch p.Density {
+	case "", "low", "high":
+	default:
+		p.Density = ""
+	}
+	p.Blocked = strings.TrimSpace(p.Blocked)
 	return p
+}
+
+func danmakuDensityParams(density string) (maxRows int, minGap float32) {
+	switch density {
+	case "low":
+		return 4, 48
+	case "high":
+		return 18, 8
+	default:
+		return 12, 12
+	}
 }
 
 type danmakuState struct {
@@ -52,9 +76,12 @@ type danmakuState struct {
 	sourceURL               string
 	episodeQuery            string
 	message, preferredAnime string
+	offset                  time.Duration
 	episodes                []danmaku.Episode
 	selected                *danmaku.Episode
 	comments                []danmaku.Comment
+	profile                 []float32
+	profileDuration         time.Duration
 	list                    ui.ListState
 	screen                  danmaku.Screen
 }
@@ -66,9 +93,53 @@ func (a *app) cancelDanmakuJob() {
 func (a *app) stopDanmaku() {
 	a.cancelDanmakuJob()
 	s := &a.danmaku
-	s.open, s.advanced, s.message, s.sourceURL = false, false, "", ""
+	s.open, s.advanced, s.message, s.sourceURL, s.offset = false, false, "", "", 0
 	s.episodes, s.selected, s.comments = nil, nil, nil
+	s.profile, s.profileDuration = nil, 0
 	s.screen.Reset(nil)
+}
+
+func (a *app) refreshDanmakuTrack() {
+	s := &a.danmaku
+	p := a.preferences.Danmaku.normalized()
+	filtered := danmaku.Filter(s.comments, danmaku.FilterOptions{
+		HideTop:     p.HideTop,
+		HideBottom:  p.HideBottom,
+		HideColor:   p.HideColor,
+		MergeRepeat: p.MergeRepeat,
+		Blocked:     danmaku.ParseBlockedTerms(p.Blocked),
+	})
+	s.screen.Reset(filtered)
+	maxRows, minGap := danmakuDensityParams(p.Density)
+	s.screen.SetDensity(maxRows, minGap)
+}
+
+func (a *app) toggleDanmaku() {
+	if !a.hasEpisodes() {
+		return
+	}
+	a.ensurePreferences()
+	a.preferences.Danmaku.Enabled = !a.preferences.Danmaku.Enabled
+	a.applyDanmakuEnabled()
+	a.savePreferences()
+}
+
+func (a *app) applyDanmakuEnabled() {
+	s := &a.danmaku
+	if !a.preferences.Danmaku.Enabled {
+		a.cancelDanmakuJob()
+		s.message = "弹幕已关闭"
+		return
+	}
+	if len(s.comments) == 0 {
+		if s.title == "" && a.title != nil {
+			s.title, s.query = a.title.name, a.title.name
+			if number := danmakuNumber(a.playingEpisode); number > 0 {
+				s.episodeQuery = strconv.Itoa(number)
+			}
+		}
+		a.loadCurrentDanmaku()
+	}
 }
 
 // Each episode gets its own cancellable job; the existing job generation
@@ -106,7 +177,8 @@ func (a *app) loadCurrentDanmaku() {
 		return jobResult{apply: func() {
 			s.episodes, s.list = nil, ui.ListState{}
 			s.selected, s.comments = nil, comments
-			s.screen.Reset(comments)
+			s.profile, s.profileDuration = nil, 0
+			a.refreshDanmakuTrack()
 			s.message = fmt.Sprintf("已加载 %d 条片源弹幕", len(comments))
 			if len(comments) == 0 {
 				s.message = "这一集暂无弹幕"
@@ -230,7 +302,8 @@ func (a *app) failDanmaku(err error) {
 func (a *app) applyDanmaku(episode danmaku.Episode, comments []danmaku.Comment) {
 	s := &a.danmaku
 	s.selected, s.comments, s.preferredAnime = &episode, comments, episode.AnimeID
-	s.screen.Reset(comments)
+	s.profile, s.profileDuration = nil, 0
+	a.refreshDanmakuTrack()
 	s.message = fmt.Sprintf("已加载 %d 条弹幕 · %s · %s", len(comments), episode.Anime, episode.Name)
 	if len(comments) == 0 {
 		s.message = "这一集暂无弹幕"
@@ -273,12 +346,7 @@ func (a *app) danmakuDialog(c *ui.Context) {
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "显示弹幕").Grow(1)
 				if ui.Switch(c, &a.preferences.Danmaku.Enabled).Label("弹幕开关").Changed() {
-					if !a.preferences.Danmaku.Enabled {
-						a.cancelDanmakuJob()
-						s.message = "弹幕已关闭"
-					} else if len(s.comments) == 0 {
-						a.loadCurrentDanmaku()
-					}
+					a.applyDanmakuEnabled()
 					a.savePreferences()
 				}
 			})
@@ -309,13 +377,8 @@ func (a *app) danmakuDialog(c *ui.Context) {
 				}
 				ui.Text(c, fmt.Sprintf("%.0f%%", a.preferences.Danmaku.Area*100)).Width(48)
 			})
+			a.danmakuOffsetControls(c)
 			a.danmakuSearchControls(c)
-			if glassButton(c, "服务设置（可选）").FillWidth().Clicked() {
-				s.advanced = !s.advanced
-			}
-			if s.advanced {
-				a.manualDanmaku(c)
-			}
 			if s.message != "" {
 				ui.Text(c, s.message).FontSize(12)
 			}
@@ -328,6 +391,13 @@ func (a *app) danmakuDialog(c *ui.Context) {
 					}
 				}).FillWidth().Height(min(float32(180), max(float32(80), height-480)))
 			}
+			if glassButton(c, "服务设置（可选）").FillWidth().Clicked() {
+				s.advanced = !s.advanced
+			}
+			if s.advanced {
+				a.manualDanmaku(c)
+			}
+			a.danmakuFilterControls(c)
 		})
 		ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
 			if glassButton(c, "完成").Clicked() {
@@ -335,6 +405,110 @@ func (a *app) danmakuDialog(c *ui.Context) {
 			}
 		})
 	})
+}
+
+const maxDanmakuOffset = 10 * time.Minute
+
+func clampDanmakuOffset(d time.Duration) time.Duration {
+	return min(max(d, -maxDanmakuOffset), maxDanmakuOffset)
+}
+
+func formatDanmakuOffset(d time.Duration) string {
+	seconds := int(d / time.Second)
+	switch {
+	case seconds > 0:
+		return fmt.Sprintf("提前 %ds", seconds)
+	case seconds < 0:
+		return fmt.Sprintf("推迟 %ds", -seconds)
+	default:
+		return "0s"
+	}
+}
+
+func (a *app) danmakuOffsetControls(c *ui.Context) {
+	s := &a.danmaku
+	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "时间偏移").Width(64)
+		for _, step := range []struct {
+			label string
+			delta time.Duration
+		}{
+			{"-5s", -5 * time.Second},
+			{"-1s", -time.Second},
+			{"+1s", time.Second},
+			{"+5s", 5 * time.Second},
+		} {
+			if glassButton(c, step.label).Label("弹幕时间偏移 " + step.label).Padding(5, 10).Clicked() {
+				s.offset = clampDanmakuOffset(s.offset + step.delta)
+			}
+		}
+		ui.Text(c, formatDanmakuOffset(s.offset)).FontSize(13).Grow(1)
+		if glassButton(c, "重置").Label("重置弹幕时间偏移").Padding(5, 10).Disabled(s.offset == 0).Clicked() {
+			s.offset = 0
+		}
+	})
+}
+
+func danmakuFilterChip(c *ui.Context, label string, active bool) ui.Element {
+	tint := ui.RGBA(55, 50, 92, 0.39)
+	if active {
+		tint = ui.RGBA(255, 90, 64, 0.65)
+	}
+	return ui.Button(c, label).Label(label).Padding(6, 10).Radius(14).
+		Material(glass.Glass{Style: glass.Clear, Tint: tint, Interactive: true}).TextColor(playerText)
+}
+
+func (a *app) danmakuFilterControls(c *ui.Context) {
+	p := &a.preferences.Danmaku
+	changed := false
+	densityIndex := 1
+	switch p.Density {
+	case "low":
+		densityIndex = 0
+	case "high":
+		densityIndex = 2
+	}
+	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "密度").Width(64)
+		if ui.Segmented(c, &densityIndex, "稀疏", "适中", "密集").Label("弹幕密度").Grow(1).Changed() {
+			switch densityIndex {
+			case 0:
+				p.Density = "low"
+			case 2:
+				p.Density = "high"
+			default:
+				p.Density = ""
+			}
+			changed = true
+		}
+	})
+	ui.Row(c).FillWidth().Wrap().Gap(6).AlignItems(ui.Center).Children(func() {
+		for _, toggle := range []struct {
+			label string
+			value *bool
+		}{
+			{"屏蔽顶部", &p.HideTop},
+			{"屏蔽底部", &p.HideBottom},
+			{"屏蔽彩色", &p.HideColor},
+			{"合并刷屏", &p.MergeRepeat},
+			{"防挡字幕", &p.ProtectSubtitle},
+		} {
+			if danmakuFilterChip(c, toggle.label, *toggle.value).Clicked() {
+				*toggle.value = !*toggle.value
+				changed = true
+			}
+		}
+	})
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "屏蔽词").Width(64)
+		if ui.TextInput(c, &p.Blocked).Label("弹幕屏蔽词").Placeholder("逗号或空格分隔，如 剧透,广告").Grow(1).Changed() {
+			changed = true
+		}
+	})
+	if changed {
+		a.refreshDanmakuTrack()
+		a.savePreferences()
+	}
 }
 
 func (a *app) manualDanmaku(c *ui.Context) {
@@ -349,6 +523,7 @@ func (a *app) manualDanmaku(c *ui.Context) {
 		} else {
 			a.cancelDanmakuJob()
 			s.episodes, s.selected, s.comments = nil, nil, nil
+			s.profile, s.profileDuration = nil, 0
 			s.screen.Reset(nil)
 			a.preferences.Danmaku.API = address
 			a.preferences.Danmaku.Enabled = true
@@ -378,11 +553,68 @@ func (a *app) danmakuSearchControls(c *ui.Context) {
 	})
 }
 
-func danmakuArea(picture, bounds ui.Rect, fraction float32, avoidControls bool) ui.Rect {
+func (a *app) danmakuHighlightCurve(c *ui.Context, player *ui.VideoPlayer, duration time.Duration) {
+	if !a.hasEpisodes() || !a.preferences.Danmaku.Enabled || len(a.danmaku.comments) == 0 || duration <= 0 {
+		return
+	}
+	s := &a.danmaku
+	if s.profile == nil || s.profileDuration != duration {
+		s.profile = danmaku.DensityProfile(s.comments, duration, 80)
+		s.profileDuration = duration
+	}
+	if len(s.profile) < 2 {
+		return
+	}
+	profile := s.profile
+	ratio := float32(min(max(player.Position().Seconds()/duration.Seconds(), 0), 1))
+	ui.Box(c).FillWidth().Height(18).PassThrough().Label("弹幕高能曲线").Draw(func(p *ui.Painter, r ui.Rect) {
+		if r.W <= 4 || r.H <= 2 {
+			return
+		}
+		n := len(profile)
+		points := make([][2]float32, n)
+		for i, v := range profile {
+			x := r.X + r.W*float32(i)/float32(n-1)
+			y := r.Y + r.H - max(float32(1.5), v*(r.H-2))
+			points[i] = [2]float32{x, y}
+		}
+		var path ui.Path
+		path.MoveTo(r.X, r.Y+r.H)
+		path.LineTo(points[0][0], points[0][1])
+		for i := 1; i < n; i++ {
+			midX := (points[i-1][0] + points[i][0]) / 2
+			midY := (points[i-1][1] + points[i][1]) / 2
+			path.QuadTo(points[i-1][0], points[i-1][1], midX, midY)
+		}
+		path.LineTo(points[n-1][0], points[n-1][1])
+		path.LineTo(r.X+r.W, r.Y+r.H)
+		path.Close()
+		p.FillPathGradient(&path, ui.LinearGradient{Angle: 180, Stops: []ui.GradientStop{
+			{Color: ui.RGBA(255, 178, 130, 0.36), At: 0},
+			{Color: ui.RGBA(255, 178, 130, 0.04), At: 1},
+		}})
+		p.StrokePolyline(points, 1.1, ui.RGBA(255, 200, 165, 0.62))
+		if ratio > 0 {
+			p.Clip(ui.Rect{X: r.X, Y: r.Y, W: r.W * ratio, H: r.H}, 0, func() {
+				p.FillPathGradient(&path, ui.LinearGradient{Angle: 180, Stops: []ui.GradientStop{
+					{Color: ui.RGBA(255, 115, 78, 0.48), At: 0},
+					{Color: ui.RGBA(255, 115, 78, 0.08), At: 1},
+				}})
+				p.StrokePolyline(points, 1.3, ui.RGBA(255, 145, 110, 0.9))
+			})
+		}
+	})
+}
+
+func danmakuArea(picture, bounds ui.Rect, fraction float32, avoidControls, protectSubtitle bool) ui.Rect {
 	top, limit := picture.Y+12, picture.Y+picture.H-12
 	if avoidControls {
 		top = max(top, bounds.Y+72)
 		limit = min(limit, bounds.Y+bounds.H-132)
+	}
+	if protectSubtitle {
+		subtitleBand := max(float32(48), picture.H*0.14)
+		limit = min(limit, picture.Y+picture.H-subtitleBand)
 	}
 	usable := max(float32(0), limit-top)
 	return ui.Rect{X: picture.X, Y: top, W: picture.W, H: usable * fraction}
@@ -399,28 +631,32 @@ func (a *app) danmakuOverlay(c *ui.Context, player *ui.VideoPlayer, avoidControl
 		w, h := player.Size()
 		picture := playerPictureRect(r, w, h)
 		settings := a.preferences.Danmaku.normalized()
-		area := danmakuArea(picture, r, float32(settings.Area), avoidControls)
+		area := danmakuArea(picture, r, float32(settings.Area), avoidControls, settings.ProtectSubtitle)
 		size := float32(settings.Size)
 		if area.W <= 0 || area.H < size*1.4 {
 			return
 		}
-		position := player.Position()
+		position := player.Position() + a.danmaku.offset
 		sprites := a.danmaku.screen.Frame(position, area.W, area.H, size, float32(settings.Speed), func(text string) float32 {
 			width, _ := p.MeasureText(0, ui.Span{Text: text, Size: size})
 			return width
 		})
+		outline := ui.RGBA(0, 0, 0, float32(settings.Opacity)*0.85)
 		p.Clip(area, 0, func() {
 			for _, sprite := range sprites {
 				color := ui.RGBA(uint8(sprite.Color>>16), uint8(sprite.Color>>8), uint8(sprite.Color), float32(settings.Opacity))
 				x, y := area.X+sprite.X, area.Y+sprite.Y
-				p.Text(x+1, y+1, sprite.Text, size, ui.RGBA(0, 0, 0, float32(settings.Opacity)))
+				p.Text(x-1, y, sprite.Text, size, outline)
+				p.Text(x+1, y, sprite.Text, size, outline)
+				p.Text(x, y-1, sprite.Text, size, outline)
+				p.Text(x, y+1, sprite.Text, size, outline)
 				p.Text(x, y, sprite.Text, size, color)
 			}
 		})
 		if player.Playing() && !player.Buffering() {
 			if len(sprites) > 0 {
-				p.AnimationFrameRate(30)
-			} else if next := a.danmaku.screen.Next(); next > position {
+				p.AnimationFrameRate(60)
+			} else if next, ok := a.danmaku.screen.Next(); ok && next > position {
 				rate := max(player.Rate(), 0.1)
 				p.After(min(time.Second, time.Duration(float64(next-position)/rate)))
 			}
