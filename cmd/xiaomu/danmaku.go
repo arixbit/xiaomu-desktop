@@ -81,10 +81,15 @@ type danmakuState struct {
 	episodes                []danmaku.Episode
 	selected                *danmaku.Episode
 	comments                []danmaku.Comment
-	profile                 []float32
-	profileDuration         time.Duration
-	list                    ui.ListState
-	screen                  danmaku.Screen
+	profile         []float32
+	profileDuration time.Duration
+	curveProfilePtr *float32
+	curveProfileLen int
+	curveRect       ui.Rect
+	curvePoints     [][2]float32
+	curvePath       ui.Path
+	list            ui.ListState
+	screen          danmaku.Screen
 }
 
 func (a *app) cancelDanmakuJob() {
@@ -97,7 +102,8 @@ func (a *app) stopDanmaku() {
 	s.open, s.advanced, s.failed, s.empty = false, false, false, false
 	s.message, s.sourceURL, s.offset = "", "", 0
 	s.episodes, s.selected, s.comments = nil, nil, nil
-	s.profile, s.profileDuration = nil, 0
+	s.profile, s.profileDuration, s.curveProfilePtr, s.curveProfileLen = nil, 0, nil, 0
+	s.curvePoints = nil
 	s.screen.Reset(nil)
 }
 
@@ -764,6 +770,17 @@ func (a *app) danmakuSearchControls(c *ui.Context) {
 	})
 }
 
+var (
+	danmakuCurveBaseGradient = ui.LinearGradient{Angle: 180, Stops: []ui.GradientStop{
+		{Color: ui.RGBA(255, 178, 130, 0.36), At: 0},
+		{Color: ui.RGBA(255, 178, 130, 0.04), At: 1},
+	}}
+	danmakuCurveActiveGradient = ui.LinearGradient{Angle: 180, Stops: []ui.GradientStop{
+		{Color: ui.RGBA(255, 115, 78, 0.48), At: 0},
+		{Color: ui.RGBA(255, 115, 78, 0.08), At: 1},
+	}}
+)
+
 func (a *app) danmakuHighlightCurve(c *ui.Context, player *ui.VideoPlayer, duration time.Duration) {
 	if !a.hasEpisodes() || !a.preferences.Danmaku.Enabled || len(a.danmaku.comments) == 0 || duration <= 0 {
 		return
@@ -772,6 +789,7 @@ func (a *app) danmakuHighlightCurve(c *ui.Context, player *ui.VideoPlayer, durat
 	if s.profile == nil || s.profileDuration != duration {
 		s.profile = danmaku.DensityProfile(s.comments, duration, 80)
 		s.profileDuration = duration
+		s.curveProfilePtr = nil
 	}
 	if len(s.profile) < 2 {
 		return
@@ -782,36 +800,40 @@ func (a *app) danmakuHighlightCurve(c *ui.Context, player *ui.VideoPlayer, durat
 		if r.W <= 4 || r.H <= 2 {
 			return
 		}
-		n := len(profile)
-		points := make([][2]float32, n)
-		for i, v := range profile {
-			x := r.X + r.W*float32(i)/float32(n-1)
-			y := r.Y + r.H - max(float32(1.5), v*(r.H-2))
-			points[i] = [2]float32{x, y}
+		if s.curveProfilePtr != &profile[0] || s.curveProfileLen != len(profile) || s.curveRect != r {
+			n := len(profile)
+			if cap(s.curvePoints) < n {
+				s.curvePoints = make([][2]float32, n)
+			} else {
+				s.curvePoints = s.curvePoints[:n]
+			}
+			for i, v := range profile {
+				x := r.X + r.W*float32(i)/float32(n-1)
+				y := r.Y + r.H - max(float32(1.5), v*(r.H-2))
+				s.curvePoints[i] = [2]float32{x, y}
+			}
+			var path ui.Path
+			path.MoveTo(r.X, r.Y+r.H)
+			path.LineTo(s.curvePoints[0][0], s.curvePoints[0][1])
+			for i := 1; i < n; i++ {
+				midX := (s.curvePoints[i-1][0] + s.curvePoints[i][0]) / 2
+				midY := (s.curvePoints[i-1][1] + s.curvePoints[i][1]) / 2
+				path.QuadTo(s.curvePoints[i-1][0], s.curvePoints[i-1][1], midX, midY)
+			}
+			path.LineTo(s.curvePoints[n-1][0], s.curvePoints[n-1][1])
+			path.LineTo(r.X+r.W, r.Y+r.H)
+			path.Close()
+			s.curvePath = path
+			s.curveProfilePtr = &profile[0]
+			s.curveProfileLen = n
+			s.curveRect = r
 		}
-		var path ui.Path
-		path.MoveTo(r.X, r.Y+r.H)
-		path.LineTo(points[0][0], points[0][1])
-		for i := 1; i < n; i++ {
-			midX := (points[i-1][0] + points[i][0]) / 2
-			midY := (points[i-1][1] + points[i][1]) / 2
-			path.QuadTo(points[i-1][0], points[i-1][1], midX, midY)
-		}
-		path.LineTo(points[n-1][0], points[n-1][1])
-		path.LineTo(r.X+r.W, r.Y+r.H)
-		path.Close()
-		p.FillPathGradient(&path, ui.LinearGradient{Angle: 180, Stops: []ui.GradientStop{
-			{Color: ui.RGBA(255, 178, 130, 0.36), At: 0},
-			{Color: ui.RGBA(255, 178, 130, 0.04), At: 1},
-		}})
-		p.StrokePolyline(points, 1.1, ui.RGBA(255, 200, 165, 0.62))
+		p.FillPathGradient(&s.curvePath, danmakuCurveBaseGradient)
+		p.StrokePolyline(s.curvePoints, 1.1, ui.RGBA(255, 200, 165, 0.62))
 		if ratio > 0 {
 			p.Clip(ui.Rect{X: r.X, Y: r.Y, W: r.W * ratio, H: r.H}, 0, func() {
-				p.FillPathGradient(&path, ui.LinearGradient{Angle: 180, Stops: []ui.GradientStop{
-					{Color: ui.RGBA(255, 115, 78, 0.48), At: 0},
-					{Color: ui.RGBA(255, 115, 78, 0.08), At: 1},
-				}})
-				p.StrokePolyline(points, 1.3, ui.RGBA(255, 145, 110, 0.9))
+				p.FillPathGradient(&s.curvePath, danmakuCurveActiveGradient)
+				p.StrokePolyline(s.curvePoints, 1.3, ui.RGBA(255, 145, 110, 0.9))
 			})
 		}
 	})

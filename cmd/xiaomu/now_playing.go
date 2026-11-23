@@ -75,11 +75,22 @@ func (a *app) currentNowPlaying() mygo.NowPlayingInfo {
 		state = mygo.PlaybackPlaying
 	}
 	commands := mygo.MediaPlay | mygo.MediaPause
-	if _, _, ok := a.nextEpisode(); ok || a.playingLive && a.live.playingChannel+1 < len(a.live.channels) {
-		commands |= mygo.MediaNext
-	}
-	if _, _, ok := a.prevEpisode(); ok || a.playingLive && a.live.playingChannel > 0 {
-		commands |= mygo.MediaPrevious
+	if a.hasEpisodes() {
+		if source, index, ok := a.currentEpisode(); ok {
+			if index+1 < len(a.title.detail.Sources[source].Episodes) {
+				commands |= mygo.MediaNext
+			}
+			if index > 0 {
+				commands |= mygo.MediaPrevious
+			}
+		}
+	} else if a.playingLive {
+		if a.live.playingChannel+1 < len(a.live.channels) {
+			commands |= mygo.MediaNext
+		}
+		if a.live.playingChannel > 0 {
+			commands |= mygo.MediaPrevious
+		}
 	}
 	return mygo.NowPlayingInfo{
 		Title:    a.nowPlayingTitle(),

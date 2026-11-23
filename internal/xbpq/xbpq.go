@@ -100,7 +100,9 @@ func (s *Session) Home(ctx context.Context) (catalog.Page, error) {
 	return s.list(ctx, s.home, false)
 }
 
-func (s *Session) Close() { s.client.CloseIdleConnections() }
+// Close releases session-local state without closing the process-wide shared
+// HTTP transport's idle connections.
+func (s *Session) Close() {}
 func (s *Session) value(key string) string {
 	var v string
 	if json.Unmarshal(s.rule[key], &v) == nil {
@@ -183,11 +185,24 @@ func (s *Session) list(ctx context.Context, raw string, search bool) (catalog.Pa
 	out := catalog.Page{}
 	seen := map[string]bool{}
 	for _, block := range blocks {
-		d, _ := goquery.NewDocumentFromReader(strings.NewReader(block))
-		a := d.Find("a[href]").First()
+		var d *goquery.Document
+		var a *goquery.Selection
+		parsed := false
+		ensureDOM := func() {
+			if !parsed {
+				parsed = true
+				d, _ = goquery.NewDocumentFromReader(strings.NewReader(block))
+				if d != nil {
+					a = d.Find("a[href]").First()
+				}
+			}
+		}
 		link := extract(block, rule("链接"))
 		if link == "" {
-			link, _ = a.Attr("href")
+			ensureDOM()
+			if a != nil {
+				link, _ = a.Attr("href")
+			}
 		}
 		if link == "" {
 			continue
@@ -198,12 +213,15 @@ func (s *Session) list(ctx context.Context, raw string, search bool) (catalog.Pa
 		}
 		name := plain(extract(block, rule("标题")))
 		if name == "" {
-			name, _ = a.Attr("title")
+			ensureDOM()
+			if a != nil {
+				name, _ = a.Attr("title")
+			}
 		}
-		if name == "" {
+		if name == "" && d != nil {
 			name, _ = d.Find("img").First().Attr("alt")
 		}
-		if name == "" {
+		if name == "" && a != nil {
 			name = plain(a.Text())
 		}
 		if name == "" {
@@ -211,14 +229,17 @@ func (s *Session) list(ctx context.Context, raw string, search bool) (catalog.Pa
 		}
 		pic := extract(block, rule("图片"))
 		if pic == "" {
-			img := d.Find("img").First()
-			for _, attr := range []string{"data-original", "data-src", "src"} {
-				pic, _ = img.Attr(attr)
-				if pic != "" {
-					break
+			ensureDOM()
+			if d != nil {
+				img := d.Find("img").First()
+				for _, attr := range []string{"data-original", "data-src", "src"} {
+					pic, _ = img.Attr(attr)
+					if pic != "" {
+						break
+					}
 				}
 			}
-			if pic == "" {
+			if pic == "" && a != nil {
 				pic, _ = a.Attr("data-original")
 			}
 		}
@@ -273,19 +294,35 @@ func (s *Session) Detail(ctx context.Context, id string) (catalog.Detail, error)
 			d, _ := goquery.NewDocumentFromReader(strings.NewReader(group))
 			d.Find("a[href]").Each(func(_ int, a *goquery.Selection) { v, _ := goquery.OuterHtml(a); blocks = append(blocks, v) })
 		}
+		playLinkRule := s.value("播放链接")
+		playTitleRule := s.value("播放标题")
 		for _, block := range blocks {
-			d, _ := goquery.NewDocumentFromReader(strings.NewReader(block))
-			a := d.Find("a[href]").First()
-			link := extract(block, s.value("播放链接"))
+			var a *goquery.Selection
+			parsed := false
+			ensureAnchor := func() {
+				if !parsed {
+					parsed = true
+					if d, err := goquery.NewDocumentFromReader(strings.NewReader(block)); err == nil && d != nil {
+						a = d.Find("a[href]").First()
+					}
+				}
+			}
+			link := extract(block, playLinkRule)
 			if link == "" {
-				link, _ = a.Attr("href")
+				ensureAnchor()
+				if a != nil {
+					link, _ = a.Attr("href")
+				}
 			}
 			if link == "" {
 				continue
 			}
-			name := plain(extract(block, s.value("播放标题")))
+			name := plain(extract(block, playTitleRule))
 			if name == "" {
-				name = plain(a.Text())
+				ensureAnchor()
+				if a != nil {
+					name = plain(a.Text())
+				}
 			}
 			if name == "" {
 				name = plain(block)

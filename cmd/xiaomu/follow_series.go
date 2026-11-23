@@ -38,12 +38,7 @@ func followingEpisodes(detail catalog.Detail) (count int, latest string) {
 }
 
 func (a *app) followingHistory(name string) (historyEntry, bool) {
-	for _, e := range a.history.entries {
-		if !e.isNAS() && titleKey(e.Name) == titleKey(name) {
-			return e, true
-		}
-	}
-	return historyEntry{}, false
+	return a.history.findByTitle(name)
 }
 
 func (a *app) followingHasNew(e favoriteEntry) bool {

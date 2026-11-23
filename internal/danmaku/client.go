@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/egoist/mygo/netproxy"
@@ -33,10 +34,14 @@ type Client struct {
 	HTTP   *http.Client
 }
 
-func newHTTPClient() *http.Client {
+var sharedTransport = sync.OnceValue(func() *http.Transport {
 	transport := netproxy.Transport().Clone()
 	transport.ResponseHeaderTimeout = 20 * time.Second
-	return &http.Client{Transport: transport}
+	return transport
+})
+
+func newHTTPClient() *http.Client {
+	return &http.Client{Transport: sharedTransport()}
 }
 
 // NewClient accepts a Dandanplay-compatible service root or its /api/v2 address,

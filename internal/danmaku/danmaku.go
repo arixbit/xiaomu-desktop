@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const maxComments = 50000
@@ -45,6 +47,7 @@ func Parse(data []byte) ([]Comment, error) {
 		if response.ErrorCode != 0 || response.Comments == nil {
 			return nil, fmt.Errorf("弹幕服务没有返回有效的弹幕列表")
 		}
+		comments = make([]Comment, 0, min(len(*response.Comments), maxComments))
 		for _, raw := range *response.Comments {
 			if comment, ok := parseComment(raw.Params, raw.Text, false); ok {
 				comments = append(comments, comment)
@@ -103,33 +106,110 @@ func Parse(data []byte) ([]Comment, error) {
 }
 
 func parseComment(params, text string, xmlFormat bool) (Comment, bool) {
-	fields := strings.Split(params, ",")
-	colorIndex := 2
-	if xmlFormat {
-		colorIndex = 3
-	}
-	if len(fields) <= colorIndex {
+	f0, rest, ok := strings.Cut(params, ",")
+	if !ok {
 		return Comment{}, false
 	}
-	seconds, err := strconv.ParseFloat(strings.TrimSpace(fields[0]), 64)
+	f1, rest, ok := strings.Cut(rest, ",")
+	if !ok {
+		return Comment{}, false
+	}
+	var colorField string
+	if xmlFormat {
+		_, rest, ok = strings.Cut(rest, ",")
+		if !ok {
+			return Comment{}, false
+		}
+		colorField, _, _ = strings.Cut(rest, ",")
+	} else {
+		colorField, _, _ = strings.Cut(rest, ",")
+	}
+	seconds, err := strconv.ParseFloat(strings.TrimSpace(f0), 64)
 	if err != nil || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < 0 || seconds > 24*60*60 {
 		return Comment{}, false
 	}
-	mode, err := strconv.Atoi(strings.TrimSpace(fields[1]))
+	mode, err := strconv.Atoi(strings.TrimSpace(f1))
 	if err != nil || mode != 1 && mode != 4 && mode != 5 {
 		return Comment{}, false
 	}
-	color, err := strconv.ParseUint(strings.TrimSpace(fields[colorIndex]), 10, 24)
+	color, err := strconv.ParseUint(strings.TrimSpace(colorField), 10, 24)
 	if err != nil {
 		return Comment{}, false
 	}
-	text = strings.Join(strings.Fields(text), " ")
-	runes := []rune(text)
-	if len(runes) > 200 {
-		text = string(runes[:200])
-	}
+	text = cleanCommentText(text)
 	if text == "" {
 		return Comment{}, false
 	}
 	return Comment{Time: time.Duration(seconds * float64(time.Second)), Mode: mode, Color: uint32(color), Text: text}, true
+}
+
+func cleanCommentText(text string) string {
+	if text == "" {
+		return ""
+	}
+	// Fast path: already normalized (no leading/trailing/repeated/non-space
+	// whitespace) and within the 200-rune cap avoids all allocations.
+	clean := true
+	runeCount := 0
+	prevSpace := true
+	for i := 0; i < len(text); {
+		b := text[i]
+		if b < utf8.RuneSelf {
+			if b == ' ' {
+				if prevSpace {
+					clean = false
+					break
+				}
+				prevSpace = true
+			} else if b == '\t' || b == '\n' || b == '\r' || b == '\v' || b == '\f' {
+				clean = false
+				break
+			} else {
+				prevSpace = false
+			}
+			i++
+		} else {
+			r, size := utf8.DecodeRuneInString(text[i:])
+			if unicode.IsSpace(r) {
+				clean = false
+				break
+			}
+			prevSpace = false
+			i += size
+		}
+		runeCount++
+		if runeCount > 200 {
+			clean = false
+			break
+		}
+	}
+	if clean && !prevSpace {
+		return text
+	}
+	var b strings.Builder
+	b.Grow(min(len(text), 200*3))
+	written := 0
+	inSpace := false
+	for _, r := range text {
+		if unicode.IsSpace(r) {
+			if written > 0 {
+				inSpace = true
+			}
+			continue
+		}
+		if inSpace {
+			if written >= 200 {
+				break
+			}
+			b.WriteByte(' ')
+			written++
+			inSpace = false
+		}
+		if written >= 200 {
+			break
+		}
+		b.WriteRune(r)
+		written++
+	}
+	return b.String()
 }

@@ -20,6 +20,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/fileurl"
@@ -730,6 +731,10 @@ func readModuleOverrides(dir string) (map[string]string, error) {
 	return modules, nil
 }
 
+var sharedHTTPClient = sync.OnceValue(func() *http.Client {
+	return &http.Client{Transport: netproxy.Transport(), Timeout: 20 * time.Second}
+})
+
 func httpFetch(ctx context.Context, req Request) (Result, error) {
 	if req.Method == "" {
 		req.Method = http.MethodGet
@@ -746,8 +751,7 @@ func httpFetch(ctx context.Context, req Request) (Result, error) {
 	for k, v := range req.Headers {
 		httpReq.Header.Set(k, v)
 	}
-	client := &http.Client{Transport: netproxy.Transport(), Timeout: 20 * time.Second}
-	resp, err := client.Do(httpReq)
+	resp, err := sharedHTTPClient().Do(httpReq)
 	if err != nil {
 		return Result{}, err
 	}

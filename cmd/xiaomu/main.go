@@ -87,10 +87,12 @@ type app struct {
 	playingDirect bool
 	// playingFile is set for a local file opened from the file manager; playingName
 	// is that file's name, shown in the header and Now Playing.
-	playingFile    bool
-	playingName    string
-	playingSource  string
-	playingEpisode string
+	playingFile       bool
+	playingName       string
+	playingSource     string
+	playingEpisode    string
+	playingSourceIdx  int
+	playingEpisodeIdx int
 	resumeAt       time.Duration
 	resumeIssued   bool
 	lastPosition   time.Duration

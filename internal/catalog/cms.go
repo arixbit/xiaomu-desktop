@@ -117,7 +117,7 @@ func (s *Session) cmsPage(ctx context.Context, category, query string, page int)
 	}
 	var out Page
 	if c.kind == config.KindJSON {
-		out, err = readPage(string(body), page, nil)
+		out, err = readPageBytes(body, page)
 	} else {
 		var doc cmsXMLResponse
 		doc, err = decodeCMSXML(body)
@@ -159,7 +159,7 @@ func (s *Session) cmsDetail(ctx context.Context, id string) (Detail, error) {
 	}
 	var out Detail
 	if c.kind == config.KindJSON {
-		out, err = readDetail(string(body))
+		out, err = readDetailBytes(body)
 	} else {
 		var doc cmsXMLResponse
 		doc, err = decodeCMSXML(body)
@@ -240,10 +240,17 @@ func (c *cmsSession) request(ctx context.Context, action string, params map[stri
 		return nil, requestURL, fmt.Errorf("CMS 请求 %s: HTTP %d (Content-Type %q)", requestURL, resp.StatusCode, contentType)
 	}
 	trimmed := bytes.TrimSpace(body)
-	if bytes.HasPrefix(bytes.ToLower(trimmed), []byte("<!doctype html")) || bytes.HasPrefix(bytes.ToLower(trimmed), []byte("<html")) {
+	if hasHTMLPrefix(trimmed) {
 		return nil, requestURL, fmt.Errorf("CMS 请求 %s: HTTP %d 返回 HTML (Content-Type %q)", requestURL, resp.StatusCode, contentType)
 	}
 	return body, requestURL, nil
+}
+
+func hasHTMLPrefix(b []byte) bool {
+	if len(b) >= len("<!doctype html") && bytes.EqualFold(b[:len("<!doctype html")], []byte("<!doctype html")) {
+		return true
+	}
+	return len(b) >= len("<html") && bytes.EqualFold(b[:len("<html")], []byte("<html"))
 }
 
 func absoluteCMSURL(base, ref string) string {

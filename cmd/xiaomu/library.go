@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
+	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
 	"github.com/arixbit/xiaomu-desktop/internal/douban"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
@@ -28,12 +29,26 @@ type titleGroup struct {
 	items []library.Item
 }
 
+// itemID identifies one video within one configured site without copying the
+// site's full Entry.Key() string for every video in the same page.
+type itemID struct {
+	entryKey string
+	videoID  catalog.ID
+}
+
 // libraryScan is one pass over the library: the home feed, or a search.
 // A scan owns its sessions; a generation rejects replies of an older pass.
 type libraryScan struct {
 	items            []library.Item
 	groups           []titleGroup
-	seen             map[string]bool
+	groupIndex       map[string]int
+	groupIndexLen    int
+	groupIndexHead   *library.Item
+	seen             map[itemID]struct{}
+	sortBuf          []library.Item
+	keysBuf          []string
+	keysOutBuf       []string
+	ranksBuf         []uint8
 	hot              map[string]bool // Douban hot titles, for feed ranking
 	more             []library.Target
 	query            string
@@ -129,12 +144,20 @@ func (a *app) startScan(s *libraryScan, query string, more bool) {
 			clear(s.items)
 			s.items = s.items[:0]
 			clear(s.seen)
+			clear(s.sortBuf)
+			s.sortBuf = s.sortBuf[:0]
+			clear(s.keysBuf)
+			s.keysBuf = s.keysBuf[:0]
+			clear(s.keysOutBuf)
+			s.keysOutBuf = s.keysOutBuf[:0]
+			s.ranksBuf = s.ranksBuf[:0]
 		} else {
 			s.items, s.seen = nil, nil
+			s.sortBuf, s.keysBuf, s.keysOutBuf, s.ranksBuf = nil, nil, nil, nil
 		}
-		s.groups = nil
+		s.groups, s.groupIndex, s.groupIndexLen, s.groupIndexHead = nil, nil, 0, nil
 		if s.seen == nil {
-			s.seen = make(map[string]bool)
+			s.seen = make(map[itemID]struct{})
 		}
 		s.selected = -1
 		s.hot = nil
@@ -235,14 +258,86 @@ func (a *app) applyLibraryEvents(s *libraryScan, events []library.Event) {
 		changed = changed || (event.Result != nil && event.Err == nil)
 	}
 	if changed {
-		sort.SliceStable(s.items, func(i, j int) bool {
-			return libraryItemRank(s.items[i], s.query, s.hot) < libraryItemRank(s.items[j], s.query, s.hot)
-		})
-		s.groups = groupTitles(s.items)
+		keys := a.rankLibraryItems(s)
+		s.groups, s.groupIndex = groupTitlesWithKeys(s.items, keys)
+		s.groupIndexLen = len(s.items)
+		if len(s.items) > 0 {
+			s.groupIndexHead = &s.items[0]
+		} else {
+			s.groupIndexHead = nil
+		}
+		// Release scratch string references while retaining slice capacity.
+		clear(s.keysBuf)
+		s.keysBuf = s.keysBuf[:0]
+		clear(s.keysOutBuf)
+		s.keysOutBuf = s.keysOutBuf[:0]
 		if s == &a.library.search {
 			a.autoOpenTitle()
 		}
 	}
+}
+
+// rankLibraryItems stably partitions s.items into the three ranking buckets
+// (0, 1, 2) in O(N) time and returns each ranked item's normalized titleKey
+// so groupTitlesWithKeys does not recompute it.
+func (a *app) rankLibraryItems(s *libraryScan) []string {
+	n := len(s.items)
+	if n == 0 {
+		return nil
+	}
+	if cap(s.keysBuf) < n {
+		s.keysBuf = make([]string, n)
+	} else {
+		s.keysBuf = s.keysBuf[:n]
+	}
+	if cap(s.ranksBuf) < n {
+		s.ranksBuf = make([]uint8, n)
+	} else {
+		s.ranksBuf = s.ranksBuf[:n]
+	}
+	queryKey := ""
+	if s.query != "" {
+		queryKey = titleKey(s.query)
+	}
+	var counts [3]int
+	ordered := true
+	var prevRank uint8
+	for i := range n {
+		key := titleKey(s.items[i].Video.Name)
+		s.keysBuf[i] = key
+		r := uint8(libraryItemRankWithKey(s.items[i], key, queryKey, s.hot))
+		s.ranksBuf[i] = r
+		counts[r]++
+		if r < prevRank {
+			ordered = false
+		}
+		prevRank = r
+	}
+	if ordered {
+		return s.keysBuf
+	}
+	if cap(s.sortBuf) < n {
+		s.sortBuf = make([]library.Item, n)
+	} else {
+		s.sortBuf = s.sortBuf[:n]
+	}
+	if cap(s.keysOutBuf) < n {
+		s.keysOutBuf = make([]string, n)
+	} else {
+		s.keysOutBuf = s.keysOutBuf[:n]
+	}
+	pos := [3]int{0, counts[0], counts[0] + counts[1]}
+	for i := range n {
+		b := s.ranksBuf[i]
+		dst := pos[b]
+		pos[b] = dst + 1
+		s.sortBuf[dst] = s.items[i]
+		s.keysOutBuf[dst] = s.keysBuf[i]
+	}
+	copy(s.items, s.sortBuf)
+	clear(s.sortBuf)
+	s.sortBuf = s.sortBuf[:0]
+	return s.keysOutBuf
 }
 
 func (a *app) appendLibraryEvent(s *libraryScan, event library.Event) {
@@ -284,17 +379,20 @@ func (a *app) appendLibraryEvent(s *libraryScan, event library.Event) {
 		}
 		return
 	}
+	if s.seen == nil {
+		s.seen = make(map[itemID]struct{})
+	}
+	entryKey := result.Target.Entry.Key()
 	for _, video := range result.Page.Videos {
-		item := library.Item{Entry: result.Target.Entry, Video: video}
 		if video.ID == "" {
 			continue
 		}
-		key := itemKey(item)
-		if s.seen[key] {
+		id := itemID{entryKey: entryKey, videoID: video.ID}
+		if _, dup := s.seen[id]; dup {
 			continue
 		}
-		s.seen[key] = true
-		s.items = append(s.items, item)
+		s.seen[id] = struct{}{}
+		s.items = append(s.items, library.Item{Entry: result.Target.Entry, Video: video})
 	}
 	if s.query != "" && result.Page.HasNext {
 		s.more = append(s.more, library.Target{Entry: result.Target.Entry, Page: result.Target.Page + 1})
@@ -308,18 +406,55 @@ func itemKey(item library.Item) string {
 // titleKey is what makes two sites' videos the same title: the name without
 // case, surrounding space or title marks.
 func titleKey(name string) string {
-	return strings.ToLower(strings.Trim(strings.TrimSpace(name), "《》"))
+	s := strings.Trim(strings.TrimSpace(name), "《》")
+	if isLowerNoAlloc(s) {
+		return s
+	}
+	return strings.ToLower(s)
+}
+
+// isLowerNoAlloc reports whether s is guaranteed unchanged by strings.ToLower.
+// CJK Unified Ideographs and CJK symbols have no case folding in Unicode, so
+// Chinese titles take the zero-allocation fast path instead of falling through
+// strings.ToLower's non-ASCII builder allocation.
+func isLowerNoAlloc(s string) bool {
+	for i := 0; i < len(s); {
+		b := s[i]
+		if b < utf8.RuneSelf {
+			if b >= 'A' && b <= 'Z' {
+				return false
+			}
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if !((r >= 0x4E00 && r <= 0x9FFF) || (r >= 0x3000 && r <= 0x303F)) {
+			return false
+		}
+		i += size
+	}
+	return true
 }
 
 // groupTitles merges videos of the same title, in the order they first show.
 // A video without a name stays on its own.
 func groupTitles(items []library.Item) []titleGroup {
+	groups, _ := groupTitlesWithKeys(items, nil)
+	return groups
+}
+
+func groupTitlesWithKeys(items []library.Item, precomputedKeys []string) ([]titleGroup, map[string]int) {
 	groups := make([]titleGroup, 0, len(items))
 	index := make(map[string]int, len(items))
 	counts := make([]int, 0, len(items))
 	membership := make([]int, len(items))
 	for n, item := range items {
-		key := titleKey(item.Video.Name)
+		var key string
+		if n < len(precomputedKeys) {
+			key = precomputedKeys[n]
+		} else {
+			key = titleKey(item.Video.Name)
+		}
 		if key == "" {
 			key = "\x00" + itemKey(item)
 		}
@@ -345,7 +480,7 @@ func groupTitles(items []library.Item) []titleGroup {
 		i := membership[n]
 		groups[i].items = append(groups[i].items, item)
 	}
-	return groups
+	return groups, index
 }
 
 // origin says where a title comes from: its site, or how many have it.
@@ -357,12 +492,20 @@ func (g titleGroup) origin() string {
 }
 
 func libraryItemRank(item library.Item, query string, hot map[string]bool) int {
+	queryKey := ""
+	if query != "" {
+		queryKey = titleKey(query)
+	}
+	return libraryItemRankWithKey(item, titleKey(item.Video.Name), queryKey, hot)
+}
+
+func libraryItemRankWithKey(item library.Item, name, query string, hot map[string]bool) int {
 	if query == "" {
 		// The feed is the sites' latest updates. A title the Douban lists
 		// already call hot comes first, so the feed surfaces what is
 		// popular now instead of whichever site answered first; CMS sites
 		// follow, then the rest.
-		if hot[titleKey(item.Video.Name)] {
+		if hot[name] {
 			return 0
 		}
 		if item.Entry.Site.Kind == config.KindJSON || item.Entry.Site.Kind == config.KindXML {
@@ -370,7 +513,6 @@ func libraryItemRank(item library.Item, query string, hot map[string]bool) int {
 		}
 		return 2
 	}
-	name, query := titleKey(item.Video.Name), titleKey(query)
 	if name == query {
 		return 0
 	}
