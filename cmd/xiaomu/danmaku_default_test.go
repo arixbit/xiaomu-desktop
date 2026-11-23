@@ -1,6 +1,9 @@
 package main
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 
@@ -59,5 +62,79 @@ func TestDanmakuDefaultServiceWithoutSourceTrack(t *testing.T) {
 	}
 	if _, ok := tt.Find("弹幕服务地址"); ok {
 		t.Fatal("ordinary playback requires a custom service address")
+	}
+}
+
+func TestDanmakuMatchingYearMoviePrefixAndSpaces(t *testing.T) {
+	// Leading 【platform】 prefix before plain episode numbers.
+	if got := danmakuNumber("【bilibili1】 01 开端"); got != 1 {
+		t.Fatalf("danmakuNumber with leading tag = %d, want 1", got)
+	}
+	// Multi-year disambiguation with detail year.
+	editions := []danmaku.Episode{
+		{ID: "anime-1", AnimeID: "a", Anime: "示例片 (2022) 【动漫】 from bilibili1", Name: "【B站】 第1集"},
+		{ID: "drama-1", AnimeID: "b", Anime: "示例片 (2023) 【电视剧】 from qq", Name: "【腾讯】 第1集"},
+	}
+	if _, ok := matchDanmakuEpisodeWithMeta(editions, "示例片", "", "第1集", 0, false, ""); ok {
+		t.Fatal("matched ambiguous editions without detail year")
+	}
+	got, ok := matchDanmakuEpisodeWithMeta(editions, "示例片", "2023", "第1集", 0, false, "")
+	if !ok || got.ID != "drama-1" {
+		t.Fatalf("detail year did not disambiguate: got=%+v ok=%v", got, ok)
+	}
+	// Space differences in title.
+	spaced := []danmaku.Episode{
+		{ID: "s2-1", AnimeID: "s2", Anime: "示例片 第二季 (2024) 【电视剧】 from qq", Name: "【腾讯】 第1集"},
+	}
+	got, ok = matchDanmakuEpisodeWithMeta(spaced, "示例片第二季", "2024", "第1集", 0, false, "")
+	if !ok || got.ID != "s2-1" {
+		t.Fatalf("title spacing prevented match: got=%+v ok=%v", got, ok)
+	}
+	// Single-episode movie matching against HD / 蓝光 labels.
+	movies := []danmaku.Episode{
+		{ID: "m-qq", AnimeID: "m:qq", Anime: "示例电影 (2023) 【电影】 from qq", Name: "【腾讯】 正片"},
+		{ID: "m-qiyi", AnimeID: "m:qiyi", Anime: "示例电影 (2023) 【电影】 from qiyi", Name: "【爱奇艺】 正片"},
+	}
+	got, ok = matchDanmakuEpisodeWithMeta(movies, "示例电影", "2023", "HD", 0, true, "")
+	if !ok || got.ID != "m-qq" {
+		t.Fatalf("single-episode movie did not match: got=%+v ok=%v", got, ok)
+	}
+}
+
+func TestDanmakuPreservesCandidatesAndShowsFailureStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/search/episodes":
+			io.WriteString(w, `{"animes":[{"animeId":"a","animeTitle":"示例片 (2024) 【电视剧】 from qq","episodes":[{"episodeId":"101","episodeTitle":"【腾讯】 第1集"}]},{"animeId":"b","animeTitle":"示例片 (2024) 【电视剧】 from qiyi","episodes":[{"episodeId":"102","episodeTitle":"【爱奇艺】 第1集"}]}]}`)
+		case "/api/v2/comment/101":
+			w.WriteHeader(http.StatusBadGateway)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	a := newPlayerTestApp(t)
+	a.preferences = defaultPlayerPreferences()
+	a.preferences.Danmaku.API = server.URL
+	a.startDanmaku()
+
+	tt := ui.NewTester(a.view, 1120, 760)
+	if err := tt.Click("弹幕"); err != nil {
+		t.Fatal(err)
+	}
+	if !tt.HasText("弹幕已关闭，开启上方开关即可自动匹配，也可在下方手动搜索") {
+		t.Fatalf("disabled dialog did not explain status: %v", tt.Texts())
+	}
+	if err := tt.Click("弹幕开关"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.danmaku.episodes) != 2 {
+		t.Fatalf("comment failure discarded fetched episodes: %+v", a.danmaku.episodes)
+	}
+	if got := a.danmakuButtonLabel(); got != "弹幕 · 失败" {
+		t.Fatalf("button label on comment failure = %q, want 弹幕 · 失败", got)
+	}
+	if _, ok := tt.Find("重试获取弹幕"); !ok {
+		t.Fatalf("retry button missing after failure: %v", tt.Texts())
 	}
 }

@@ -112,7 +112,7 @@ func (a *app) run(slot jobSlot, label string, work func(context.Context) (jobRes
 		j.cancel = nil
 	}
 	j.gen++
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), jobTimeout(slot))
 	j.cancel = cancel
 	gen := j.gen
 	a.jobsMu.Unlock()
@@ -167,6 +167,13 @@ func (a *app) run(slot jobSlot, label string, work func(context.Context) (jobRes
 	} else {
 		go execute()
 	}
+}
+
+func jobTimeout(slot jobSlot) time.Duration {
+	if slot == jobDanmaku {
+		return 90 * time.Second
+	}
+	return 30 * time.Second
 }
 
 func jobError(label string, err error) string {

@@ -164,3 +164,62 @@ func TestLiveFailureTriesAlternativesOnce(t *testing.T) {
 		t.Fatal("alternatives looped indefinitely")
 	}
 }
+
+func TestLiveChannelListsVirtualizeLargePlaylists(t *testing.T) {
+	const total = 2000
+	channels := make([]iptv.Channel, total)
+	for i := range channels {
+		channels[i] = iptv.Channel{
+			Name:    fmt.Sprintf("频道 %04d", i),
+			Group:   "全部测试",
+			Streams: []iptv.Stream{{URL: fmt.Sprintf("https://example.com/live/%d.m3u8", i)}},
+		}
+	}
+	a := &app{nav: []routeKind{routeLive}}
+	defer a.close()
+	a.live.sources = []iptv.Source{{Name: "测试直播"}}
+	a.live.selectedSource = 0
+	a.live.channels = channels
+	a.open = func(string) (*ui.VideoPlayer, error) {
+		return ui.NewVideoPlayer(&stillVideo{})
+	}
+	tt := ui.NewTester(a.view, 1120, 760)
+	if !tt.HasText("频道 0000") {
+		t.Fatalf("first live channel missing: %v", tt.Texts())
+	}
+	if tt.HasText("频道 1999") {
+		t.Fatal("live view built off-screen rows instead of virtualizing with ui.List")
+	}
+	if err := tt.Click("频道搜索"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("1999")
+	if !tt.HasText("频道 1999") || tt.HasText("频道 0000") {
+		t.Fatalf("search did not filter virtualized live list: %v", tt.Texts())
+	}
+	if err := tt.Click("播放 频道 1999"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.playingLive || a.live.playingChannel != 1999 {
+		t.Fatalf("clicking filtered channel did not start playback: playingLive=%v channel=%d", a.playingLive, a.live.playingChannel)
+	}
+	// Player panel also virtualizes the channel list while the header shows the current channel.
+	if !tt.HasText("直播 · 频道 1999") {
+		t.Fatalf("player header did not show current channel: %v", tt.Texts())
+	}
+	if _, ok := tt.Find("切换到 频道 0000"); !ok {
+		t.Fatalf("player channel panel did not render visible rows: %v", tt.Texts())
+	}
+	if _, ok := tt.Find("切换到 频道 1998"); ok {
+		t.Fatal("player channel panel built off-screen rows instead of virtualizing with ui.List")
+	}
+	if _, ok := tt.Find("切换到 频道 1999"); ok {
+		t.Fatal("player channel panel built tail row instead of virtualizing with ui.List")
+	}
+	if err := tt.Click("切换到 频道 0001"); err != nil {
+		t.Fatal(err)
+	}
+	if a.live.playingChannel != 1 {
+		t.Fatalf("clicking virtualized panel channel switched to %d", a.live.playingChannel)
+	}
+}

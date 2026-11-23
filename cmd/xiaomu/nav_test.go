@@ -146,3 +146,31 @@ func TestSearchShortcutRespectsDialog(t *testing.T) {
 		t.Fatal("Cmd+K stole focus from a dialog")
 	}
 }
+
+func TestSearchShortcutSelectsExistingQuery(t *testing.T) {
+	_, doc := suggestionTestServer(t)
+	a := newSuggestionTestApp(t, doc)
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.Key(ui.Cmd, ui.KeyK)
+	tt.Type("旧片名")
+	if a.browser.query != "旧片名" {
+		t.Fatalf("query=%q", a.browser.query)
+	}
+	// While already focused, Cmd+K selects the query so typing replaces it.
+	tt.Key(ui.Cmd, ui.KeyK)
+	tt.Type("新片名")
+	if a.browser.query != "新片名" {
+		t.Fatalf("Cmd+K while focused did not select existing query: query=%q", a.browser.query)
+	}
+	// Leave search, then press Cmd+K again: typing replaces the old query.
+	tt.Key(0, ui.KeyEscape)
+	tt.Key(0, ui.KeyEscape)
+	if tt.Focused("片名") {
+		t.Fatal("search stayed focused after Escape")
+	}
+	tt.Key(ui.Cmd, ui.KeyK)
+	tt.Type("替换片名")
+	if a.browser.query != "替换片名" {
+		t.Fatalf("Cmd+K after blur did not select existing query: query=%q", a.browser.query)
+	}
+}

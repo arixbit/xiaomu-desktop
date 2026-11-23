@@ -72,6 +72,7 @@ func danmakuDensityParams(density string) (maxRows int, minGap float32) {
 
 type danmakuState struct {
 	open, advanced          bool
+	failed, empty           bool
 	address, query, title   string
 	sourceURL               string
 	episodeQuery            string
@@ -93,7 +94,8 @@ func (a *app) cancelDanmakuJob() {
 func (a *app) stopDanmaku() {
 	a.cancelDanmakuJob()
 	s := &a.danmaku
-	s.open, s.advanced, s.message, s.sourceURL, s.offset = false, false, "", "", 0
+	s.open, s.advanced, s.failed, s.empty = false, false, false, false
+	s.message, s.sourceURL, s.offset = "", "", 0
 	s.episodes, s.selected, s.comments = nil, nil, nil
 	s.profile, s.profileDuration = nil, 0
 	s.screen.Reset(nil)
@@ -128,6 +130,7 @@ func (a *app) applyDanmakuEnabled() {
 	s := &a.danmaku
 	if !a.preferences.Danmaku.Enabled {
 		a.cancelDanmakuJob()
+		s.failed, s.empty = false, false
 		s.message = "弹幕已关闭"
 		return
 	}
@@ -168,23 +171,104 @@ func (a *app) loadCurrentDanmaku() {
 		return
 	}
 	address := s.sourceURL
+	query, episode, number, ok := a.danmakuSearchQuery()
+	year, name, index, singleEpisode := a.danmakuPlaybackMeta(episode)
+	preferred := s.preferredAnime
+	client, _ := a.danmakuClient()
+	s.failed, s.empty = false, false
 	s.message = "正在加载片源弹幕…"
 	a.run(jobDanmaku, "", func(ctx context.Context) (jobResult, error) {
-		comments, err := danmaku.Load(ctx, address)
-		if err != nil {
-			return jobResult{}, err
+		comments, sourceErr := danmaku.Load(ctx, address)
+		if sourceErr == nil && len(comments) > 0 {
+			return jobResult{apply: func() {
+				s.episodes, s.list = nil, ui.ListState{}
+				s.selected, s.comments = nil, comments
+				s.profile, s.profileDuration = nil, 0
+				s.failed, s.empty = false, false
+				a.refreshDanmakuTrack()
+				s.message = fmt.Sprintf("已加载 %d 条片源弹幕", len(comments))
+			}}, nil
+		}
+		// If the source-provided track failed or was empty, fall back to the built-in service.
+		if ok && client != nil && query != "" && ctx.Err() == nil {
+			episodes, searchErr := client.Search(ctx, query, episode)
+			if searchErr == nil {
+				if episode != "" {
+					episodes = slices.DeleteFunc(episodes, func(candidate danmaku.Episode) bool {
+						return danmakuNumber(candidate.Name) != number
+					})
+				}
+				selected, matched := matchDanmakuEpisodeWithMeta(episodes, query, year, name, index, singleEpisode, preferred)
+				var fallbackComments []danmaku.Comment
+				var commentErr error
+				if matched {
+					fallbackComments, commentErr = client.Comments(ctx, selected.ID)
+				}
+				if len(episodes) > 0 {
+					return jobResult{apply: func() {
+						s.episodes, s.list = episodes, ui.ListState{}
+						if commentErr != nil {
+							a.failDanmaku(commentErr)
+							return
+						}
+						if matched {
+							a.applyDanmaku(selected, fallbackComments)
+							return
+						}
+						s.failed, s.empty = false, false
+						s.message = "片源弹幕不可用，请选择对应的影片和分集"
+					}}, nil
+				}
+			}
+		}
+		if sourceErr != nil {
+			return jobResult{}, sourceErr
 		}
 		return jobResult{apply: func() {
 			s.episodes, s.list = nil, ui.ListState{}
-			s.selected, s.comments = nil, comments
+			s.selected, s.comments = nil, nil
 			s.profile, s.profileDuration = nil, 0
+			s.failed, s.empty = false, true
 			a.refreshDanmakuTrack()
-			s.message = fmt.Sprintf("已加载 %d 条片源弹幕", len(comments))
-			if len(comments) == 0 {
-				s.message = "这一集暂无弹幕"
-			}
+			s.message = "这一集暂无弹幕"
 		}}, nil
 	}, a.failDanmaku)
+}
+
+func (a *app) danmakuSearchQuery() (query, episode string, number int, ok bool) {
+	s := &a.danmaku
+	query = strings.TrimSpace(s.query)
+	if query == "" {
+		return "", "", 0, false
+	}
+	episode = strings.TrimSpace(s.episodeQuery)
+	if episode != "" {
+		var err error
+		number, err = strconv.Atoi(episode)
+		if err != nil || number <= 0 {
+			return query, "", 0, false
+		}
+		episode = strconv.Itoa(number)
+	}
+	return query, episode, number, true
+}
+
+func (a *app) danmakuPlaybackMeta(episode string) (year, name string, index int, singleEpisode bool) {
+	source, idx, ok := a.currentEpisode()
+	if !ok {
+		index = -1
+	} else {
+		index = idx
+		singleEpisode = len(a.title.detail.Sources[source].Episodes) == 1
+	}
+	if a.title != nil && a.title.detail != nil {
+		year = danmakuExtractYear(a.title.detail.Year)
+	}
+	name = a.playingEpisode
+	if episode != "" {
+		name = episode
+	}
+	return year, name, index, singleEpisode
 }
 
 func (a *app) danmakuClient() (*danmaku.Client, error) {
@@ -201,6 +285,7 @@ func (a *app) searchDanmaku(automatic bool) {
 	s := &a.danmaku
 	a.cancelDanmakuJob()
 	s.episodes, s.list = nil, ui.ListState{}
+	s.failed, s.empty = false, false
 	query := strings.TrimSpace(s.query)
 	if query == "" {
 		s.message = "请输入要查找弹幕的片名"
@@ -219,17 +304,12 @@ func (a *app) searchDanmaku(automatic bool) {
 	}
 	client, err := a.danmakuClient()
 	if err != nil {
+		s.failed = true
 		s.message = err.Error()
 		return
 	}
-	_, index, ok := a.currentEpisode()
-	if !ok {
-		index = -1
-	}
-	name, preferred := a.playingEpisode, s.preferredAnime
-	if episode != "" {
-		name = episode
-	}
+	year, name, index, singleEpisode := a.danmakuPlaybackMeta(episode)
+	preferred := s.preferredAnime
 	s.message = "正在匹配弹幕…"
 	a.run(jobDanmaku, "", func(ctx context.Context) (jobResult, error) {
 		episodes, err := client.Search(ctx, query, episode)
@@ -242,18 +322,22 @@ func (a *app) searchDanmaku(automatic bool) {
 				return danmakuNumber(candidate.Name) != number
 			})
 		}
-		selected, matched := matchDanmakuEpisode(episodes, query, name, index, preferred)
+		selected, matched := matchDanmakuEpisodeWithMeta(episodes, query, year, name, index, singleEpisode, preferred)
 		var comments []danmaku.Comment
+		var commentErr error
 		if automatic && matched {
-			comments, err = client.Comments(ctx, selected.ID)
-			if err != nil {
-				return jobResult{}, err
-			}
+			comments, commentErr = client.Comments(ctx, selected.ID)
 		}
 		return jobResult{apply: func() {
 			s.episodes, s.list = episodes, ui.ListState{}
+			if commentErr != nil {
+				a.failDanmaku(commentErr)
+				return
+			}
+			s.failed, s.empty = false, false
 			s.message = "请选择对应的影片和分集"
 			if len(episodes) == 0 {
+				s.empty = true
 				s.message = "没有找到弹幕，试试修改片名"
 				if episode != "" {
 					s.message = fmt.Sprintf("没有找到第 %d 集的弹幕，试试修改片名或集数", number)
@@ -269,9 +353,11 @@ func (a *app) searchDanmaku(automatic bool) {
 func (a *app) loadDanmakuEpisode(episode danmaku.Episode) {
 	client, err := a.danmakuClient()
 	if err != nil {
+		a.danmaku.failed = true
 		a.danmaku.message = err.Error()
 		return
 	}
+	a.danmaku.failed, a.danmaku.empty = false, false
 	a.danmaku.message = "正在加载弹幕…"
 	a.run(jobDanmaku, "", func(ctx context.Context) (jobResult, error) {
 		comments, err := client.Comments(ctx, episode.ID)
@@ -289,13 +375,18 @@ func (a *app) loadDanmakuEpisode(episode danmaku.Episode) {
 }
 
 func (a *app) failDanmaku(err error) {
+	s := &a.danmaku
+	s.empty = false
 	switch {
 	case errors.Is(err, context.Canceled):
-		a.danmaku.message = "已取消弹幕请求"
+		s.failed = false
+		s.message = "已取消弹幕请求"
 	case errors.Is(err, context.DeadlineExceeded):
-		a.danmaku.message = "弹幕请求超时，请重试或更换弹幕服务"
+		s.failed = true
+		s.message = "弹幕请求超时，请重试或更换弹幕服务"
 	default:
-		a.danmaku.message = "获取弹幕失败：" + err.Error()
+		s.failed = true
+		s.message = "获取弹幕失败：" + err.Error()
 	}
 }
 
@@ -303,6 +394,7 @@ func (a *app) applyDanmaku(episode danmaku.Episode, comments []danmaku.Comment) 
 	s := &a.danmaku
 	s.selected, s.comments, s.preferredAnime = &episode, comments, episode.AnimeID
 	s.profile, s.profileDuration = nil, 0
+	s.failed, s.empty = false, len(comments) == 0
 	a.refreshDanmakuTrack()
 	s.message = fmt.Sprintf("已加载 %d 条弹幕 · %s · %s", len(comments), episode.Anime, episode.Name)
 	if len(comments) == 0 {
@@ -319,8 +411,12 @@ func (a *app) danmakuButtonLabel() string {
 		return "弹幕 · 加载中"
 	case len(a.danmaku.comments) > 0:
 		return "弹幕 · 开"
+	case a.danmaku.failed:
+		return "弹幕 · 失败"
 	case len(a.danmaku.episodes) > 0 && a.danmaku.selected == nil:
 		return "弹幕 · 待选"
+	case a.danmaku.empty:
+		return "弹幕 · 无弹幕"
 	default:
 		return "弹幕"
 	}
@@ -400,6 +496,7 @@ func (a *app) danmakuDialog(c *ui.Context) {
 								a.savePreferences()
 							}
 						})
+						a.danmakuStatusRow(c)
 						ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 							ui.Text(c, "字号").Width(64)
 							if ui.Slider(c, &a.preferences.Danmaku.Size, 14, 36).Label("弹幕字号").Grow(1).Changed() {
@@ -432,9 +529,6 @@ func (a *app) danmakuDialog(c *ui.Context) {
 					})
 					danmakuSection(c, func() {
 						a.danmakuSearchControls(c)
-						if s.message != "" {
-							ui.Text(c, s.message).FontSize(12).TextColor(textMuted)
-						}
 						a.danmakuEpisodeResults(c, height)
 						if glassButton(c, "服务设置（可选）").FillWidth().Clicked() {
 							s.advanced = !s.advanced
@@ -453,6 +547,33 @@ func (a *app) danmakuDialog(c *ui.Context) {
 				}
 			})
 		})
+	})
+}
+
+func (a *app) danmakuStatusRow(c *ui.Context) {
+	s := &a.danmaku
+	status := s.message
+	color := textMuted
+	switch {
+	case s.failed:
+		color = ui.RGB(255, 166, 130)
+	case len(s.comments) > 0 && a.preferences.Danmaku.Enabled:
+		color = ui.RGB(142, 230, 178)
+	case status == "" && !a.preferences.Danmaku.Enabled:
+		status = "弹幕已关闭，开启上方开关即可自动匹配，也可在下方手动搜索"
+	case status == "" && a.running(jobDanmaku):
+		status = "正在匹配弹幕…"
+	}
+	if status == "" {
+		return
+	}
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, status).FontSize(12).TextColor(color).Grow(1)
+		if s.failed && !a.running(jobDanmaku) {
+			if glassButton(c, "重试").Label("重试获取弹幕").Padding(4, 10).Clicked() {
+				a.loadCurrentDanmaku()
+			}
+		}
 	})
 }
 
@@ -595,17 +716,19 @@ func (a *app) danmakuFilterControls(c *ui.Context) {
 
 func (a *app) manualDanmaku(c *ui.Context) {
 	s := &a.danmaku
-	ui.Text(c, "留空使用内置公共弹幕服务，也可填写兼容弹弹play的服务地址。").FontSize(12)
-	ui.TextInput(c, &s.address).Label("弹幕服务地址").Placeholder("留空使用内置公共服务").FillWidth()
+	ui.Text(c, "留空使用内置国内直连弹幕，也可填写兼容弹弹play的服务地址。").FontSize(12)
+	ui.TextInput(c, &s.address).Label("弹幕服务地址").Placeholder("留空使用内置国内直连服务").FillWidth()
 	if primaryButton(c, "保存并匹配").Clicked() {
 		address := strings.TrimSpace(s.address)
 		_, err := danmaku.NewClient(address)
 		if address != "" && err != nil {
+			s.failed, s.empty = true, false
 			s.message = err.Error()
 		} else {
 			a.cancelDanmakuJob()
 			s.episodes, s.selected, s.comments = nil, nil, nil
 			s.profile, s.profileDuration = nil, 0
+			s.failed, s.empty = false, false
 			s.screen.Reset(nil)
 			a.preferences.Danmaku.API = address
 			a.preferences.Danmaku.Enabled = true
@@ -626,6 +749,7 @@ func (a *app) danmakuSearchControls(c *ui.Context) {
 		if titleChanged || episodeChanged {
 			a.cancelDanmakuJob()
 			s.episodes, s.message = nil, ""
+			s.failed, s.empty = false, false
 			if titleChanged {
 				s.preferredAnime = ""
 			}
@@ -754,7 +878,9 @@ func (a *app) danmakuOverlay(c *ui.Context, player *ui.VideoPlayer, avoidControl
 var danmakuEpisodeNumber = regexp.MustCompile(`(?i)^(?:第\s*|ep(?:isode)?\s*|e\s*)?0*([0-9]+)(?:\s*[集话話期]|\s*[:：._-]|\s|$)`)
 var danmakuNamedEpisode = regexp.MustCompile(`第\s*0*([0-9]+)\s*[集话話期]`)
 var danmakuTaggedEpisode = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])(?:s[0-9]+[\s._-]*)?(?:ep(?:isode)?[\s._-]*|e\s*)0*([0-9]+)(?:[^a-z0-9]|$)`)
-var danmakuYearSuffix = regexp.MustCompile(`\s*[（(][0-9]{4}[)）]\s*$`)
+var danmakuLeadingTag = regexp.MustCompile(`^(?:\s*【[^】]+】\s*)+`)
+var danmakuYearSuffix = regexp.MustCompile(`\s*[（(]([0-9]{4})[)）]\s*$`)
+var danmakuYearPattern = regexp.MustCompile(`\b(19[0-9]{2}|20[0-9]{2})\b`)
 var danmakuProviderSuffix = regexp.MustCompile(`(?i)\s*【[^】]+】\s*from\s+[a-z0-9_-]+\s*$`)
 
 func danmakuNumber(name string) int {
@@ -763,7 +889,8 @@ func danmakuNumber(name string) int {
 		parts = danmakuTaggedEpisode.FindStringSubmatch(name)
 	}
 	if len(parts) < 2 {
-		parts = danmakuEpisodeNumber.FindStringSubmatch(strings.TrimSpace(name))
+		stripped := strings.TrimSpace(danmakuLeadingTag.ReplaceAllString(name, ""))
+		parts = danmakuEpisodeNumber.FindStringSubmatch(stripped)
 	}
 	if len(parts) < 2 {
 		return 0
@@ -772,39 +899,103 @@ func danmakuNumber(name string) int {
 	return number
 }
 
+func danmakuTitleKey(name string) string {
+	return strings.Join(strings.Fields(titleKey(name)), "")
+}
+
+func danmakuExtractYear(raw string) string {
+	if m := danmakuYearSuffix.FindStringSubmatch(raw); len(m) == 2 {
+		return m[1]
+	}
+	if m := danmakuYearPattern.FindStringSubmatch(raw); len(m) == 2 {
+		return m[1]
+	}
+	return ""
+}
+
+func isFeatureEpisodeName(candidateName, title string) bool {
+	stripped := strings.TrimSpace(danmakuLeadingTag.ReplaceAllString(candidateName, ""))
+	if stripped == "" {
+		return false
+	}
+	if strings.Contains(stripped, "正片") {
+		return true
+	}
+	base := danmakuTitleKey(danmakuYearSuffix.ReplaceAllString(stripped, ""))
+	return base != "" && base == danmakuTitleKey(danmakuYearSuffix.ReplaceAllString(title, ""))
+}
+
 // A title and episode must match before automatic loading. When a compatible
 // service lists the same edition on multiple platforms, use its first result.
 // A manual selection remembers its series ID for subsequent episodes.
 func matchDanmakuEpisode(episodes []danmaku.Episode, title, name string, index int, preferred string) (danmaku.Episode, bool) {
-	key := titleKey(danmakuYearSuffix.ReplaceAllString(title, ""))
+	return matchDanmakuEpisodeWithMeta(episodes, title, "", name, index, false, preferred)
+}
+
+func matchDanmakuEpisodeWithMeta(episodes []danmaku.Episode, title, detailYear, name string, index int, singleEpisode bool, preferred string) (danmaku.Episode, bool) {
+	key := danmakuTitleKey(danmakuYearSuffix.ReplaceAllString(title, ""))
 	number := danmakuNumber(name)
-	var match danmaku.Episode
-	var matchSeries string
-	count := 0
+	type matchedCandidate struct {
+		episode danmaku.Episode
+		series  string
+		year    string
+	}
+	var matches []matchedCandidate
 	for _, episode := range episodes {
 		series := danmakuProviderSuffix.ReplaceAllString(episode.Anime, "")
 		if preferred != "" {
 			if episode.AnimeID != preferred {
 				continue
 			}
-		} else if titleKey(danmakuYearSuffix.ReplaceAllString(series, "")) != key {
+		} else if danmakuTitleKey(danmakuYearSuffix.ReplaceAllString(series, "")) != key {
 			continue
 		}
 		candidateNumber := danmakuNumber(episode.Name)
 		same := strings.TrimSpace(episode.Name) == strings.TrimSpace(name)
 		if number > 0 {
 			same = candidateNumber == number
-		} else if !same && index >= 0 && candidateNumber > 0 {
-			same = candidateNumber == index+1
-		}
-		if same {
-			if count == 1 && preferred == "" && episode.Anime != match.Anime && titleKey(series) == matchSeries &&
-				danmakuProviderSuffix.MatchString(episode.Anime) && danmakuProviderSuffix.MatchString(match.Anime) {
-				continue
+		} else if !same {
+			if singleEpisode && (candidateNumber == 1 || isFeatureEpisodeName(episode.Name, title)) {
+				same = true
+			} else if index >= 0 && candidateNumber > 0 {
+				same = candidateNumber == index+1
 			}
-			match, matchSeries = episode, titleKey(series)
-			count++
+		}
+		if !same {
+			continue
+		}
+		seriesKey := danmakuTitleKey(series)
+		duplicatePlatform := false
+		if preferred == "" && danmakuProviderSuffix.MatchString(episode.Anime) {
+			for _, prev := range matches {
+				if prev.series == seriesKey && prev.episode.Anime != episode.Anime && danmakuProviderSuffix.MatchString(prev.episode.Anime) {
+					duplicatePlatform = true
+					break
+				}
+			}
+		}
+		if duplicatePlatform {
+			continue
+		}
+		matches = append(matches, matchedCandidate{
+			episode: episode,
+			series:  seriesKey,
+			year:    danmakuExtractYear(series),
+		})
+	}
+	if len(matches) == 1 {
+		return matches[0].episode, true
+	}
+	if len(matches) > 1 && preferred == "" && detailYear != "" {
+		var narrowed []matchedCandidate
+		for _, m := range matches {
+			if m.year == detailYear {
+				narrowed = append(narrowed, m)
+			}
+		}
+		if len(narrowed) == 1 {
+			return narrowed[0].episode, true
 		}
 	}
-	return match, count == 1
+	return danmaku.Episode{}, false
 }

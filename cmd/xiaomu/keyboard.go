@@ -11,6 +11,7 @@ import (
 func (a *app) handleKeyboard(c *ui.Context) {
 	if a.player == nil && a.library.root != nil && c.Shortcut(ui.Cmd, ui.KeyK) && !c.ShortcutRepeated() {
 		a.searchFocused = true
+		a.searchFocus.SelectAll(c)
 		return
 	}
 	if c.FocusTakesText() {

@@ -82,7 +82,7 @@ func TestClientSearchEpisodeParameter(t *testing.T) {
 func TestClientUsesPublicDefault(t *testing.T) {
 	for _, address := range []string{"", " \t"} {
 		client, err := NewClient(address)
-		if err != nil || client.base.String() != DefaultAPI+"/api/v2" {
+		if err != nil || client.direct == nil || client.base != nil {
 			t.Fatalf("default client = %+v, err=%v", client, err)
 		}
 	}

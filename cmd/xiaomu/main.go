@@ -64,6 +64,7 @@ type app struct {
 	favorites       favoriteStore
 	searchHistory   searchHistoryStore
 	searchFocused   bool
+	searchFocus     ui.Handle
 	latency         latencyStore
 	speedTest       sourceSpeedTest
 	sourceMemory    sourceMemoryStore

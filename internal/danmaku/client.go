@@ -16,11 +16,8 @@ import (
 
 const maxResponseBytes = 16 << 20
 
-// DefaultAPI is the public deployment linked by the open source danmu_api_x
-// project: https://github.com/Bear-biscuit/danmu_api_x. It needs no account or key.
-const DefaultAPI = "https://danmuapi-gamma-two.vercel.app"
-
-// Episode is a selectable search result from a Dandanplay-compatible service.
+// Episode is a selectable search result from the built-in direct provider or a
+// Dandanplay-compatible service.
 type Episode struct {
 	ID      string
 	AnimeID string
@@ -28,18 +25,27 @@ type Episode struct {
 	Name    string
 }
 
-// Client uses the built-in public service unless the user supplies an address.
+// Client fetches danmaku directly from domestic public video APIs by default,
+// or from a user-supplied Dandanplay-compatible service when an address is set.
 type Client struct {
-	base *url.URL
-	HTTP *http.Client
+	base   *url.URL
+	direct *directProvider
+	HTTP   *http.Client
 }
 
-// NewClient accepts a service root or its /api/v2 address, including a path prefix.
-// An empty address selects DefaultAPI.
+func newHTTPClient() *http.Client {
+	transport := netproxy.Transport().Clone()
+	transport.ResponseHeaderTimeout = 20 * time.Second
+	return &http.Client{Transport: transport}
+}
+
+// NewClient accepts a Dandanplay-compatible service root or its /api/v2 address,
+// including a path prefix. An empty address selects the built-in direct provider.
 func NewClient(address string) (*Client, error) {
+	httpClient := newHTTPClient()
 	address = strings.TrimSpace(address)
 	if address == "" {
-		address = DefaultAPI
+		return &Client{direct: newDirectProvider(httpClient), HTTP: httpClient}, nil
 	}
 	u, err := url.Parse(address)
 	if err != nil || u == nil || u.Hostname() == "" || u.User != nil || u.Fragment != "" || u.Scheme != "http" && u.Scheme != "https" {
@@ -49,12 +55,15 @@ func NewClient(address string) (*Client, error) {
 	if !strings.HasSuffix(u.Path, "/api/v2") {
 		u = u.JoinPath("api", "v2")
 	}
-	return &Client{base: u, HTTP: &http.Client{Transport: netproxy.Transport(), Timeout: 20 * time.Second}}, nil
+	return &Client{base: u, HTTP: httpClient}, nil
 }
 
 // Search finds episodes by title and an optional episode number. IDs may be
 // numbers or strings across services.
 func (c *Client) Search(ctx context.Context, title, episode string) ([]Episode, error) {
+	if c.direct != nil {
+		return c.direct.Search(ctx, title, episode)
+	}
 	u := c.base.JoinPath("search", "episodes")
 	query := u.Query()
 	query.Set("anime", strings.TrimSpace(title))
@@ -107,7 +116,7 @@ func Load(ctx context.Context, address string) ([]Comment, error) {
 	if err != nil || u.Hostname() == "" || u.User != nil || u.Fragment != "" || u.Scheme != "http" && u.Scheme != "https" {
 		return nil, fmt.Errorf("片源返回的弹幕地址无效")
 	}
-	client := &Client{HTTP: &http.Client{Transport: netproxy.Transport(), Timeout: 20 * time.Second}}
+	client := &Client{HTTP: newHTTPClient()}
 	data, err := client.get(ctx, u)
 	if err != nil {
 		return nil, err
@@ -117,6 +126,9 @@ func Load(ctx context.Context, address string) ([]Comment, error) {
 
 // Comments downloads all timed comments for an episode.
 func (c *Client) Comments(ctx context.Context, id string) ([]Comment, error) {
+	if c.direct != nil {
+		return c.direct.Comments(ctx, id)
+	}
 	if !validID(id) {
 		return nil, fmt.Errorf("弹幕分集 ID 无效")
 	}

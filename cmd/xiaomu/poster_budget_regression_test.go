@@ -80,8 +80,16 @@ func TestFixPosterBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	w, h := ui.ImageSize(img)
-	if w != 2048 || h != 2048 {
-		t.Fatalf("quality changed: %vx%v", w, h)
+	if w != posterMaxSide || h != posterMaxSide {
+		t.Fatalf("large poster size=%vx%v want=%dx%d", w, h, posterMaxSide, posterMaxSide)
+	}
+	smallImg, err := fetchPoster(context.Background(), srv.URL+"/small")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sw, sh := ui.ImageSize(smallImg)
+	if sw != 512 || sh != 512 {
+		t.Fatalf("small poster was resized: %vx%v", sw, sh)
 	}
 	if _, err := fetchPoster(context.Background(), srv.URL+"/oversize"); err == nil {
 		t.Error("over-budget dimensions decoded")

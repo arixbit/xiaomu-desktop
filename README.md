@@ -37,7 +37,7 @@ macOS 13+ · Apple Silicon / Intel · Windows 10/11 · x64 / ARM64 · [下载最
 
 ## 下载与安装
 
-v0.9.0 将底层 MyGo 升级至 v0.10.0，包含点播弹幕、播放中换源、新版提示、追剧与系统集成，本版暂不包含内网盘（SMB/NAS）功能。macOS 提供通用 DMG 和 ZIP，Windows 提供 x64 和 ARM64 安装包。下载页附有 `SHA256SUMS` 校验文件。[最新版下载](https://github.com/arixbit/xiaomu-desktop/releases/latest) · [v0.9.0 版本说明](docs/releases/v0.9.0.md)
+v0.9.1 内置弹幕改为国内直连（不开代理即用）并修复状态提示、超时与匹配问题，同时基于 MyGo v0.10.0 优化海报缩略解码内存、直播长列表虚拟化与 `⌘K` / `Ctrl+K` 搜索全选体验，包含播放中换源、新版提示、追剧与系统集成。macOS 提供通用 DMG 和 ZIP，Windows 提供 x64 和 ARM64 安装包。下载页附有 `SHA256SUMS` 校验文件。[最新版下载](https://github.com/arixbit/xiaomu-desktop/releases/latest) · [v0.9.1 版本说明](docs/releases/v0.9.1.md)
 
 ### macOS
 
@@ -46,7 +46,7 @@ v0.9.0 将底层 MyGo 升级至 v0.10.0，包含点播弹幕、播放中换源�
 
 ### Windows
 
-在 GitHub Releases 下载 `xiaomu-setup-0.9.0-amd64.exe`，ARM64 设备使用 `xiaomu-setup-0.9.0-arm64.exe`。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
+在 GitHub Releases 下载 `xiaomu-setup-0.9.1-amd64.exe`，ARM64 设备使用 `xiaomu-setup-0.9.1-arm64.exe`。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
 
 打开小幕，在首页导入自己的配置。之后可以在侧边栏“片源”页更换配置，或在“直播”页导入自己的频道列表。
 
@@ -55,6 +55,8 @@ v0.9.0 将底层 MyGo 升级至 v0.10.0，包含点播弹幕、播放中换源�
 小幕只是播放器。它不提供、不收录、不分发任何影视内容。配置和规则由使用者自己提供，使用后果也由使用者自己承担。
 
 ## 功能
+
+v0.9.1 优化与修复：弹幕改为内置国内直连（不开代理即用），补齐按钮/弹窗状态反馈、失败重试、年份/电影匹配及片源弹幕失效回退；海报改用 MyGo v0.10.0 缩略解码降低内存占用并支持更高分辨率原图；直播页与播放页频道列表改为虚拟化列表以流畅承载上千频道；按 `⌘K` / `Ctrl+K` 聚焦搜索框时自动全选已有关键词。
 
 v0.9.0 更新：底层 MyGo 升级至 v0.10.0，带来原生界面、音视频播放及 GPU 内存管理改进；本版移除“内网盘（SMB/NAS）”功能及依赖，并兼容忽略旧历史中的内网盘记录。
 

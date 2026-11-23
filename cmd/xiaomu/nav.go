@@ -284,7 +284,7 @@ func (a *app) librarySearch(c *ui.Context) ui.Element {
 	return ui.Box(c).Key("library-search").Height(40).Children(func() {
 		if ui.Autocomplete(c, &a.browser.query, a.searchSuggestions()).Label("片名").Placeholder("搜索整个片库").
 			Fill().Padding(0, 58, 0, 40).FontSize(16).Radius(20).Material(glassControl).
-			FocusBind(&a.searchFocused, true).Submitted() {
+			FocusBind(&a.searchFocused, true).Bind(&a.searchFocus).Submitted() {
 			a.searchLibrary()
 		}
 		ui.Icon(c, librarySearchIcon).Size(18, 18).Absolute().Left(14).Top(11).TextColor(textMuted).PassThrough()
