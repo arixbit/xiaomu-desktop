@@ -310,15 +310,27 @@ func (a *app) applyDanmaku(episode danmaku.Episode, comments []danmaku.Comment) 
 	}
 }
 
+func (a *app) danmakuButtonLabel() string {
+	if !a.preferences.Danmaku.Enabled {
+		return "弹幕"
+	}
+	switch {
+	case a.running(jobDanmaku):
+		return "弹幕 · 加载中"
+	case len(a.danmaku.comments) > 0:
+		return "弹幕 · 开"
+	case len(a.danmaku.episodes) > 0 && a.danmaku.selected == nil:
+		return "弹幕 · 待选"
+	default:
+		return "弹幕"
+	}
+}
+
 func (a *app) danmakuButton(c *ui.Context) {
 	if !a.hasEpisodes() {
 		return
 	}
-	label := "弹幕"
-	if a.preferences.Danmaku.Enabled && len(a.danmaku.comments) > 0 {
-		label = "弹幕 · 开"
-	}
-	if ui.Button(c, label).Label("弹幕").Radius(16).Material(glass.Glass{Style: glass.Clear, Interactive: true}).TextColor(playerText).Clicked() {
+	if ui.Button(c, a.danmakuButtonLabel()).Label("弹幕").Radius(16).Material(glass.Glass{Style: glass.Clear, Interactive: true}).TextColor(playerText).Clicked() {
 		a.ensurePreferences()
 		s := &a.danmaku
 		s.open, s.address = true, a.preferences.Danmaku.API
@@ -607,9 +619,10 @@ func (a *app) manualDanmaku(c *ui.Context) {
 func (a *app) danmakuSearchControls(c *ui.Context) {
 	s := &a.danmaku
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		titleChanged := ui.TextInput(c, &s.query).Label("弹幕片名").Grow(1).Changed()
+		titleInput := ui.TextInput(c, &s.query).Label("弹幕片名").Grow(1)
 		ui.Text(c, "集数").FontSize(13)
-		episodeChanged := ui.TextInput(c, &s.episodeQuery).Label("弹幕集数").Placeholder("可留空").Width(80).Changed()
+		episodeInput := ui.TextInput(c, &s.episodeQuery).Label("弹幕集数").Placeholder("可留空").Width(80)
+		titleChanged, episodeChanged := titleInput.Changed(), episodeInput.Changed()
 		if titleChanged || episodeChanged {
 			a.cancelDanmakuJob()
 			s.episodes, s.message = nil, ""
@@ -617,7 +630,11 @@ func (a *app) danmakuSearchControls(c *ui.Context) {
 				s.preferredAnime = ""
 			}
 		}
-		if glassButton(c, "搜索弹幕").Disabled(a.running(jobDanmaku)).Clicked() {
+		search := glassButton(c, "搜索弹幕").Disabled(a.running(jobDanmaku)).Clicked()
+		if !a.running(jobDanmaku) && (titleInput.Submitted() || episodeInput.Submitted()) {
+			search = true
+		}
+		if search {
 			a.searchDanmaku(false)
 		}
 	})

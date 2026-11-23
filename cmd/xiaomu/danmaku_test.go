@@ -597,3 +597,60 @@ func TestDanmakuFiltersDensityAndHighlightCurve(t *testing.T) {
 		t.Fatal("highlight curve stayed visible while danmaku is disabled")
 	}
 }
+
+func TestDanmakuEnterSubmitsSearchAndButtonShowsStatus(t *testing.T) {
+	a := newPlayerTestApp(t)
+	a.preferences = defaultPlayerPreferences()
+	var calls atomic.Int32
+	server := danmakuTestServer(t, &calls)
+	a.preferences.Danmaku.API = server.URL
+	a.startDanmaku()
+	tt := ui.NewTester(a.view, 1120, 760)
+	if a.danmakuButtonLabel() != "弹幕" {
+		t.Fatalf("disabled label = %q", a.danmakuButtonLabel())
+	}
+	if err := tt.Click("弹幕"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("弹幕集数"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Command("selectAll")
+	tt.Type("2")
+	tt.Key(0, ui.KeyEnter)
+	if calls.Load() != 1 || len(a.danmaku.episodes) != 1 || a.danmaku.episodes[0].ID != "102" {
+		t.Fatalf("Enter in episode field did not trigger search: calls=%d episodes=%+v", calls.Load(), a.danmaku.episodes)
+	}
+	a.preferences.Danmaku.Enabled = true
+	if got := a.danmakuButtonLabel(); got != "弹幕 · 待选" {
+		t.Fatalf("ambiguous/pending label = %q, want 弹幕 · 待选", got)
+	}
+	if err := tt.Click("示例片 · 第2话 示例"); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.danmakuButtonLabel(); got != "弹幕 · 开" {
+		t.Fatalf("loaded label = %q, want 弹幕 · 开", got)
+	}
+	// Verify loading state label while an in-flight request is active.
+	started, release := make(chan struct{}), make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-started:
+		default:
+			close(started)
+		}
+		<-release
+		io.WriteString(w, `{"animes":[]}`)
+	}))
+	t.Cleanup(slow.Close)
+	a.preferences.Danmaku.API = slow.URL
+	updates := make(chan func(), 1)
+	a.dispatch = func(update func()) { updates <- update }
+	a.searchDanmaku(true)
+	<-started
+	if got := a.danmakuButtonLabel(); got != "弹幕 · 加载中" {
+		t.Fatalf("loading label = %q, want 弹幕 · 加载中", got)
+	}
+	close(release)
+	(<-updates)()
+}
