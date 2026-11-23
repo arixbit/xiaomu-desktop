@@ -37,7 +37,7 @@ macOS 13+ · Apple Silicon / Intel · Windows 10/11 · x64 / ARM64 · [下载最
 
 ## 下载与安装
 
-v0.8.5 支持在播放页直接换源并接回当前集的进度。macOS 提供通用 DMG 和 ZIP，Windows 提供 x64 和 ARM64 安装包。下载页附有 `SHA256SUMS` 校验文件。[最新版下载](https://github.com/arixbit/xiaomu-desktop/releases/latest) · [v0.8.5 版本说明](docs/releases/v0.8.5.md)
+v0.8.6 在侧边栏左下角增加新版提示，后台发现新版后显示“有新版本”和提示圆点。macOS 提供通用 DMG 和 ZIP，Windows 提供 x64 和 ARM64 安装包。下载页附有 `SHA256SUMS` 校验文件。[最新版下载](https://github.com/arixbit/xiaomu-desktop/releases/latest) · [v0.8.6 版本说明](docs/releases/v0.8.6.md)
 
 ### macOS
 
@@ -46,7 +46,7 @@ v0.8.5 支持在播放页直接换源并接回当前集的进度。macOS 提供�
 
 ### Windows
 
-在 GitHub Releases 下载 `xiaomu-setup-0.8.5-amd64.exe`，ARM64 设备使用 `xiaomu-setup-0.8.5-arm64.exe`。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
+在 GitHub Releases 下载 `xiaomu-setup-0.8.6-amd64.exe`，ARM64 设备使用 `xiaomu-setup-0.8.6-arm64.exe`。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
 
 打开小幕，在首页导入自己的配置。之后可以在侧边栏“片源”页更换配置，或在“直播”页导入自己的频道列表。
 
@@ -55,6 +55,8 @@ v0.8.5 支持在播放页直接换源并接回当前集的进度。macOS 提供�
 小幕只是播放器。它不提供、不收录、不分发任何影视内容。配置和规则由使用者自己提供，使用后果也由使用者自己承担。
 
 ## 功能
+
+v0.8.6 更新：后台检测到新版时，侧边栏左下角持续显示“有新版本”和提示圆点，点击可查看更新说明并安装。
 
 v0.8.3 优化：取消搜索及时停止脚本计算；限制后台任务和海报的总资源占用；合并搜索结果更新，减少万条结果时的界面停顿；切换配置时停止旧测速。原生界面、正常海报画质及完整搜索功能保持。
 
@@ -148,6 +150,8 @@ go tool mygo build -platform darwin/universal
 ```
 
 对外发布使用 `sh scripts/build-release.sh`，它要求签名密钥并生成在线更新所需文件。密钥保管、发布步骤和更新附件见 [发布维护说明](docs/releasing.md)。开发模式不会自动检查更新。
+
+正式版默认在后台检查更新。发现新版后，侧边栏左下角会显示“有新版本”和提示圆点，悬停可查看版本号，点击进入更新窗口。选择“稍后提醒”后提示保留，选择“跳过此版本”后隐藏该版本的提示。
 
 App 图标素材在 `xiaomu-icon/`。macOS 正式包使用其中的 `macos/AppIcon.icns`；开发运行使用 `resources/icon.png`，与图标集中已留边的 1024px 默认浅色版保持一致。深色及 Icon Composer 素材仅作设计源文件保留，当前不会随系统外观自动切换图标。
 
