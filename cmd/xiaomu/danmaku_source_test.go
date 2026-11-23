@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
+	"github.com/arixbit/xiaomu-desktop/internal/danmaku"
 	"github.com/arixbit/xiaomu-desktop/internal/resolve"
 	"github.com/egoist/mygo/ui"
 )
@@ -72,12 +73,49 @@ func TestDanmakuSourceFailureDoesNotBlockPlayback(t *testing.T) {
 		io.WriteString(w, "denied")
 	}))
 	defer comments.Close()
+	emptyDefault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"animes":[]}`)
+	}))
+	defer emptyDefault.Close()
+	defaultClient, err := danmaku.NewClient(emptyDefault.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	a := newPlayerTestApp(t)
 	a.preferences = defaultPlayerPreferences()
 	a.preferences.Danmaku.Enabled = true
+	a.newDanmakuClient = func(string) (*danmaku.Client, error) { return defaultClient, nil }
 	a.open = func(string) (*ui.VideoPlayer, error) { return ui.NewVideoPlayer(&stillVideo{}) }
 	a.startEpisode(catalog.Playback{URL: "https://example.com/video.mp4", Danmaku: comments.URL}, "线路", a.title.detail.Sources[0].Episodes[0], 0)
 	if a.player == nil || !a.player.Playing() || a.playFailure != nil || a.status != "正在播放" || !strings.Contains(a.danmaku.message, "403") {
 		t.Fatalf("comment failure interfered with media: status=%q, message=%q", a.status, a.danmaku.message)
+	}
+	if got := a.danmakuButtonLabel(); got != "弹幕 · 失败" {
+		t.Fatalf("failed button label = %q, want 弹幕 · 失败", got)
+	}
+}
+
+func TestDanmakuSourceFailureFallsBackToDefaultService(t *testing.T) {
+	brokenSource := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer brokenSource.Close()
+	var calls atomic.Int32
+	fallbackServer := danmakuTestServer(t, &calls)
+	fallbackClient, err := danmaku.NewClient(fallbackServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newPlayerTestApp(t)
+	a.preferences = defaultPlayerPreferences()
+	a.preferences.Danmaku.Enabled = true
+	a.newDanmakuClient = func(string) (*danmaku.Client, error) { return fallbackClient, nil }
+	a.open = func(string) (*ui.VideoPlayer, error) { return ui.NewVideoPlayer(&stillVideo{}) }
+	a.startEpisode(catalog.Playback{URL: "https://example.com/video.mp4", Danmaku: brokenSource.URL}, "线路", a.title.detail.Sources[0].Episodes[0], 0)
+	if len(a.danmaku.comments) != 2 || a.danmaku.selected == nil || a.danmaku.selected.ID != "101" || calls.Load() != 2 {
+		t.Fatalf("broken source danmaku did not fall back to default service: comments=%d selected=%+v msg=%q", len(a.danmaku.comments), a.danmaku.selected, a.danmaku.message)
+	}
+	if got := a.danmakuButtonLabel(); got != "弹幕 · 开" {
+		t.Fatalf("fallback button label = %q, want 弹幕 · 开", got)
 	}
 }
