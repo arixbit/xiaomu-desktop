@@ -60,7 +60,6 @@ type app struct {
 	library         libraryBrowser
 	discovery       discoveryBrowser
 	live            liveBrowser
-	nas             nasBrowser
 	history         historyStore
 	favorites       favoriteStore
 	searchHistory   searchHistoryStore
@@ -85,9 +84,6 @@ type app struct {
 
 	playingLive   bool
 	playingDirect bool
-	// playingNAS is the NAS file on show, if any; playingName is its
-	// display name.
-	playingNAS *nasPlaying
 	// playingFile is set for a local file opened from the file manager; playingName
 	// is that file's name, shown in the header and Now Playing.
 	playingFile    bool
@@ -140,8 +136,6 @@ func (a *app) play() {
 
 func (a *app) closeCurrentPlayer() {
 	a.stopDanmaku()
-	a.revokePlayingNASToken()
-	a.playingNAS = nil
 	if a.player != nil {
 		a.player.Close()
 		a.player = nil
@@ -330,7 +324,6 @@ func main() {
 			})
 		})
 		a.restoreSavedSource()
-		a.restoreNAS()
 		// Library actions wait separately for the asynchronous restore.
 		a.drainPending()
 		win.OnClosed(a.close)

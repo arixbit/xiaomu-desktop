@@ -44,9 +44,6 @@ func (a *app) nowPlayingTitle() string {
 	if a.playingFile {
 		return a.playingName
 	}
-	if a.playingNAS != nil {
-		return a.playingNAS.Name
-	}
 	if !a.playingDirect && a.title != nil && a.title.name != "" {
 		return a.title.name
 	}

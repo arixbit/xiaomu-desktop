@@ -308,3 +308,30 @@ func TestRecordHistoryNotesOftenAndSavesNowAndThen(t *testing.T) {
 		t.Fatal("live playback was recorded")
 	}
 }
+
+func TestReadHistoryIgnoresLegacyNASEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.json")
+	raw := `[
+		{"name":"局域网电影.mp4","config_url":"smb://192.0.2.10/Movies","site_key":"nas","kind":"nas","nas_share":"Movies","origin":"内网盘","video_id":"movie.mp4","line":"192.0.2.10","episode":"正片","position":120,"duration":600},
+		{"name":"旧版NAS.mp4","config_url":"smb://192.0.2.10/Movies","site_key":"nas","origin":"内网盘","video_id":"old.mp4","line":"192.0.2.10","episode":"正片","position":60,"duration":600},
+		{"name":"站点片","config_url":"https://example.com/config.json","site_key":"nas","kind":"site","video_id":"7","line":"线路一","episode":"第2集","position":30,"duration":600}
+	]`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readHistory(path)
+	if err != nil {
+		t.Fatalf("readHistory failed on legacy NAS records: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "站点片" {
+		t.Fatalf("readHistory = %+v, want only site entry", got)
+	}
+	a := &app{}
+	nasEntry := historyEntry{Name: "局域网电影.mp4", ConfigURL: "smb://192.0.2.10/Movies", Kind: historyKindNAS}
+	if a.historyAvailable(nasEntry) {
+		t.Fatal("legacy NAS entry should not be available")
+	}
+	if entries := continueWatchingEntries([]historyEntry{nasEntry, got[0]}); len(entries) != 1 || entries[0].Name != "站点片" {
+		t.Fatalf("continueWatchingEntries included legacy NAS entry: %+v", entries)
+	}
+}

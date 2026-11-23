@@ -486,16 +486,11 @@ func TestMatchDanmakuEpisodeSkipsIndexFallbackWhenUnknown(t *testing.T) {
 	}
 }
 
-func TestHasEpisodesExcludesNASAndLocalFilePlayback(t *testing.T) {
+func TestHasEpisodesExcludesLocalFilePlayback(t *testing.T) {
 	a := newPlayerTestApp(t)
 	if !a.hasEpisodes() {
 		t.Fatal("episode player should report episodes")
 	}
-	a.playingNAS = &nasPlaying{Name: "movie.mp4"}
-	if a.hasEpisodes() {
-		t.Fatal("NAS playback should not report title episodes or danmaku")
-	}
-	a.playingNAS = nil
 	a.playingFile = true
 	if a.hasEpisodes() {
 		t.Fatal("local file playback should not report title episodes or danmaku")

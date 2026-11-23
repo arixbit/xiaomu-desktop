@@ -18,7 +18,6 @@ const (
 	routeHistory
 	routeFavorites
 	routeSources
-	routeNAS
 	routeSearch
 	routeDetail
 	routeSite
@@ -33,7 +32,6 @@ var tabs = []struct {
 	{routeHistory, "播放历史"},
 	{routeFavorites, "追剧"},
 	{routeSources, "片源"},
-	{routeNAS, "内网盘"},
 }
 
 const sidebarWidth = 204
@@ -134,10 +132,6 @@ func (a *app) switchTab(kind routeKind) {
 		a.loadDiscoveryTab(false)
 	case routeLive:
 		a.showLive()
-	case routeNAS:
-		if a.nas.hasServer && !a.nas.connected && !a.running(jobNAS) {
-			a.startNASConnection(a.nas.server)
-		}
 	}
 }
 
@@ -189,8 +183,6 @@ func (a *app) shell(c *ui.Context) {
 						a.favoritesView(c)
 					case routeSources:
 						a.sourcesView(c)
-					case routeNAS:
-						a.nasView(c)
 					case routeSearch:
 						a.searchView(c)
 					case routeDetail:
