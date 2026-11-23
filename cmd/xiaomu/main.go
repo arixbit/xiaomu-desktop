@@ -63,6 +63,7 @@ type app struct {
 	skipPlayback    seriesSkipPlayback
 	focusSearchGrid bool
 	preferences     playerPreferences
+	danmaku         danmakuState
 	preferencesPath string
 	playbackWait    playbackWait
 	playFailure     *episodeFailure
@@ -127,6 +128,7 @@ func (a *app) play() {
 // adoptPlayer makes p the current player and resets the per-play state.
 // Episode replacements close the old player here, once the new one opens.
 func (a *app) adoptPlayer(p *ui.VideoPlayer) {
+	a.stopDanmaku()
 	if a.player != nil {
 		a.player.Close()
 	}
@@ -179,6 +181,7 @@ func (a *app) openPlaybackURL(raw string, headers map[string]string, keepCurrent
 		p.SetHeaders(headers)
 	}
 	if !keepCurrent && a.player != nil {
+		a.stopDanmaku()
 		a.player.Close()
 		a.player = nil
 	}

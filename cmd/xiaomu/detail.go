@@ -419,6 +419,7 @@ func (a *app) notePlayingEpisode(line string, episode catalog.Episode, at time.D
 	a.sourceAttempt.player = a.player
 	a.revealContinueWatching(t.name)
 	a.updateFollowedTitle()
+	a.startDanmaku()
 }
 
 // matchEpisode finds in detail the episode a viewer was watching elsewhere:

@@ -37,11 +37,12 @@ type browser struct {
 type jobSlot int
 
 const (
-	jobConfig jobSlot = iota // importing or refreshing a configuration
-	jobLive                  // importing a live list or reading its channels
-	jobSite                  // browsing one site
-	jobTitle                 // reading a title from one of its sources
-	jobPlay                  // resolving an episode into media
+	jobConfig  jobSlot = iota // importing or refreshing a configuration
+	jobLive                   // importing a live list or reading its channels
+	jobSite                   // browsing one site
+	jobTitle                  // reading a title from one of its sources
+	jobPlay                   // resolving an episode into media
+	jobDanmaku                // searching or loading this episode's comments
 	jobSlots
 )
 
@@ -169,6 +170,7 @@ func (a *app) closeSession(s source.Session) {
 
 func (a *app) close() {
 	a.closed = true
+	a.stopDanmaku()
 	a.cancelSourceSpeedTest()
 	a.posters.close()
 	a.pending, a.pendingLibrary = nil, nil

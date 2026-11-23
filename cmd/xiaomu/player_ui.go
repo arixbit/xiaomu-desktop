@@ -104,6 +104,7 @@ func (a *app) playerScreen(c *ui.Context) {
 						w, h := p.Size()
 						return a.fullScreen || playerPictureRect(r, w, h).Contains(x, y)
 					}).HandleInput(func(ev ui.InputEvent) bool { return a.handlePlayerPointer(p, ev) })
+				a.danmakuOverlay(c, p)
 				a.playerState(c, p)
 				if showControls {
 					a.playerControls(c, p, hasEpisodes, compact)
@@ -124,6 +125,7 @@ func (a *app) playerScreen(c *ui.Context) {
 			a.playerPanel(c).Absolute().Top(70).Right(12).Bottom(bottom).Width(280)
 		}
 	})
+	a.danmakuDialog(c)
 }
 
 func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
@@ -284,6 +286,7 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 					a.savePreferences()
 				}
 				ui.Spacer(c)
+				a.danmakuButton(c)
 				rate := p.Rate()
 				if rate <= 0 {
 					rate = 1
@@ -535,6 +538,7 @@ func (a *app) currentEpisode() (sourceIndex, episodeIndex int, ok bool) {
 
 func (a *app) leavePlayer() {
 	a.cancelJob(jobPlay)
+	a.stopDanmaku()
 	a.clearPanelChoice()
 	a.flushHistory()
 	if a.player != nil {
