@@ -77,6 +77,7 @@ type app struct {
 	closed          bool
 	persist         bool
 	dispatch        func(func())
+	availableUpdate string
 
 	playingLive   bool
 	playingDirect bool
@@ -298,6 +299,7 @@ func main() {
 		})
 		a.window = win
 		a.dispatch = win.Update
+		a.watchUpdates()
 		if runtime.GOOS == "windows" {
 			// The content under the caption buttons always has a dark background.
 			win.SetWindowButtonsTheme(mygo.ThemeDark)

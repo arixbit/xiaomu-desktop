@@ -235,7 +235,7 @@ func (a *app) sidebar(c *ui.Context) {
 		if glassButton(c, "打开链接").FillWidth().Clicked() {
 			a.linkOpen = true
 		}
-		if glassButton(c, "检查更新").FillWidth().Clicked() {
+		if updateButton(c, a.availableUpdate).Clicked() {
 			updater.CheckForUpdates()
 		}
 	})
