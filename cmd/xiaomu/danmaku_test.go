@@ -90,7 +90,7 @@ func TestDanmakuPlayerSettingsAndEpisodeTransition(t *testing.T) {
 }
 
 func TestDanmakuRejectsStaleJobResults(t *testing.T) {
-	for _, action := range []string{"leave", "disable", "replace", "close", "edit episode", "edit title"} {
+	for _, action := range []string{"leave", "disable", "replace", "close", "close current", "edit episode", "edit title"} {
 		t.Run(action, func(t *testing.T) {
 			a := newPlayerTestApp(t)
 			a.preferences = defaultPlayerPreferences()
@@ -128,6 +128,8 @@ func TestDanmakuRejectsStaleJobResults(t *testing.T) {
 				a.adoptPlayer(player)
 			case "close":
 				a.close()
+			case "close current":
+				a.closeCurrentPlayer()
 			case "edit episode", "edit title":
 				tt := ui.NewTester(a.view, 1120, 760)
 				if err := tt.Click("弹幕"); err != nil {

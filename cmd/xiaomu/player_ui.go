@@ -142,6 +142,9 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 	if a.playingFile {
 		name = a.playingName
 	}
+	if a.playingNAS != nil {
+		name = a.playingNAS.Name
+	}
 	top := float32(12)
 	if bar := c.TitleBar(); bar.Bottom+8 > top {
 		top = bar.Bottom + 8
@@ -538,13 +541,9 @@ func (a *app) currentEpisode() (sourceIndex, episodeIndex int, ok bool) {
 
 func (a *app) leavePlayer() {
 	a.cancelJob(jobPlay)
-	a.stopDanmaku()
 	a.clearPanelChoice()
 	a.flushHistory()
-	if a.player != nil {
-		a.player.Close()
-		a.player = nil
-	}
+	a.closeCurrentPlayer()
 	a.syncNowPlaying()
 	a.playingLive, a.playingDirect = false, false
 	a.playingFile = false

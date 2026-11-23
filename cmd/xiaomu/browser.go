@@ -42,6 +42,7 @@ const (
 	jobSite                   // browsing one site
 	jobTitle                  // reading a title from one of its sources
 	jobPlay                   // resolving an episode into media
+	jobNAS                    // connecting to the NAS or listing a folder
 	jobDanmaku                // searching or loading this episode's comments
 	jobSlots
 )
@@ -58,9 +59,15 @@ type jobResult struct {
 	discard func()
 }
 
-func (a *app) running(slot jobSlot) bool { return a.jobs[slot].cancel != nil }
+func (a *app) running(slot jobSlot) bool {
+	a.jobsMu.Lock()
+	defer a.jobsMu.Unlock()
+	return a.jobs[slot].cancel != nil
+}
 
 func (a *app) busy() bool {
+	a.jobsMu.Lock()
+	defer a.jobsMu.Unlock()
 	for i := range a.jobs {
 		if a.jobs[i].cancel != nil {
 			return true
@@ -71,6 +78,8 @@ func (a *app) busy() bool {
 
 // cancelJob abandons the slot's job; its result is discarded when it returns.
 func (a *app) cancelJob(slot jobSlot) {
+	a.jobsMu.Lock()
+	defer a.jobsMu.Unlock()
 	j := &a.jobs[slot]
 	if j.cancel != nil {
 		j.cancel()
@@ -94,11 +103,20 @@ func (a *app) run(slot jobSlot, label string, work func(context.Context) (jobRes
 	if a.closed {
 		return
 	}
-	a.cancelJob(slot)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Replacing the old job and recording the new one happen under one
+	// lock, so a cancel landing at the same moment cannot leave the
+	// slot with the new job's cancel and the old job's generation.
+	a.jobsMu.Lock()
 	j := &a.jobs[slot]
+	if j.cancel != nil {
+		j.cancel()
+		j.cancel = nil
+	}
+	j.gen++
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	j.cancel = cancel
 	gen := j.gen
+	a.jobsMu.Unlock()
 	a.status = label + "…"
 	dispatch := a.dispatch
 	execute := func() {
@@ -108,10 +126,15 @@ func (a *app) run(slot jobSlot, label string, work func(context.Context) (jobRes
 				err = ctx.Err()
 			}
 			cancel()
+			// Only the generation check needs the lock: the apply
+			// and fail callbacks below can start other jobs, so
+			// they must run without it.
+			a.jobsMu.Lock()
 			current := j.gen == gen
 			if current {
 				j.cancel = nil
 			}
+			a.jobsMu.Unlock()
 			if !current || a.closed || err != nil {
 				if result.discard != nil {
 					result.discard()
@@ -170,7 +193,7 @@ func (a *app) closeSession(s source.Session) {
 
 func (a *app) close() {
 	a.closed = true
-	a.stopDanmaku()
+	a.closeNASClient()
 	a.cancelSourceSpeedTest()
 	a.posters.close()
 	a.pending, a.pendingLibrary = nil, nil
@@ -178,21 +201,20 @@ func (a *app) close() {
 	a.stopScan(&a.library.feed)
 	a.stopScan(&a.library.search)
 	a.stopDiscovery()
+	a.jobsMu.Lock()
 	for i := range a.jobs {
 		if cancel := a.jobs[i].cancel; cancel != nil {
 			cancel()
 		}
 	}
+	a.jobsMu.Unlock()
 	a.flushHistory()
 	if err := a.latency.flush(); err != nil {
 		a.status = "测速记录保存失败：" + err.Error()
 	}
 	a.closeSite()
 	a.clearTitle()
-	if a.player != nil {
-		a.player.Close()
-		a.player = nil
-	}
+	a.closeCurrentPlayer()
 	a.syncNowPlaying()
 	if a.proxy != nil {
 		_ = a.proxy.Close()

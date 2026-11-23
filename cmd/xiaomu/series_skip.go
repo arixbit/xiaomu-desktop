@@ -150,7 +150,7 @@ func (a *app) recordEpisodeCompletion(p *ui.VideoPlayer) {
 	now := time.Now()
 	a.history.note(historyEntry{
 		Name: t.name, Pic: t.detail.Pic, ConfigURL: configURL(t.item.Entry),
-		EntryKey: entryKey(t.item.Entry), SiteKey: t.item.Entry.Site.Key, Origin: t.item.Entry.Label(),
+		EntryKey: entryKey(t.item.Entry), SiteKey: t.item.Entry.Site.Key, Kind: historyKindSite, Origin: t.item.Entry.Label(),
 		VideoID: string(t.item.Video.ID), Line: a.playingSource, Episode: a.playingEpisode,
 		Position: p.Duration().Seconds(), Duration: p.Duration().Seconds(), Updated: now,
 	})
