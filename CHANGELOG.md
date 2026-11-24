@@ -1,5 +1,10 @@
 # 更新记录
 
+## 0.9.5
+
+- 修复网盘官方网页登录跨源跳转与第三方 OAuth 弹窗被拦截问题：为隔离登录窗口及子弹窗注册 `OnWillNavigate`（允许 `http`/`https`/`about:blank`，屏蔽非网页协议）与 `SetWindowOpenHandler`，并在 macOS 补充标准 Safari UA 后缀，修复百度网盘扫码确认后卡在「扫描成功 请在手机端确认登录」无法完成授权的问题，同时兼容阿里云盘、UC 及第三方 OAuth 登录跳转。
+- 改进网盘登录检测与百度接口错误处理：鉴权探测偶发失败不再永久跳过同一凭证（4 秒后自动重试）；百度网盘已拿到 `BDUSS` 但超过 3.5 秒未出现 `pan.baidu.com` 域 `STOKEN` 时自动跳转一次 `/disk/main` 触发签发；修复百度接口报错返回数组型 `result:[]` / `extra:[]` 或重定向到 HTML 登录页时无法正确触发重新登录/空间不足提示的问题。
+
 ## 0.9.4
 
 - 全格式原生播放器（`mygo-player v0.2.1` / `libmpv` LGPL-2.1+）：零 cgo 动态加载，macOS（Apple Silicon / Intel）走 VideoToolbox 零拷贝 Metal 渲染，Windows x64 走 D3D11VA + `ui.Bitmap` 合成渲染（无子窗口遮挡，弹幕与玻璃 HUD 正常叠加；Windows ARM64 自动平滑回退系统播放器）；原生直解 MKV / MP4 / MOV / WebM / FLV / TS / AVI 等容器，播放底栏新增多音轨切换、内封/外挂字幕管理（支持 `.srt`/`.ass`/`.ssa`/`.vtt`/`.sup` 拖拽或选文件加载）。

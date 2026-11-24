@@ -837,3 +837,64 @@ func TestBaiduClientFullLifecycleAndFallback(t *testing.T) {
 		t.Fatalf("CleanupTemp cleaned=%d deleted=%v err=%v", cleaned, deletedPaths, err)
 	}
 }
+
+func TestBaiduExpiredAndPHPArrayErrorResponses(t *testing.T) {
+	mode := "array_expired"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/gettemplatevariable":
+			switch mode {
+			case "array_expired":
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"errno":-6,"result":[],"request_id":1}`))
+			case "html_redirect":
+				w.Header().Set("Content-Type", "text/html")
+				_, _ = w.Write([]byte(`<!doctype html><html><body>login</body></html>`))
+			default:
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"errno":0,"result":{"bdstoken":"tok-ok"}}`))
+			}
+		case "/api/create":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"errno":0}`))
+		case "/api/list":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"errno":0,"list":[]}`))
+		case "/share/transfer":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"errno":-31,"extra":[],"show_msg":"capacity full"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	creds := Credentials{BaiduCookie: "BDUSS=expired; STOKEN=expired"}
+	client := NewBaiduClient(BaiduClientOptions{WebBase: srv.URL, PCSBase: srv.URL, HTTPClient: srv.Client(), Credentials: &creds})
+	ctx := context.Background()
+
+	if _, err := client.CheckAuth(ctx); err == nil {
+		t.Fatal("expected AuthRequiredError on errno -6 with array result")
+	} else if p, ok := AuthRequiredProvider(err); !ok || p != ProviderBaidu {
+		t.Fatalf("expected AuthRequiredError(baidu) on errno -6 array result, got %v", err)
+	}
+
+	mode = "html_redirect"
+	if _, err := client.CheckAuth(ctx); err == nil {
+		t.Fatal("expected AuthRequiredError on HTML login page")
+	} else if p, ok := AuthRequiredProvider(err); !ok || p != ProviderBaidu {
+		t.Fatalf("expected AuthRequiredError(baidu) on HTML response, got %v", err)
+	}
+
+	mode = "ok"
+	_, err := client.ResolvePlayback(ctx, FileItem{
+		Provider:      ProviderBaidu,
+		ShareID:       "1bd123",
+		FileID:        "3002",
+		ShareFidToken: "10001:20002",
+		Name:          "demo.mkv",
+	})
+	if err == nil || !strings.Contains(err.Error(), "剩余空间不足") {
+		t.Fatalf("expected quota error when transfer returns extra:[], got %v", err)
+	}
+}
