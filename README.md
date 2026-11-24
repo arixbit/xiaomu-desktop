@@ -37,7 +37,7 @@ macOS 13+ · Apple Silicon / Intel · Windows 10/11 · x64 / ARM64 · [下载最
 
 ## 下载与安装
 
-v0.9.4 接入全格式原生 `mygo-player`（`libmpv` LGPL-2.1+，支持 macOS 通用与 Windows x64 原生直解 MKV / 多音轨 / 内外挂字幕）、独立本地视频播放与本地弹幕、原生聚合网盘/AList 与官方网页自动登录（夸克 / UC / 阿里云盘 / 百度网盘原画直链），并加入无效站点自动过滤与搜索加速。macOS 提供通用 DMG 和 ZIP，Windows 提供 x64 安装包。下载页附有 `SHA256SUMS` 校验文件。[最新版下载](https://github.com/arixbit/xiaomu-desktop/releases/latest) · [v0.9.4 版本说明](docs/releases/v0.9.4.md)
+v0.9.5 修复百度网盘等官方网页登录弹窗跨源跳转与第三方 OAuth 子窗被拦截问题，改进鉴权重试与百度接口错误兼容；包含 v0.9.4 的全格式原生 `mygo-player`（`libmpv` LGPL-2.1+，支持 macOS 通用与 Windows x64 原生直解 MKV / 多音轨 / 内外挂字幕）、独立本地视频与弹幕、原生聚合网盘/AList 及无效站点自动过滤。macOS 提供通用 DMG 和 ZIP，Windows 提供 x64 安装包。下载页附有 `SHA256SUMS` 校验文件。[最新版下载](https://github.com/arixbit/xiaomu-desktop/releases/latest) · [v0.9.5 版本说明](docs/releases/v0.9.5.md)
 
 ### macOS
 
@@ -46,7 +46,7 @@ v0.9.4 接入全格式原生 `mygo-player`（`libmpv` LGPL-2.1+，支持 macOS �
 
 ### Windows
 
-在 GitHub Releases 下载 `xiaomu-setup-0.9.4-amd64.exe`（Windows x64，内置 `mpv-2.dll`）。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
+在 GitHub Releases 下载 `xiaomu-setup-0.9.5-amd64.exe`（Windows x64，内置 `mpv-2.dll`）。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
 
 打开小幕，在首页导入自己的配置。之后可以在侧边栏“片源”页更换配置，或在“直播”页导入自己的频道列表。
 
@@ -55,6 +55,8 @@ v0.9.4 接入全格式原生 `mygo-player`（`libmpv` LGPL-2.1+，支持 macOS �
 小幕只是播放器。它不提供、不收录、不分发任何影视内容。配置和规则由使用者自己提供，使用后果也由使用者自己承担。
 
 ## 功能
+
+v0.9.5 网盘登录授权修复：放行隔离登录窗及 OAuth 子弹窗的跨源网页跳转并补充 macOS Safari UA，解决百度网盘扫码确认后卡在确认页无法完成授权的问题；加入鉴权失败重试、`BDUSS → STOKEN` 自动补全跳转及百度接口数组错误体兼容。
 
 v0.9.4 全格式播放、本地视频与网盘原生支持：通过 `mygo-player v0.2.1`（`libmpv` LGPL-2.1+，零 cgo）在 macOS 与 Windows x64 上原生直解 MKV/MP4/TS 等常见容器、切换多音轨与加载内外挂字幕；不导入片源也可直接打开或拖入本地视频并匹配弹幕；原生支持配置内的 AList 与网盘站点（夸克 / UC / 阿里云盘 / 百度网盘官方网页自动登录、原画直链播放、临时目录与回收站自动清理）以及无效站点自动过滤。
 

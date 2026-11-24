@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -12,11 +14,34 @@ import (
 	"github.com/egoist/mygo"
 )
 
+const panAuthRetryInterval = 4 * time.Second
+
 type panLoginSession struct {
 	mu       sync.Mutex
 	provider pan.Provider
 	win      *mygo.Window
 	cancel   context.CancelFunc
+	cleanup  func()
+}
+
+func (ls *panLoginSession) page() *mygo.Page {
+	ls.mu.Lock()
+	win := ls.win
+	ls.mu.Unlock()
+	if win == nil {
+		return nil
+	}
+	return win.Page()
+}
+
+func (ls *panLoginSession) finishCleanup() {
+	ls.mu.Lock()
+	fn := ls.cleanup
+	ls.cleanup = nil
+	ls.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 type panLoginSpec struct {
@@ -95,6 +120,95 @@ func hasCookieForHost(cookies []mygo.Cookie, name, host string) bool {
 		}
 	}
 	return false
+}
+
+func cookieValue(cookies []mygo.Cookie, name string) string {
+	for _, c := range cookies {
+		if strings.EqualFold(c.Name, name) && strings.TrimSpace(c.Value) != "" {
+			return strings.TrimSpace(c.Value)
+		}
+	}
+	return ""
+}
+
+func hasExactHostCookie(cookies []mygo.Cookie, name, host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	if h == "" {
+		return false
+	}
+	for _, c := range cookies {
+		if !strings.EqualFold(c.Name, name) || strings.TrimSpace(c.Value) == "" {
+			continue
+		}
+		if strings.TrimPrefix(strings.ToLower(strings.TrimSpace(c.Domain)), ".") == h {
+			return true
+		}
+	}
+	return false
+}
+
+func panLoginUserAgentSuffix() string {
+	if runtime.GOOS == "darwin" {
+		return "Version/18.0 Safari/605.1.15"
+	}
+	return ""
+}
+
+func allowedPanLoginURL(rawURL string) bool {
+	rawURL = strings.TrimSpace(rawURL)
+	if strings.EqualFold(rawURL, "about:blank") {
+		return true
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https", "http":
+		return strings.TrimSpace(u.Host) != ""
+	default:
+		return false
+	}
+}
+
+func shouldRetryAuthCheck(candidate, lastCandidate string, lastAttempt, now time.Time) bool {
+	if candidate == "" {
+		return false
+	}
+	if candidate != lastCandidate {
+		return true
+	}
+	return now.Sub(lastAttempt) >= panAuthRetryInterval
+}
+
+func configurePanLoginPage(page *mygo.Page, parent *mygo.Window, uaSuffix string) {
+	if page == nil {
+		return
+	}
+	// Untrusted pages block cross-origin main-frame navigations unless
+	// OnWillNavigate is registered. Official cloud-drive login flows redirect
+	// across subdomains and OAuth providers (for example pan.baidu.com <->
+	// passport.baidu.com, www.alipan.com <-> auth.alipan.com).
+	page.OnWillNavigate(func(e *mygo.NavigateEvent) {
+		if !allowedPanLoginURL(e.URL) {
+			e.PreventDefault()
+		}
+	})
+	page.SetWindowOpenHandler(func(req mygo.WindowOpenRequest) *mygo.WindowOptions {
+		if req.URL != "" && !allowedPanLoginURL(req.URL) {
+			return nil
+		}
+		return &mygo.WindowOptions{
+			Title:  "授权登录",
+			Width:  960,
+			Height: 700,
+			Parent: parent,
+			Page: mygo.PageOptions{
+				Untrusted:       true,
+				UserAgentSuffix: uaSuffix,
+			},
+		}
+	})
 }
 
 func formatCookieHeader(cookies []mygo.Cookie) string {
@@ -193,22 +307,35 @@ func (a *app) beginPanWebLogin(provider pan.Provider, onSuccess func()) {
 
 	session := mygo.NewEphemeralSession()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	uaSuffix := panLoginUserAgentSuffix()
 	win := mygo.NewWindow(mygo.WindowOptions{
 		Title:  "登录" + provider.Label() + " · 登录成功后将自动关闭并继续播放",
-		URL:    spec.loginURL,
 		Width:  1040,
 		Height: 740,
 		Parent: a.window,
 		Page: mygo.PageOptions{
-			Untrusted: true,
-			Session:   session,
+			Untrusted:       true,
+			Session:         session,
+			UserAgentSuffix: uaSuffix,
 		},
 	})
-	ls := &panLoginSession{provider: provider, win: win, cancel: cancel}
+	if page := win.Page(); page != nil {
+		configurePanLoginPage(page, win, uaSuffix)
+	}
+	offChild := mygo.App.OnWindowCreated(func(child *mygo.Window) {
+		if child == nil || child.Parent() != win {
+			return
+		}
+		if page := child.Page(); page != nil {
+			configurePanLoginPage(page, win, uaSuffix)
+		}
+	})
+	ls := &panLoginSession{provider: provider, win: win, cancel: cancel, cleanup: offChild}
 	a.panLogin = ls
 	a.status = fmt.Sprintf("请在弹出的%s官方页面完成登录，成功后将自动返回…", provider.Label())
 
 	win.OnClosed(func() {
+		ls.finishCleanup()
 		cancel()
 		if a.dispatch != nil {
 			a.dispatch(func() {
@@ -218,6 +345,9 @@ func (a *app) beginPanWebLogin(provider pan.Provider, onSuccess func()) {
 			})
 		}
 	})
+	if page := win.Page(); page != nil {
+		_ = page.LoadURL(spec.loginURL)
+	}
 
 	go a.watchPanLoginWindow(ctx, ls, session, spec, onSuccess)
 }
@@ -226,6 +356,10 @@ func (a *app) watchPanLoginWindow(ctx context.Context, ls *panLoginSession, sess
 	ticker := time.NewTicker(1200 * time.Millisecond)
 	defer ticker.Stop()
 	lastCandidate := ""
+	var lastAttempt time.Time
+	baiduBDUSS := ""
+	var baiduBDUSSSeenAt time.Time
+	baiduNudgedBDUSS := ""
 
 	for {
 		select {
@@ -242,7 +376,7 @@ func (a *app) watchPanLoginWindow(ctx context.Context, ls *panLoginSession, sess
 		found := false
 
 		if spec.useLocalAuth {
-			page := ls.win.Page()
+			page := ls.page()
 			if page == nil {
 				continue
 			}
@@ -256,10 +390,12 @@ func (a *app) watchPanLoginWindow(ctx context.Context, ls *panLoginSession, sess
 				continue
 			}
 			candidateKey = rt + "|" + at
-			if candidateKey == lastCandidate {
+			now := time.Now()
+			if !shouldRetryAuthCheck(candidateKey, lastCandidate, lastAttempt, now) {
 				continue
 			}
 			lastCandidate = candidateKey
+			lastAttempt = now
 			updated = pan.DefaultCredentials()
 			updated.AliToken = rt
 			updated.AliAccessToken = at
@@ -278,6 +414,20 @@ func (a *app) watchPanLoginWindow(ctx context.Context, ls *panLoginSession, sess
 			if err != nil || len(cookies) == 0 {
 				continue
 			}
+			if ls.provider == pan.ProviderBaidu {
+				if bduss := cookieValue(cookies, "BDUSS"); bduss != "" && !hasExactHostCookie(cookies, "STOKEN", "pan.baidu.com") {
+					now := time.Now()
+					if bduss != baiduBDUSS {
+						baiduBDUSS = bduss
+						baiduBDUSSSeenAt = now
+					} else if baiduNudgedBDUSS != bduss && now.Sub(baiduBDUSSSeenAt) >= 3500*time.Millisecond {
+						baiduNudgedBDUSS = bduss
+						if page := ls.page(); page != nil {
+							_ = page.LoadURL("https://pan.baidu.com/disk/main")
+						}
+					}
+				}
+			}
 			if spec.readyCookie != nil && !spec.readyCookie(cookies) {
 				continue
 			}
@@ -286,10 +436,12 @@ func (a *app) watchPanLoginWindow(ctx context.Context, ls *panLoginSession, sess
 				cookieHost = "pan.baidu.com"
 			}
 			cookieStr := formatCookiesForHost(cookies, cookieHost)
-			if cookieStr == "" || cookieStr == lastCandidate {
+			now := time.Now()
+			if !shouldRetryAuthCheck(cookieStr, lastCandidate, lastAttempt, now) {
 				continue
 			}
 			lastCandidate = cookieStr
+			lastAttempt = now
 			updated = pan.DefaultCredentials()
 			switch ls.provider {
 			case pan.ProviderQuark:
@@ -362,6 +514,7 @@ func (a *app) closePanLoginWindow() {
 		return
 	}
 	a.panLogin = nil
+	ls.finishCleanup()
 	ls.mu.Lock()
 	cancel, win := ls.cancel, ls.win
 	ls.cancel, ls.win = nil, nil

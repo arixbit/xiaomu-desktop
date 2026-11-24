@@ -326,4 +326,53 @@ func TestFormatCookiesForHostKeepsPanBaiduSTOKEN(t *testing.T) {
 	if !strings.Contains(got, "BDUSS=bduss_ok") || !strings.Contains(got, "STOKEN=pan_stoken_ok") || strings.Contains(got, "wrong") {
 		t.Fatalf("unexpected baidu cookie header: %q", got)
 	}
+	if !hasExactHostCookie(cookies, "STOKEN", "pan.baidu.com") {
+		t.Fatal("expected exact host match for pan.baidu.com STOKEN")
+	}
+	if hasExactHostCookie(cookies[:1], "STOKEN", "pan.baidu.com") ||
+		hasExactHostCookie([]mygo.Cookie{{Name: "STOKEN", Value: "parent", Domain: ".baidu.com"}}, "STOKEN", "pan.baidu.com") {
+		t.Fatal("parent domain STOKEN should not satisfy exact host match")
+	}
+}
+
+func TestPanLoginURLPolicyAndAuthRetry(t *testing.T) {
+	allowed := []string{
+		"https://pan.baidu.com/disk/main",
+		"https://passport.baidu.com/v3/login/main/qrbdusslogin?tpl=netdisk",
+		"https://auth.alipan.com/v2/oauth/authorize",
+		"https://open.weixin.qq.com/connect/qrconnect",
+		"http://example.com/login",
+		"about:blank",
+	}
+	for _, u := range allowed {
+		if !allowedPanLoginURL(u) {
+			t.Errorf("expected allowed login URL %q", u)
+		}
+	}
+	blocked := []string{
+		"",
+		"baidunetdisk://open",
+		"file:///etc/passwd",
+		"javascript:alert(1)",
+		"https://",
+	}
+	for _, u := range blocked {
+		if allowedPanLoginURL(u) {
+			t.Errorf("expected blocked login URL %q", u)
+		}
+	}
+
+	t0 := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	if !shouldRetryAuthCheck("BDUSS=a", "", time.Time{}, t0) {
+		t.Fatal("initial candidate should be checked immediately")
+	}
+	if shouldRetryAuthCheck("BDUSS=a", "BDUSS=a", t0, t0.Add(2*time.Second)) {
+		t.Fatal("same candidate should wait for retry interval")
+	}
+	if !shouldRetryAuthCheck("BDUSS=a; STOKEN=b", "BDUSS=a", t0, t0.Add(time.Second)) {
+		t.Fatal("changed candidate should be checked immediately")
+	}
+	if !shouldRetryAuthCheck("BDUSS=a", "BDUSS=a", t0, t0.Add(panAuthRetryInterval)) {
+		t.Fatal("same candidate should retry after retry interval")
+	}
 }

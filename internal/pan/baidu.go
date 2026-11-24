@@ -186,6 +186,15 @@ func (c *baiduClient) doReq(ctx context.Context, method, fullURL string, form ur
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return raw, resp.Cookies(), resp.StatusCode, fmt.Errorf("百度网盘接口返回 HTTP %d", resp.StatusCode)
 	}
+	if needAuth {
+		if (resp.Request != nil && strings.Contains(strings.ToLower(resp.Request.URL.Host), "passport.baidu.com")) ||
+			strings.HasPrefix(strings.TrimSpace(string(raw)), "<") {
+			return raw, resp.Cookies(), resp.StatusCode, &AuthRequiredError{
+				Provider: ProviderBaidu,
+				Reason:   "百度网盘登录状态无效或已过期，请重新登录",
+			}
+		}
+	}
 	return raw, resp.Cookies(), resp.StatusCode, nil
 }
 
@@ -208,15 +217,13 @@ func (c *baiduClient) ensureBDSToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	var resp struct {
-		Errno  int `json:"errno"`
-		Result struct {
-			BDSToken string `json:"bdstoken"`
-		} `json:"result"`
+		Errno  int             `json:"errno"`
+		Result json.RawMessage `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return "", fmt.Errorf("解析百度网盘授权状态失败：%w", err)
 	}
-	if resp.Errno == -6 || strings.TrimSpace(resp.Result.BDSToken) == "" {
+	if resp.Errno == -6 {
 		return "", &AuthRequiredError{
 			Provider: ProviderBaidu,
 			Reason:   "百度网盘登录状态无效或已过期，请重新登录",
@@ -225,7 +232,16 @@ func (c *baiduClient) ensureBDSToken(ctx context.Context) (string, error) {
 	if resp.Errno != 0 {
 		return "", fmt.Errorf("获取百度网盘令牌失败（错误码 %d）", resp.Errno)
 	}
-	tok := strings.TrimSpace(resp.Result.BDSToken)
+	var result struct {
+		BDSToken string `json:"bdstoken"`
+	}
+	if err := json.Unmarshal(resp.Result, &result); err != nil || strings.TrimSpace(result.BDSToken) == "" {
+		return "", &AuthRequiredError{
+			Provider: ProviderBaidu,
+			Reason:   "百度网盘登录状态无效或已过期，请重新登录",
+		}
+	}
+	tok := strings.TrimSpace(result.BDSToken)
 	c.mu.Lock()
 	c.bdstokenKey = cookie
 	c.bdstoken = tok
@@ -625,16 +641,9 @@ func (c *baiduClient) transferShareFile(ctx context.Context, item FileItem, bdst
 		return "", "", fmt.Errorf("转存百度网盘文件失败：%w", err)
 	}
 	var resp struct {
-		Errno int `json:"errno"`
-		Extra struct {
-			List []struct {
-				From     string      `json:"from"`
-				To       string      `json:"to"`
-				ToFsID   baiduFlexID `json:"to_fs_id"`
-				FromFsID baiduFlexID `json:"from_fs_id"`
-			} `json:"list"`
-		} `json:"extra"`
-		ShowMsg string `json:"show_msg"`
+		Errno   int             `json:"errno"`
+		Extra   json.RawMessage `json:"extra"`
+		ShowMsg string          `json:"show_msg"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return "", "", fmt.Errorf("解析百度网盘转存结果失败：%w", err)
@@ -642,9 +651,20 @@ func (c *baiduClient) transferShareFile(ctx context.Context, item FileItem, bdst
 	if resp.Errno != 0 && resp.Errno != 12 {
 		return "", "", baiduShareErrno(resp.Errno, resp.ShowMsg)
 	}
-	if len(resp.Extra.List) > 0 {
-		savedPath = strings.TrimSpace(resp.Extra.List[0].To)
-		savedFsID = string(resp.Extra.List[0].ToFsID)
+	var extra struct {
+		List []struct {
+			From     string      `json:"from"`
+			To       string      `json:"to"`
+			ToFsID   baiduFlexID `json:"to_fs_id"`
+			FromFsID baiduFlexID `json:"from_fs_id"`
+		} `json:"list"`
+	}
+	if len(resp.Extra) > 0 {
+		_ = json.Unmarshal(resp.Extra, &extra)
+	}
+	if len(extra.List) > 0 {
+		savedPath = strings.TrimSpace(extra.List[0].To)
+		savedFsID = string(extra.List[0].ToFsID)
 	}
 	if savedPath == "" && item.Name != "" {
 		savedPath = path.Join(tempDir, path.Base(item.Name))
