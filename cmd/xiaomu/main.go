@@ -75,6 +75,7 @@ type app struct {
 	discovery       discoveryBrowser
 	live            liveBrowser
 	history         historyStore
+	localFileChecks map[string]localFileCheck
 	favorites       favoriteStore
 	searchHistory   searchHistoryStore
 	searchFocused   bool

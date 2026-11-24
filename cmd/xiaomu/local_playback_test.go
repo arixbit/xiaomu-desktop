@@ -169,16 +169,40 @@ func TestLocalVideoHistoryContinueWatchingAndResume(t *testing.T) {
 	}
 	b.leavePlayer()
 
-	// Removing the file from disk marks the history entry unavailable.
+	// Removing the file from disk: resuming checks the disk at once and
+	// marks the history entry unavailable.
 	if err := os.Remove(ep1); err != nil {
 		t.Fatal(err)
-	}
-	if b.historyAvailable(entry) {
-		t.Fatal("deleted local file reported as available")
 	}
 	b.resume(entry)
 	if b.player != nil || !strings.Contains(b.status, "不存在") {
 		t.Fatalf("deleted local file should not play: player=%v status=%q", b.player != nil, b.status)
+	}
+	if b.historyAvailable(entry) {
+		t.Fatal("deleted local file reported as available")
+	}
+}
+
+// Rows ask every frame; the disk is checked at most once per TTL.
+func TestHistoryAvailableCachesLocalFileCheck(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "第1集.mp4")
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entry := historyEntry{Name: "第1集.mp4", Kind: historyKindLocal, VideoID: path}
+	a := &app{}
+	if !a.historyAvailable(entry) {
+		t.Fatal("existing local file reported as unavailable")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if !a.historyAvailable(entry) {
+		t.Fatal("check within the TTL went to disk again")
+	}
+	a.localFileChecks[path] = localFileCheck{ok: true, at: time.Now().Add(-localFileCheckTTL)}
+	if a.historyAvailable(entry) {
+		t.Fatal("expired check did not see the deleted file")
 	}
 }
 
