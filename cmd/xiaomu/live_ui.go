@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,6 +28,8 @@ type liveBrowser struct {
 	url, input, query, group string
 	importOpen, restore      bool
 	sources                  []iptv.Source
+	cachedChannels           map[string][]iptv.Channel
+	staleChannels            map[string]bool
 	selectedSource           int
 	channels                 []iptv.Channel
 	groupsCache              []string
@@ -105,6 +109,88 @@ func (l *liveBrowser) filteredChannels(withQuery bool) []int {
 	return indices
 }
 
+func liveSourceCacheKey(source iptv.Source) string {
+	if source.URL == "" {
+		return ""
+	}
+	if len(source.Headers) == 0 {
+		return source.URL
+	}
+	keys := make([]string, 0, len(source.Headers))
+	for k := range source.Headers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString(source.URL)
+	for _, k := range keys {
+		b.WriteByte('\x00')
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(source.Headers[k])
+	}
+	return b.String()
+}
+
+func cloneLiveChannels(channels []iptv.Channel) []iptv.Channel {
+	if len(channels) == 0 {
+		return nil
+	}
+	out := make([]iptv.Channel, len(channels))
+	for i, ch := range channels {
+		ch.Streams = make([]iptv.Stream, len(ch.Streams))
+		for j, st := range channels[i].Streams {
+			ch.Streams[j] = iptv.Stream{URL: st.URL, Headers: maps.Clone(st.Headers)}
+		}
+		out[i] = ch
+	}
+	return out
+}
+
+func cloneLiveChannelsMap(m map[string][]iptv.Channel) map[string][]iptv.Channel {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string][]iptv.Channel, len(m))
+	for k, v := range m {
+		if len(v) > 0 {
+			out[k] = cloneLiveChannels(v)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func (a *app) activeLiveChannelCache() map[string][]iptv.Channel {
+	if a.live.url != "" {
+		return a.live.cachedChannels
+	}
+	return a.library.liveChannels
+}
+
+func (a *app) setActiveLiveChannelCache(key string, channels []iptv.Channel) {
+	copied := cloneLiveChannels(channels)
+	if a.live.url != "" {
+		if a.live.cachedChannels == nil {
+			a.live.cachedChannels = map[string][]iptv.Channel{}
+		}
+		a.live.cachedChannels[key] = copied
+		return
+	}
+	if a.library.liveChannels == nil {
+		a.library.liveChannels = map[string][]iptv.Channel{}
+	}
+	a.library.liveChannels[key] = copied
+}
+
+func (a *app) applyLiveChannels(index int, channels []iptv.Channel) {
+	a.live.channels, a.live.selectedSource = channels, index
+	a.live.group, a.live.query = "", ""
+	a.live.channelList, a.live.panelChannelList = ui.ListState{}, ui.ListState{}
+}
+
 func (a *app) setLiveSources(sources []iptv.Source) {
 	a.live.sources = sources
 	a.live.channels = nil
@@ -143,6 +229,16 @@ func (a *app) importLive(raw string) {
 // applyLiveImport makes a channel list the live source and shows it. A list
 // imported on its own takes priority over the lives of the film library.
 func (a *app) applyLiveImport(raw string, sources []iptv.Source) {
+	prevURL := a.live.url
+	if prevURL != raw {
+		a.live.cachedChannels = nil
+		a.live.staleChannels = nil
+	} else if len(a.live.cachedChannels) > 0 {
+		a.live.staleChannels = make(map[string]bool, len(a.live.cachedChannels))
+		for k := range a.live.cachedChannels {
+			a.live.staleChannels[k] = true
+		}
+	}
 	a.setLiveSources(sources)
 	a.live.url, a.live.input, a.live.restore, a.live.importOpen = raw, raw, false, false
 	a.switchTab(routeLive)
@@ -158,6 +254,8 @@ func (a *app) applyLiveImport(raw string, sources []iptv.Source) {
 func (a *app) removeLive() {
 	a.cancelJob(jobLive)
 	a.live.url, a.live.input, a.live.restore = "", "", false
+	a.live.cachedChannels = nil
+	a.live.staleChannels = nil
 	var lives []iptv.Source
 	if root := a.library.root; root != nil {
 		lives = append(lives, root.Lives...)
@@ -181,17 +279,58 @@ func (a *app) loadLiveSource(index int) {
 		return
 	}
 	source := a.live.sources[index]
+	key := liveSourceCacheKey(source)
+	var cached []iptv.Channel
+	stale := false
+	if key != "" {
+		cached = a.activeLiveChannelCache()[key]
+		if a.live.url != "" && a.live.staleChannels[key] {
+			stale = true
+		}
+	}
+	if !stale && len(cached) > 0 {
+		a.cancelJob(jobLive)
+		a.applyLiveChannels(index, cloneLiveChannels(cached))
+		return
+	}
+	expectedLiveURL := a.live.url
+	expectedConfigURL := a.browser.configURL
+	var fail func(error)
+	if stale && len(cached) > 0 {
+		fallback := cloneLiveChannels(cached)
+		fail = func(err error) {
+			if a.live.url == expectedLiveURL && a.browser.configURL == expectedConfigURL &&
+				index < len(a.live.sources) && liveSourceCacheKey(a.live.sources[index]) == key {
+				delete(a.live.staleChannels, key)
+				a.applyLiveChannels(index, fallback)
+			}
+			a.status = jobError("加载频道", err)
+		}
+	}
 	a.run(jobLive, "加载频道", func(ctx context.Context) (jobResult, error) {
 		channels, err := config.LiveChannels(ctx, source, nil)
 		if err != nil {
 			return jobResult{}, err
 		}
 		return jobResult{apply: func() {
-			a.live.channels, a.live.selectedSource = channels, index
-			a.live.group, a.live.query = "", ""
-			a.live.channelList, a.live.panelChannelList = ui.ListState{}, ui.ListState{}
+			if a.live.url != expectedLiveURL || a.browser.configURL != expectedConfigURL ||
+				index >= len(a.live.sources) || liveSourceCacheKey(a.live.sources[index]) != key {
+				return
+			}
+			a.applyLiveChannels(index, channels)
+			if key != "" {
+				delete(a.live.staleChannels, key)
+				a.setActiveLiveChannelCache(key, channels)
+				if a.persist {
+					if a.live.url != "" {
+						_ = a.saveLiveCache()
+					} else if a.library.root != nil && a.browser.configURL != "" {
+						_ = a.saveConfigCache()
+					}
+				}
+			}
 		}}, nil
-	}, nil)
+	}, fail)
 }
 
 func (a *app) playLiveChannel(index, streamIndex int) {

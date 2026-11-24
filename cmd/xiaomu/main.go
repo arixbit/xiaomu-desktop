@@ -75,6 +75,7 @@ type app struct {
 	preferences     playerPreferences
 	danmaku         danmakuState
 	preferencesPath string
+	sourcePath      string
 	playbackWait    playbackWait
 	playFailure     *episodeFailure
 	linkOpen        bool
