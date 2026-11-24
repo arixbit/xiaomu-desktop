@@ -45,7 +45,7 @@ for arg in flags:
 
     option, separator, value = arg.partition("=")
     if option in ("-platform", "--platform"):
-        sys.exit("Windows 发布固定构建 amd64 和 arm64，不能指定 -platform。")
+        sys.exit("Windows 发布固定构建 amd64，不能指定 -platform。")
     if option in ("-upload", "--upload"):
         sys.exit("请校验本地构建产物后单独上传，不能指定 -upload。")
     if option in ("-o", "--o", "-sign", "--sign"):
@@ -62,7 +62,7 @@ version = config["version"]
 slug = config.get("slug") or "xiaomu"
 out = Path(os.path.normpath(output_override or config.get("out") or "dist"))
 
-architectures = ("amd64", "arm64")
+architectures = ("amd64",)
 targets = ",".join(f"windows/{arch}" for arch in architectures)
 result = subprocess.run(["go", "tool", "mygo", "build", "-platform", targets, *args])
 if result.returncode:

@@ -37,7 +37,7 @@ macOS 13+ · Apple Silicon / Intel · Windows 10/11 · x64 / ARM64 · [下载最
 
 ## 下载与安装
 
-v0.9.4 接入全格式原生 `mygo-player`（`libmpv` LGPL-2.1+，支持 macOS 通用与 Windows x64 原生直解 MKV / 多音轨 / 内外挂字幕）、独立本地视频播放与本地弹幕、原生聚合网盘/AList 与官方网页自动登录（夸克 / UC / 阿里云盘 / 百度网盘原画直链），并加入无效站点自动过滤与搜索加速。macOS 提供通用 DMG 和 ZIP，Windows 提供 x64 和 ARM64 安装包。下载页附有 `SHA256SUMS` 校验文件。[最新版下载](https://github.com/arixbit/xiaomu-desktop/releases/latest) · [v0.9.4 版本说明](docs/releases/v0.9.4.md)
+v0.9.4 接入全格式原生 `mygo-player`（`libmpv` LGPL-2.1+，支持 macOS 通用与 Windows x64 原生直解 MKV / 多音轨 / 内外挂字幕）、独立本地视频播放与本地弹幕、原生聚合网盘/AList 与官方网页自动登录（夸克 / UC / 阿里云盘 / 百度网盘原画直链），并加入无效站点自动过滤与搜索加速。macOS 提供通用 DMG 和 ZIP，Windows 提供 x64 安装包。下载页附有 `SHA256SUMS` 校验文件。[最新版下载](https://github.com/arixbit/xiaomu-desktop/releases/latest) · [v0.9.4 版本说明](docs/releases/v0.9.4.md)
 
 ### macOS
 
@@ -46,7 +46,7 @@ v0.9.4 接入全格式原生 `mygo-player`（`libmpv` LGPL-2.1+，支持 macOS �
 
 ### Windows
 
-在 GitHub Releases 下载 `xiaomu-setup-0.9.4-amd64.exe`，ARM64 设备使用 `xiaomu-setup-0.9.4-arm64.exe`。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
+在 GitHub Releases 下载 `xiaomu-setup-0.9.4-amd64.exe`（Windows x64，内置 `mpv-2.dll`）。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
 
 打开小幕，在首页导入自己的配置。之后可以在侧边栏“片源”页更换配置，或在“直播”页导入自己的频道列表。
 
