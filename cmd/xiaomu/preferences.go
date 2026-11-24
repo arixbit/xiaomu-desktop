@@ -6,8 +6,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-
-	"github.com/egoist/mygo/ui"
 )
 
 type playerPreferences struct {
@@ -77,7 +75,7 @@ func (a *app) savePreferences() {
 	}
 }
 
-func (a *app) applyPlayerPreferences(p *ui.VideoPlayer) {
+func (a *app) applyPlayerPreferences(p mediaPlayer) {
 	if p == nil {
 		return
 	}

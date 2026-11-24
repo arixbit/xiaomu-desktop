@@ -12,11 +12,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/egoist/mygo/ui/video"
+	"github.com/egoist/mygo"
 )
 
-// playableFileExts are the extensions the built app claims in mygo.json
-// (fileAssociations). Double-clicking one in the file manager opens it in xiaomu.
+// playableFileExts are the container extensions supported by the system player
+// across all desktop platforms.
 var playableFileExts = map[string]bool{
 	".mp4":  true,
 	".mov":  true,
@@ -24,8 +24,53 @@ var playableFileExts = map[string]bool{
 	".m3u8": true,
 }
 
+// mpvExtraFileExts are additional container extensions handled natively when
+// mygo-player (libmpv) is supported on the current platform.
+var mpvExtraFileExts = map[string]bool{
+	".mkv":  true,
+	".webm": true,
+	".flv":  true,
+	".ts":   true,
+	".m2ts": true,
+	".avi":  true,
+	".wmv":  true,
+	".mpg":  true,
+	".mpeg": true,
+	".rmvb": true,
+	".3gp":  true,
+	".ogv":  true,
+}
+
+var subtitleFileExts = map[string]bool{
+	".srt": true,
+	".ass": true,
+	".ssa": true,
+	".vtt": true,
+	".sup": true,
+	".sub": true,
+}
+
+func playableFileExtensions() []string {
+	if mpvBackendSupported() {
+		return []string{"mp4", "mkv", "mov", "m4v", "m3u8", "webm", "flv", "ts", "m2ts", "avi", "wmv", "mpg", "mpeg", "rmvb"}
+	}
+	return []string{"mp4", "mov", "m4v", "m3u8"}
+}
+
+func subtitleFileExtensions() []string {
+	return []string{"srt", "ass", "ssa", "vtt", "sup", "sub"}
+}
+
 func isPlayableFile(path string) bool {
-	return playableFileExts[strings.ToLower(filepath.Ext(path))]
+	ext := strings.ToLower(filepath.Ext(path))
+	if playableFileExts[ext] {
+		return true
+	}
+	return mpvBackendSupported() && mpvExtraFileExts[ext]
+}
+
+func isSubtitleFile(path string) bool {
+	return subtitleFileExts[strings.ToLower(filepath.Ext(path))]
 }
 
 // deferUntilReady runs fn once the window exists. Events arriving before
@@ -107,16 +152,21 @@ func (a *app) playDirectURL(raw string, headers map[string]string) bool {
 // no headers need injecting for a local file. It is a no-op (and reports
 // false) for anything that is not a playable video extension.
 func (a *app) openLocalFile(path string) bool {
+	return a.openLocalFileWithSubtitles(path, nil)
+}
+
+func (a *app) openLocalFileWithSubtitles(path string, subtitles []string) bool {
 	if !isPlayableFile(path) {
-		a.status = "小幕只能打开 mp4、mov、m4v 或 m3u8 视频文件"
+		if mpvBackendSupported() {
+			a.status = "小幕不支持打开该文件格式，请选择常见视频文件（如 mp4、mkv、mov、ts、flv 等）"
+		} else {
+			a.status = "小幕只能打开 mp4、mov、m4v 或 m3u8 视频文件"
+		}
 		return false
-	}
-	if a.openLocal == nil {
-		a.openLocal = video.Open
 	}
 	a.prepareExternalPlayback()
 	a.closeCurrentPlayer()
-	p, err := a.openLocal(path)
+	p, err := a.openMediaFile(path, subtitles)
 	if err != nil {
 		a.status = "打开文件失败：" + err.Error()
 		a.syncNowPlaying()
@@ -136,7 +186,157 @@ func (a *app) openLocalFile(path string) bool {
 		_ = a.addRecent(path)
 	}
 	a.syncNowPlaying()
+	a.startDanmaku()
 	return true
+}
+
+// handleDroppedFiles opens the first playable video from dropped or selected
+// paths (attaching any companion subtitle files dropped alongside it). Dropping
+// a subtitle file onto an active track-capable player loads it directly.
+func (a *app) handleDroppedFiles(paths []string) bool {
+	if len(paths) == 0 {
+		return false
+	}
+	var videoPath string
+	var subtitles []string
+	for _, p := range paths {
+		if videoPath == "" && isPlayableFile(p) {
+			videoPath = p
+		} else if isSubtitleFile(p) {
+			subtitles = append(subtitles, p)
+		}
+	}
+	if videoPath != "" {
+		return a.openLocalFileWithSubtitles(videoPath, subtitles)
+	}
+	if len(subtitles) > 0 && a.player != nil {
+		if tp, ok := a.player.(trackCapablePlayer); ok {
+			if err := tp.AddSubtitleFile(subtitles[0]); err != nil {
+				a.status = "加载字幕失败：" + err.Error()
+				return false
+			}
+			a.status = "已加载外挂字幕：" + filepath.Base(subtitles[0])
+			return true
+		}
+	}
+	return a.openLocalFile(paths[0])
+}
+
+// openSubtitleFileDialog lets the user attach an external subtitle file to the
+// currently playing track-capable mediaPlayer.
+func (a *app) openSubtitleFileDialog() {
+	if a.closed || a.fileDialogOpen || a.player == nil {
+		return
+	}
+	if _, ok := a.player.(trackCapablePlayer); !ok {
+		return
+	}
+	pick := a.pickSubtitleFile
+	if pick == nil {
+		if a.window == nil {
+			return
+		}
+		win := a.window
+		pick = func() ([]string, error) {
+			return mygo.Dialog.Open(mygo.OpenDialogOptions{
+				Parent: win,
+				Title:  "选择外挂字幕文件",
+				Filters: []mygo.FileFilter{{
+					Name:       "字幕文件",
+					Extensions: subtitleFileExtensions(),
+				}},
+			})
+		}
+	}
+	a.fileDialogOpen = true
+	dispatch := a.dispatch
+	run := func() {
+		paths, err := pick()
+		apply := func() {
+			a.fileDialogOpen = false
+			if a.closed {
+				return
+			}
+			if err != nil {
+				a.status = "选择字幕失败：" + err.Error()
+				return
+			}
+			if len(paths) == 0 || a.player == nil {
+				return
+			}
+			if tp, ok := a.player.(trackCapablePlayer); ok {
+				if err := tp.AddSubtitleFile(paths[0]); err != nil {
+					a.status = "加载字幕失败：" + err.Error()
+					return
+				}
+				a.status = "已加载外挂字幕：" + filepath.Base(paths[0])
+			}
+		}
+		if dispatch == nil {
+			apply()
+		} else {
+			dispatch(apply)
+		}
+	}
+	if dispatch == nil {
+		run()
+	} else {
+		go run()
+	}
+}
+
+// openLocalFileDialog prompts the user to choose a local video file and plays
+// it immediately. The native dialog blocks until dismissed, so real runs invoke
+// it off the UI thread and dispatch the chosen path back onto the UI thread.
+func (a *app) openLocalFileDialog() {
+	if a.closed || a.fileDialogOpen {
+		return
+	}
+	pick := a.pickLocalFile
+	if pick == nil {
+		if a.window == nil {
+			return
+		}
+		win := a.window
+		pick = func() ([]string, error) {
+			return mygo.Dialog.Open(mygo.OpenDialogOptions{
+				Parent: win,
+				Title:  "打开本地视频",
+				Filters: []mygo.FileFilter{{
+					Name:       "视频文件",
+					Extensions: playableFileExtensions(),
+				}},
+			})
+		}
+	}
+	a.fileDialogOpen = true
+	dispatch := a.dispatch
+	run := func() {
+		paths, err := pick()
+		apply := func() {
+			a.fileDialogOpen = false
+			if a.closed {
+				return
+			}
+			if err != nil {
+				a.status = "选择文件失败：" + err.Error()
+				return
+			}
+			if len(paths) > 0 {
+				a.handleDroppedFiles(paths)
+			}
+		}
+		if dispatch == nil {
+			apply()
+		} else {
+			dispatch(apply)
+		}
+	}
+	if dispatch == nil {
+		run()
+	} else {
+		go run()
+	}
 }
 
 // deepLinkAction is one parsed xiaomu:// URL.

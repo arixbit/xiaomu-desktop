@@ -20,7 +20,7 @@ func newKeyboardTestApp(t *testing.T) *app {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.player, a.autoNext = p, false
+	a.player, a.autoNext = wrapSystemPlayer(p), false
 	return a
 }
 
@@ -89,11 +89,11 @@ func TestPlayerKeyboardDoesNotSeekLiveOrUnknownDuration(t *testing.T) {
 			a := newPlayerTestApp(t)
 			if live {
 				a.player.Close()
-				var err error
-				a.player, err = ui.NewVideoPlayer(&timedVideo{})
+				vp, err := ui.NewVideoPlayer(&timedVideo{})
 				if err != nil {
 					t.Fatal(err)
 				}
+				a.player = wrapSystemPlayer(vp)
 			}
 			a.playingLive = live
 			a.player.Pause()

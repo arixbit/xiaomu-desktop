@@ -44,6 +44,7 @@ const (
 	jobTitle                  // reading a title from one of its sources
 	jobPlay                   // resolving an episode into media
 	jobDanmaku                // searching or loading this episode's comments
+	jobPan                    // verifying cloud-drive credentials or cleaning temp files
 	jobSlots
 )
 
@@ -220,6 +221,7 @@ func (a *app) close() {
 	if err := a.latency.flush(); err != nil {
 		a.status = "测速记录保存失败：" + err.Error()
 	}
+	_ = a.siteHealth.flush()
 	a.closeSite()
 	a.clearTitle()
 	a.closeCurrentPlayer()
@@ -227,7 +229,9 @@ func (a *app) close() {
 	if a.proxy != nil {
 		_ = a.proxy.Close()
 		a.proxy = nil
+		a.proxySession = ""
 	}
+	a.closePanLoginWindow()
 }
 
 func (a *app) loadConfig(raw string) {
@@ -269,6 +273,10 @@ func (a *app) applyConfig(raw string, doc *config.Config, restoring bool) {
 		}
 		return
 	}
+	if !restoring {
+		a.clearSiteHealth()
+		a.showFailedSites = false
+	}
 	a.applyLibraryConfig(raw, doc, nil, nil)
 	if a.persist {
 		if err := a.saveImportedSource(raw); err != nil {
@@ -307,6 +315,8 @@ func (a *app) removeConfig() {
 	a.cancelJob(jobSite)
 	a.closeSite()
 	a.clearTitle()
+	a.clearSiteHealth()
+	a.showFailedSites = false
 	a.resetLibrary(nil)
 	a.browser.configURL = ""
 	if a.live.url == "" {
@@ -338,6 +348,7 @@ func (a *app) openSite(entry library.Entry) {
 			first, firstErr = session.Category(ctx, string(categories[0].ID), 1)
 		}
 		return jobResult{discard: session.Close, apply: func() {
+			a.markSiteHealthy(entry.Key())
 			a.closeSite()
 			b := &a.browser
 			b.session, b.categories, b.site = session, categories, entry
@@ -353,7 +364,10 @@ func (a *app) openSite(entry library.Entry) {
 				a.status = "站点已打开，读取首个分类失败：" + firstErr.Error()
 			}
 		}}, nil
-	}, nil)
+	}, func(err error) {
+		a.markSiteFailed(entry.Key())
+		a.status = jobError("打开站点", err)
+	})
 }
 
 // closeSite releases the site opened from the sources page.
@@ -387,7 +401,7 @@ func (a *app) loadPage(category string, page int) {
 
 func unsupported(kind config.Kind) string {
 	if kind == config.KindCSP {
-		return "此站点依赖专用 Android 爬虫，当前尚未适配；通用 XBPQ 规则已支持"
+		return "此站点依赖私有混淆 Android 爬虫，当前未适配；XBPQ、AList 与开放网盘站点已原生支持"
 	}
 	return fmt.Sprintf("当前版本暂不支持 %s 站点，请选择其他站点", kind)
 }
@@ -469,7 +483,10 @@ func (a *app) welcomeView(c *ui.Context) {
 				TextColor(textMuted)
 			ui.TextInput(c, &b.configURL).Label("配置地址").Placeholder("https://example.com/config.json").FillWidth()
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "支持 TVBox 配置、M3U 和 TXT 直播列表。").FontSize(13).TextColor(textMuted).Grow(1)
+				ui.Text(c, "支持 TVBox 配置、M3U / TXT 直播列表，也可直接拖入本地视频。").FontSize(13).TextColor(textMuted).Grow(1)
+				if glassButton(c, "打开本地视频").Clicked() {
+					a.openLocalFileDialog()
+				}
 				if primaryButton(c, "导入").Clicked() {
 					a.loadConfig(b.configURL)
 				}

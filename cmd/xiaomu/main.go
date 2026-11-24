@@ -13,31 +13,44 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/video"
 
+	mpvplayer "github.com/arixbit/mygo-player"
+	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/danmaku"
+	"github.com/arixbit/xiaomu-desktop/internal/pan"
 	"github.com/arixbit/xiaomu-desktop/internal/proxy"
 )
 
 // app is the window state; only the UI thread changes it. open is nil in the
-// real process and calls video.OpenURL; tests replace it.
+// real process and uses mygo-player (macOS & Windows amd64) with system
+// video.OpenURL fallback; tests replace open or openMPV.
 type app struct {
 	window  *mygo.Window
 	rawURL  string
 	referer string
 	ua      string
 	status  string
-	player  *ui.VideoPlayer
+	player  mediaPlayer
 	posters posterCache
 	proxy   *proxy.Proxy
 	open    func(string) (*ui.VideoPlayer, error)
+	openMPV func(string, mpvplayer.OpenOptions) (mediaPlayer, error)
+
+	proxySession  string
+	panUI         panUIState
+	panLogin      *panLoginSession
+	startPanLogin func(pan.Provider, func())
 
 	newDanmakuClient func(string) (*danmaku.Client, error)
 	// openLocal plays a file from disk directly, without the proxy.
 	// addRecent records a file in the system's recent documents.
 	// notify posts a system notification; nowPlaying publishes to the
-	// system Now Playing info. All four are replaceable for headless
+	// system Now Playing info. All are replaceable for headless
 	// tests and wired to MyGo in main().
-	openLocal      func(string) (*ui.VideoPlayer, error)
-	addRecent      func(string) error
+	openLocal        func(string) (*ui.VideoPlayer, error)
+	pickLocalFile    func() ([]string, error)
+	pickSubtitleFile func() ([]string, error)
+	fileDialogOpen   bool
+	addRecent        func(string) error
 	notify         func(id, title, body string)
 	nowPlaying     nowPlayingSink
 	nowPlayingLast nowPlayingSnapshot
@@ -66,6 +79,8 @@ type app struct {
 	searchFocused   bool
 	searchFocus     ui.Handle
 	latency         latencyStore
+	siteHealth      siteHealthStore
+	showFailedSites bool
 	speedTest       sourceSpeedTest
 	sourceMemory    sourceMemoryStore
 	sourceAttempt   sourcePlaybackAttempt
@@ -94,7 +109,9 @@ type app struct {
 	playingEpisode    string
 	playingSourceIdx  int
 	playingEpisodeIdx int
-	resumeAt       time.Duration
+	playingStreams    []catalog.Stream
+	playingStreamIdx  int
+	resumeAt          time.Duration
 	resumeIssued   bool
 	lastPosition   time.Duration
 
@@ -133,6 +150,10 @@ func (a *app) view(c *ui.Context) {
 }
 
 func (a *app) play() {
+	if ref, ok := pan.ParseShareURL(a.rawURL); ok {
+		a.openPanShare(ref)
+		return
+	}
 	if a.playDirectURL(a.rawURL, playbackHeaders(a.referer, a.ua)) {
 		a.linkOpen = false
 	}
@@ -148,7 +169,7 @@ func (a *app) closeCurrentPlayer() {
 
 // adoptPlayer makes p the current player and resets the per-play state.
 // Episode replacements close the old player here, once the new one opens.
-func (a *app) adoptPlayer(p *ui.VideoPlayer) {
+func (a *app) adoptPlayer(p mediaPlayer) {
 	a.closeCurrentPlayer()
 	a.player = p
 	a.applyPlayerPreferences(p)
@@ -168,6 +189,93 @@ func (a *app) adoptPlayer(p *ui.VideoPlayer) {
 	a.playingFile = false
 	a.playingName = ""
 	a.playingSource, a.playingEpisode = "", ""
+	a.playingStreams, a.playingStreamIdx = nil, 0
+}
+
+// openPlaybackStream serves a stream through an isolated proxy session that
+// preserves its filename extension and applies bounded range prefetch for
+// non-HLS cloud-drive media.
+func (a *app) openPlaybackStream(stream catalog.Stream, keepCurrent bool) bool {
+	raw := strings.TrimSpace(stream.URL)
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		a.status = "请输入 http 或 https 播放地址"
+		return false
+	}
+	p := a.proxy
+	if p == nil || keepCurrent {
+		p, err = proxy.Start(nil)
+		if err != nil {
+			a.status = "代理启动失败: " + err.Error()
+			return false
+		}
+		if !keepCurrent {
+			a.proxy = p
+		}
+	}
+	if !keepCurrent {
+		if a.proxySession != "" && p == a.proxy {
+			p.RemoveSession(a.proxySession)
+			a.proxySession = ""
+		}
+		a.closeCurrentPlayer()
+	}
+	sessID, localURL := p.RegisterSession(proxy.SessionConfig{
+		URL:      raw,
+		Headers:  stream.Headers,
+		Filename: stream.Filename,
+		Prefetch: !stream.IsHLS,
+	})
+	player, err := a.openMediaURL(localURL)
+	if err != nil {
+		p.RemoveSession(sessID)
+		if keepCurrent {
+			p.Close()
+		}
+		a.status = "无法打开: " + err.Error()
+		a.syncNowPlaying()
+		return false
+	}
+	a.adoptPlayer(player)
+	if keepCurrent {
+		if a.proxy != nil {
+			a.proxy.Close()
+		}
+		a.proxy = p
+	}
+	a.proxySession = sessID
+	a.playingLive, a.playingDirect = false, false
+	a.status = "正在播放"
+	return true
+}
+
+func (a *app) openMediaURL(localURL string) (mediaPlayer, error) {
+	if a.open != nil {
+		vp, err := a.open(localURL)
+		if err != nil {
+			return nil, err
+		}
+		return wrapSystemPlayer(vp), nil
+	}
+	if a.openMPV != nil {
+		return a.openMPV(localURL, mpvplayer.OpenOptions{})
+	}
+	return openMediaWithFallback(localURL, mpvplayer.OpenOptions{}, video.OpenURL)
+}
+
+func (a *app) openMediaFile(path string, subtitles []string) (mediaPlayer, error) {
+	if a.openLocal != nil {
+		vp, err := a.openLocal(path)
+		if err != nil {
+			return nil, err
+		}
+		return wrapSystemPlayer(vp), nil
+	}
+	opts := mpvplayer.OpenOptions{Subtitles: subtitles}
+	if a.openMPV != nil {
+		return a.openMPV(path, opts)
+	}
+	return openMediaWithFallback(path, opts, video.Open)
 }
 
 // playURL opens HTTP media through the proxy. The caller publishes Now
@@ -201,11 +309,7 @@ func (a *app) openPlaybackURL(raw string, headers map[string]string, keepCurrent
 	if !keepCurrent {
 		a.closeCurrentPlayer()
 	}
-	opener := a.open
-	if opener == nil {
-		opener = video.OpenURL
-	}
-	player, err := opener(p.Wrap(raw))
+	player, err := a.openMediaURL(p.Wrap(raw))
 	if err != nil {
 		if keepCurrent {
 			p.Close()
@@ -314,10 +418,23 @@ func main() {
 		a.restoreFavorites()
 		a.restoreSearchHistory()
 		a.restoreLatency()
+		a.restoreSiteHealth()
 		a.restorePreferences()
 		a.restoreSeriesSkips()
 		a.restoreSourceMemory()
+		a.restorePanCredentials()
 		a.setFullScreen(win.IsFullScreen())
+		win.OnFileDrop(func(e *mygo.FileDropEvent) {
+			if e == nil || len(e.Paths) == 0 {
+				return
+			}
+			paths := append([]string(nil), e.Paths...)
+			win.Update(func() {
+				if !a.closed {
+					a.handleDroppedFiles(paths)
+				}
+			})
+		})
 		win.OnEnterFullScreen(func() { win.Update(func() { a.setFullScreen(true) }) })
 		win.OnLeaveFullScreen(func() {
 			win.Update(func() {

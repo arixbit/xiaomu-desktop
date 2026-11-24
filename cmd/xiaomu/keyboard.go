@@ -9,6 +9,10 @@ import (
 // Register keys outside the auto-hiding controls. Focused controls and dialogs
 // get first use of shortcuts; single-key commands also leave text editing alone.
 func (a *app) handleKeyboard(c *ui.Context) {
+	if c.Shortcut(ui.Cmd, ui.KeyO) && !c.ShortcutRepeated() {
+		a.openLocalFileDialog()
+		return
+	}
 	if a.player == nil && a.library.root != nil && c.Shortcut(ui.Cmd, ui.KeyK) && !c.ShortcutRepeated() {
 		a.searchFocused = true
 		a.searchFocus.SelectAll(c)
@@ -45,7 +49,7 @@ func (a *app) handleKeyboard(c *ui.Context) {
 		}
 		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 	}
-	if a.hasEpisodes() && c.Shortcut(0, ui.KeyD) && !c.ShortcutRepeated() {
+	if a.canUseDanmaku() && c.Shortcut(0, ui.KeyD) && !c.ShortcutRepeated() {
 		a.toggleDanmaku()
 		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 	}
@@ -66,7 +70,7 @@ func (a *app) handleKeyboard(c *ui.Context) {
 	a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 }
 
-func togglePlayback(p *ui.VideoPlayer) {
+func togglePlayback(p mediaPlayer) {
 	if p.Playing() {
 		p.Pause()
 	} else {

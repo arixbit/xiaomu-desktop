@@ -120,3 +120,88 @@ func TestDeferUntilReadyQueuesBeforeWindow(t *testing.T) {
 		t.Fatal("work after the window existed did not run at once")
 	}
 }
+
+func TestHandleDroppedFilesPicksFirstPlayableVideo(t *testing.T) {
+	var opened string
+	a := &app{
+		openLocal: func(path string) (*ui.VideoPlayer, error) {
+			opened = path
+			return ui.NewVideoPlayer(&stillVideo{})
+		},
+	}
+	t.Cleanup(a.close)
+
+	if a.handleDroppedFiles(nil) || a.player != nil {
+		t.Fatal("empty drop must be a no-op")
+	}
+	if !a.handleDroppedFiles([]string{"/tmp/readme.txt", "/tmp/sub.srt", "/tmp/demo.mp4", "/tmp/other.mov"}) {
+		t.Fatalf("expected playable video in drop list to open: status=%q", a.status)
+	}
+	if opened != "/tmp/demo.mp4" || !a.playingFile || a.playingName != "demo.mp4" {
+		t.Fatalf("opened=%q playingFile=%v name=%q", opened, a.playingFile, a.playingName)
+	}
+
+	b := &app{
+		openLocal: func(string) (*ui.VideoPlayer, error) { return ui.NewVideoPlayer(&stillVideo{}) },
+	}
+	t.Cleanup(b.close)
+	if b.handleDroppedFiles([]string{"/tmp/notes.txt"}) || b.player != nil || b.status == "" {
+		t.Fatalf("unsupported drop should report format hint: player=%v status=%q", b.player != nil, b.status)
+	}
+}
+
+func TestOpenLocalFileUIEntryPointsAndShortcut(t *testing.T) {
+	// 1. Welcome page button works without any imported source.
+	var opened string
+	a := &app{
+		openLocal: func(path string) (*ui.VideoPlayer, error) {
+			opened = path
+			return ui.NewVideoPlayer(&stillVideo{})
+		},
+		pickLocalFile: func() ([]string, error) {
+			return []string{"/tmp/welcome.mp4"}, nil
+		},
+	}
+	t.Cleanup(a.close)
+
+	tt := ui.NewTester(a.view, 1120, 760)
+	if err := tt.Click("打开本地视频"); err != nil {
+		t.Fatalf("welcome open local button missing: %v (texts=%v)", err, tt.Texts())
+	}
+	if opened != "/tmp/welcome.mp4" || a.player == nil || !a.playingFile {
+		t.Fatalf("welcome button did not start playback: opened=%q player=%v file=%v", opened, a.player != nil, a.playingFile)
+	}
+
+	// 2. Cmd+O works while already playing to switch to another local file.
+	a.pickLocalFile = func() ([]string, error) {
+		return []string{"/tmp/next.mov"}, nil
+	}
+	tt.Key(ui.Cmd, ui.KeyO)
+	if opened != "/tmp/next.mov" || a.playingName != "next.mov" {
+		t.Fatalf("Cmd+O in player did not open next file: opened=%q name=%q", opened, a.playingName)
+	}
+
+	// 3. Sidebar "打开文件" button triggers the picker from the shell too.
+	a.leavePlayer()
+	a.pickLocalFile = func() ([]string, error) {
+		return []string{"/tmp/sidebar.m4v"}, nil
+	}
+	tt.Frame()
+	if err := tt.Click("打开文件"); err != nil {
+		t.Fatalf("sidebar open file button missing: %v (texts=%v)", err, tt.Texts())
+	}
+	if opened != "/tmp/sidebar.m4v" || a.playingName != "sidebar.m4v" {
+		t.Fatalf("sidebar button did not open file: opened=%q name=%q", opened, a.playingName)
+	}
+
+	// 4. Picker error reports status cleanly and clears fileDialogOpen so retries work.
+	a.leavePlayer()
+	a.pickLocalFile = func() ([]string, error) {
+		return nil, errors.New("cancelled by system")
+	}
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.KeyO)
+	if a.fileDialogOpen || a.status == "" {
+		t.Fatalf("picker error state bad: fileDialogOpen=%v status=%q", a.fileDialogOpen, a.status)
+	}
+}

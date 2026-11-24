@@ -1,6 +1,8 @@
 package main
 
 import (
+	"runtime"
+
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/plugins/updater"
 	updatenative "github.com/egoist/mygo/plugins/updater/native"
@@ -51,6 +53,22 @@ func updateButton(c *ui.Context, version string) ui.Element {
 func (a *app) initUpdates() {
 	mygo.Use(updatenative.New(updater.Options{Language: "zh-Hans"}))
 	updater.OnInstalled(a.flushHistory)
+	fileItems := []*mygo.MenuItem{
+		{
+			Label:       "打开视频文件…",
+			Accelerator: "CmdOrCtrl+O",
+			Click: func(*mygo.MenuItem, *mygo.Window) {
+				a.deferUntilReady(a.openLocalFileDialog)
+			},
+		},
+		{Role: mygo.RoleOpenRecent},
+		mygo.Separator(),
+	}
+	if runtime.GOOS == "darwin" {
+		fileItems = append(fileItems, &mygo.MenuItem{Role: mygo.RoleClose})
+	} else {
+		fileItems = append(fileItems, &mygo.MenuItem{Role: mygo.RoleQuit})
+	}
 	mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
 		{Label: "小幕", Submenu: []*mygo.MenuItem{
 			{Role: mygo.RoleAbout},
@@ -64,7 +82,7 @@ func (a *app) initUpdates() {
 			mygo.Separator(),
 			{Role: mygo.RoleQuit},
 		}},
-		{Role: mygo.RoleFileMenu},
+		{Label: "文件", Submenu: fileItems},
 		{Role: mygo.RoleEditMenu},
 		{Role: mygo.RoleViewMenu},
 		{Role: mygo.RoleWindowMenu},

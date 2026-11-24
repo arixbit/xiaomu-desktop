@@ -61,6 +61,7 @@ type Options struct {
 	Fetch       config.Fetcher
 	Timeout     time.Duration
 	SearchCache *SearchCache
+	Skip        map[string]bool
 }
 
 // Result is one site's completed page; failures do not discard other results.
@@ -147,7 +148,7 @@ func Scan(ctx context.Context, root *config.Config, options Options, emit func(E
 				continue
 			}
 			seenSites[entry.Key()] = true
-			if site.Kind.Unsupported() || (options.Query != "" && !site.SearchEnabled()) {
+			if site.Kind.Unsupported() || (options.Query != "" && (!site.SearchEnabled() || options.Skip[entry.Key()])) {
 				progress.Skipped++
 				continue
 			}
@@ -237,10 +238,12 @@ func Scan(ctx context.Context, root *config.Config, options Options, emit func(E
 }
 
 func taskPriority(work task) int {
-	if work.target.Entry.Site.Kind == config.KindJSON || work.target.Entry.Site.Kind == config.KindXML {
+	switch work.target.Entry.Site.Kind {
+	case config.KindJSON, config.KindXML, config.KindPanWeb, config.KindPanShare, config.KindAList:
 		return 0
+	default:
+		return 1
 	}
-	return 1
 }
 
 func execute(parent context.Context, work task, options Options) (out completion) {

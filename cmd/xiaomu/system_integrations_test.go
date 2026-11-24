@@ -96,11 +96,11 @@ func TestSystemIntegrationNowPlayingMustPublishLiveChannel(t *testing.T) {
 
 func TestSystemIntegrationNotificationMustRevealDetailDuringPlayback(t *testing.T) {
 	a, _, _ := followingFixture(t)
-	var err error
-	a.player, err = openIntegrationVideo("")
+	vp, err := openIntegrationVideo("")
 	if err != nil {
 		t.Fatal(err)
 	}
+	a.player = wrapSystemPlayer(vp)
 	a.handleNotificationClick(followNotificationID("示例剧"))
 	if a.player != nil || a.route() != routeDetail {
 		t.Fatalf("notification target still covered: player=%v route=%v title=%v", a.player != nil, a.route(), a.title.name)

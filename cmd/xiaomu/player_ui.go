@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
@@ -98,7 +99,7 @@ func (a *app) playerScreen(c *ui.Context) {
 	screen.Children(func() {
 		ui.Row(c).Fill().Children(func() {
 			ui.Box(c).Grow(1).FillHeight().Clip().Children(func() {
-				ui.Video(c, p).Key(p).Fill().Fit(ui.Contain).Label("视频画面").Focusable().AutoFocus().Bind(&a.playerFocus).
+				p.View(c).Key(p).Fill().Fit(ui.Contain).Label("视频画面").Focusable().AutoFocus().Bind(&a.playerFocus).
 					HitTest(func(x, y float32, r ui.Rect) bool {
 						w, h := p.Size()
 						return a.fullScreen || playerPictureRect(r, w, h).Contains(x, y)
@@ -125,6 +126,7 @@ func (a *app) playerScreen(c *ui.Context) {
 		}
 	})
 	a.danmakuDialog(c)
+	a.panAuthPromptDialog(c)
 }
 
 func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
@@ -185,7 +187,7 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 	})
 }
 
-func (a *app) playerState(c *ui.Context, p *ui.VideoPlayer) {
+func (a *app) playerState(c *ui.Context, p mediaPlayer) {
 	message := ""
 	switch {
 	case a.running(jobPlay):
@@ -218,7 +220,7 @@ func (a *app) playerState(c *ui.Context, p *ui.VideoPlayer) {
 	})
 }
 
-func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, compact bool) {
+func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact bool) {
 	ui.Row(c).Absolute().Left(18).Right(18).Bottom(18).Justify(ui.Center).Children(func() {
 		ui.Column(c).FillWidth().MaxWidth(900).Padding(10, 15).Gap(8).
 			Radius(24).Material(glass.Glass{Style: glass.Clear, Tint: ui.RGBA(9, 15, 31, 0.59)}).
@@ -288,6 +290,9 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 					a.savePreferences()
 				}
 				ui.Spacer(c)
+				a.streamControls(c)
+				a.audioTrackControls(c, p)
+				a.subtitleTrackControls(c, p)
 				a.danmakuButton(c)
 				rate := p.Rate()
 				if rate <= 0 {
@@ -470,7 +475,7 @@ func (a *app) hasEpisodes() bool {
 
 // trackPlayback seeks to where a resumed episode stopped, then keeps the
 // position for the play history and for changing line or source.
-func (a *app) trackPlayback(c *ui.Context, p *ui.VideoPlayer) {
+func (a *app) trackPlayback(c *ui.Context, p mediaPlayer) {
 	if !p.Ready() || p.Err() != nil || a.playFailure != nil || a.autoNextPending {
 		return
 	}
@@ -496,7 +501,7 @@ func (a *app) trackPlayback(c *ui.Context, p *ui.VideoPlayer) {
 	a.recordHistory(p, c.Now())
 }
 
-func (a *app) advanceEpisode(p *ui.VideoPlayer, now time.Time) {
+func (a *app) advanceEpisode(p mediaPlayer, now time.Time) {
 	if !a.hasEpisodes() || !a.autoNext || a.autoNextPending || a.running(jobPlay) || a.panelChoice != nil && a.panelOpen || a.playFailure != nil || p.Err() != nil {
 		a.episodeEnd = playbackEnd{}
 		return
@@ -551,6 +556,11 @@ func (a *app) leavePlayer() {
 	a.clearPanelChoice()
 	a.flushHistory()
 	a.closeCurrentPlayer()
+	if a.proxy != nil && a.proxySession != "" {
+		a.proxy.RemoveSession(a.proxySession)
+		a.proxySession = ""
+	}
+	a.playingStreams, a.playingStreamIdx = nil, 0
 	a.syncNowPlaying()
 	a.playingLive, a.playingDirect = false, false
 	a.playingFile = false
@@ -635,6 +645,110 @@ func trimNumericLabel(digits, original string) string {
 		}
 	}
 	return trimmed
+}
+
+func (a *app) streamControls(c *ui.Context) {
+	if len(a.playingStreams) <= 1 {
+		return
+	}
+	currentLabel := "清晰度"
+	if a.playingStreamIdx >= 0 && a.playingStreamIdx < len(a.playingStreams) {
+		if l := a.playingStreams[a.playingStreamIdx].Label; l != "" {
+			currentLabel = l
+		}
+	}
+	ui.MenuButton(c, currentLabel, func(m *ui.Menu) {
+		for i, s := range a.playingStreams {
+			label := s.Label
+			if label == "" {
+				label = fmt.Sprintf("流 %d", i+1)
+			}
+			selected := i == a.playingStreamIdx
+			if m.Item(label).ID(fmt.Sprintf("stream-%d", i)).Radio(selected).Chosen() {
+				a.switchPlayingStream(i)
+			}
+		}
+	}).Label("切换画质")
+}
+
+func (a *app) audioTrackControls(c *ui.Context, p mediaPlayer) {
+	tp, ok := p.(trackCapablePlayer)
+	if !ok {
+		return
+	}
+	tracks := tp.AudioTracks()
+	if len(tracks) == 0 {
+		return
+	}
+	ui.MenuButton(c, "音轨", func(m *ui.Menu) {
+		for i, tr := range tracks {
+			label := formatAudioTrackLabel(tr, i)
+			if m.Item(label).ID(fmt.Sprintf("audio-%d", tr.ID)).Radio(tr.Selected).Chosen() {
+				if err := tp.SelectAudioTrack(tr.ID); err != nil {
+					a.status = "切换音轨失败：" + err.Error()
+				}
+			}
+		}
+	}).Label("切换音轨")
+}
+
+func (a *app) subtitleTrackControls(c *ui.Context, p mediaPlayer) {
+	if a.playingLive {
+		return
+	}
+	tp, ok := p.(trackCapablePlayer)
+	if !ok {
+		return
+	}
+	tracks := tp.SubtitleTracks()
+	visible := tp.SubtitleVisible()
+	ui.MenuButton(c, "字幕", func(m *ui.Menu) {
+		hasSelected := false
+		for i, tr := range tracks {
+			selected := tr.Selected && visible
+			if selected {
+				hasSelected = true
+			}
+			label := formatSubtitleTrackLabel(tr, i)
+			if m.Item(label).ID(fmt.Sprintf("sub-%d", tr.ID)).Radio(selected).Chosen() {
+				if err := tp.SelectSubtitleTrack(tr.ID); err != nil {
+					a.status = "切换字幕失败：" + err.Error()
+				}
+			}
+		}
+		if m.Item("关闭字幕").ID("sub-off").Radio(!hasSelected).Chosen() {
+			if err := tp.DisableSubtitleTrack(); err != nil {
+				a.status = "关闭字幕失败：" + err.Error()
+			}
+		}
+		m.Separator()
+		if m.Item("加载外挂字幕…").ID("sub-load").Chosen() {
+			a.openSubtitleFileDialog()
+		}
+	}).Label("切换字幕")
+}
+
+func (a *app) switchPlayingStream(idx int) {
+	if idx < 0 || idx >= len(a.playingStreams) || idx == a.playingStreamIdx {
+		return
+	}
+	s := a.playingStreams[idx]
+	at := a.playbackPosition()
+	streams := append([]catalog.Stream(nil), a.playingStreams...)
+	line, ep := a.playingSource, a.playingEpisode
+	srcIdx, epIdx := a.playingSourceIdx, a.playingEpisodeIdx
+	danmakuURL := a.danmaku.sourceURL
+	open, touched := a.panelOpen, a.panelTouched
+	if !a.openPlaybackStream(s, true) {
+		return
+	}
+	a.playingStreams, a.playingStreamIdx = streams, idx
+	a.playingSource, a.playingEpisode = line, ep
+	a.playingSourceIdx, a.playingEpisodeIdx = srcIdx, epIdx
+	a.resumeAt = at
+	a.panelOpen, a.panelTouched = open, touched
+	a.danmaku.sourceURL = danmakuURL
+	a.syncNowPlaying()
 }
 
 func (a *app) livePlayerControls(c *ui.Context) {

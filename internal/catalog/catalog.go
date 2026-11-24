@@ -77,14 +77,31 @@ type Detail struct {
 	Sources []Source
 }
 
+// Stream is one selectable media rendition for an episode (for example,
+// a cloud-drive 4K transcoded HLS stream or an original MKV direct link).
+type Stream struct {
+	Label          string
+	Quality        string
+	URL            string
+	Headers        map[string]string
+	Filename       string
+	NativePlayable bool
+	IsHLS          bool
+	IsOriginal     bool
+	Size           int64
+}
+
 // Playback preserves the site result until the web resolver produces media.
 type Playback struct {
-	URL     string
-	Headers map[string]string
-	Parse   bool
-	JX      bool
-	PlayURL string
-	Danmaku string
+	URL      string
+	Headers  map[string]string
+	Parse    bool
+	JX       bool
+	PlayURL  string
+	Danmaku  string
+	Filename string
+	PanShare string
+	Streams  []Stream
 }
 
 // Session owns one site's runtime. Calls and Close are serialized.
@@ -307,7 +324,16 @@ func ReadPlayback(raw string) (Playback, error) {
 	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
 		return Playback{}, fmt.Errorf("读取播放地址：%w", err)
 	}
-	u, err := url.Parse(strings.TrimSpace(doc.URL))
+	rawURL := strings.TrimSpace(doc.URL)
+	if isPanShareRef(rawURL) {
+		return Playback{
+			URL:      rawURL,
+			Headers:  doc.Header,
+			Danmaku:  strings.TrimSpace(doc.Danmaku),
+			PanShare: rawURL,
+		}, nil
+	}
+	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return Playback{}, fmt.Errorf("站点没有返回可播放的 http/https 地址")
 	}
@@ -315,4 +341,24 @@ func ReadPlayback(raw string) (Playback, error) {
 		Parse: doc.Parse != "" && doc.Parse != "0",
 		JX:    doc.JX != "" && doc.JX != "0", PlayURL: doc.PlayURL,
 		Danmaku: strings.TrimSpace(doc.Danmaku)}, nil
+}
+
+func isPanShareRef(raw string) bool {
+	if raw == "" {
+		return false
+	}
+	lower := strings.ToLower(raw)
+	if strings.HasPrefix(lower, "push://") || strings.HasPrefix(lower, "push:") || strings.HasPrefix(lower, "pan://") {
+		return true
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	switch strings.ToLower(u.Hostname()) {
+	case "pan.quark.cn", "drive.uc.cn", "alipan.com", "www.alipan.com", "aliyundrive.com", "www.aliyundrive.com",
+		"115.com", "115cdn.com", "anxia.com", "cloud.189.cn", "pan.xunlei.com", "pan.baidu.com":
+		return strings.Contains(u.Path, "/s/") || strings.Contains(u.Path, "/t/") || u.Query().Get("code") != ""
+	}
+	return false
 }

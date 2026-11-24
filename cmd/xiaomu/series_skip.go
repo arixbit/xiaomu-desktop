@@ -111,11 +111,11 @@ func (a *app) restoreSeriesSkips() {
 }
 
 type seriesSkipPlayback struct {
-	player         *ui.VideoPlayer
+	player         mediaPlayer
 	openingHandled bool
 }
 
-func (a *app) applyOpeningSkip(p *ui.VideoPlayer) {
+func (a *app) applyOpeningSkip(p mediaPlayer) {
 	if !a.hasEpisodes() || a.running(jobPlay) {
 		return
 	}
@@ -135,14 +135,14 @@ func (a *app) applyOpeningSkip(p *ui.VideoPlayer) {
 	}
 }
 
-func (a *app) skipEndingReady(p *ui.VideoPlayer) bool {
+func (a *app) skipEndingReady(p mediaPlayer) bool {
 	return a.hasEpisodes() && p.Ready() && p.Playing() && !p.Buffering() && p.Err() == nil &&
 		a.resumeAt == 0 && a.seriesSkips.get(a.title.name).inEnding(p.Position(), p.Duration())
 }
 
 // Skipping the credits completes this episode even if the next episode's
 // resolution fails. Resuming later must then select the following episode.
-func (a *app) recordEpisodeCompletion(p *ui.VideoPlayer) {
+func (a *app) recordEpisodeCompletion(p mediaPlayer) {
 	if !a.hasEpisodes() || p.Duration() <= 0 {
 		return
 	}

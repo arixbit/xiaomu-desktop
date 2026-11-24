@@ -1,4 +1,4 @@
-Xiaomu v0.9.3 — License notices
+Xiaomu v0.9.4 — License notices
 
 ========================================================================
 
@@ -1993,3 +1993,67 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+
+========================================================================
+
+github.com/arixbit/mygo-player (v0.2.1)
+https://github.com/arixbit/mygo-player
+
+MIT License
+
+Copyright (c) 2026 arixbit
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+========================================================================
+
+libmpv (LGPL 2.1 or later) — bundled dynamically via mygo-player
+
+Xiaomu loads libmpv dynamically at runtime (libmpv.dylib on macOS, mpv-2.dll
+on Windows x64) via mygo/ffi without static linking. The distributed libmpv
+binaries are compiled strictly without GPL/nonfree components (mpv -Dgpl=false;
+FFmpeg without --enable-gpl, --enable-nonfree, or --enable-version3) and are
+licensed under the GNU Lesser General Public License v2.1 or later
+(LGPL-2.1-or-later): https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+
+Dynamic Relinking (LGPL 2.1 Section 6):
+Users may replace the bundled libmpv dynamic library at any time without
+recompiling Xiaomu by setting the MYGO_NATIVE_MPV environment variable to a
+compatible libmpv shared library path, or by replacing
+Contents/Resources/libmpv.dylib (macOS) or mpv-2.dll (Windows x64).
+
+Included compatible libraries in prebuilt libmpv:
+- mpv (LGPL-2.1-or-later)
+- FFmpeg (LGPL-2.1-or-later)
+- libplacebo (LGPL-2.1-or-later)
+- libass (ISC)
+- FreeType (FTL)
+- HarfBuzz (MIT)
+- FriBidi (LGPL-2.1-or-later)
+- Little CMS / lcms2 (MIT)
+- dav1d (BSD-2-Clause)
+- libunibreak (Zlib)
+- libiconv (LGPL-2.1-or-later, Windows build)
+- zlib (Zlib, Windows build)
+
+Corresponding build scripts, versions, and configure flags are published at:
+https://github.com/arixbit/mygo-player

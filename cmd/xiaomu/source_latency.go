@@ -265,8 +265,12 @@ func (a *app) startSourceSpeedTest() {
 			}
 			r := r
 			update(func() {
+				key := r.entry.Key()
 				if r.d > 0 {
-					a.recordLatency(r.entry.Key(), r.d)
+					a.recordLatency(key, r.d)
+					a.markSiteHealthy(key)
+				} else {
+					a.markSiteFailed(key)
 				}
 				a.speedTest.done++
 				if a.speedTest.done >= a.speedTest.total {

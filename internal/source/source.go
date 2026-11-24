@@ -9,9 +9,11 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/arixbit/xiaomu-desktop/internal/alist"
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
 	"github.com/arixbit/xiaomu-desktop/internal/fongmi"
+	"github.com/arixbit/xiaomu-desktop/internal/pan"
 	"github.com/arixbit/xiaomu-desktop/internal/xbpq"
 )
 
@@ -50,8 +52,11 @@ func OpenContent(ctx context.Context, site config.Site, assets string) (Session,
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if site.Kind == config.KindJSON || site.Kind == config.KindXML {
+	switch site.Kind {
+	case config.KindJSON, config.KindXML:
 		return catalog.OpenCMS(site)
+	case config.KindPanWeb:
+		return pan.OpenWebSiteContent(site)
 	}
 	session, _, err := Open(ctx, site, assets)
 	return session, err
@@ -60,8 +65,15 @@ func OpenContent(ctx context.Context, site config.Site, assets string) (Session,
 // Open detects mislabeled type-3 scripts before choosing an adapter. Only
 // FongMi candidates are fetched for inspection; other sites retain their kind.
 func Open(ctx context.Context, site config.Site, assets string) (Session, []catalog.Category, error) {
-	if site.Kind == config.KindXBPQ {
+	switch site.Kind {
+	case config.KindXBPQ:
 		return xbpq.Open(ctx, site)
+	case config.KindAList:
+		return alist.Open(ctx, site)
+	case config.KindPanShare:
+		return pan.OpenShareList(ctx, site)
+	case config.KindPanWeb:
+		return pan.OpenWebSite(ctx, site)
 	}
 	if site.Kind == config.KindFongMi && scriptURL(site.API) {
 		res, err := config.HTTPFetcher(nil)(ctx, site.API)

@@ -93,10 +93,11 @@ func TestOpeningSkipOncePerEpisodeAndCanBeDisabled(t *testing.T) {
 	if err := a.seriesSkips.set(a.title.name, seriesSkipRule{Opening: 10}); err != nil {
 		t.Fatal(err)
 	}
-	p, err := ui.NewVideoPlayer(&timedVideo{})
+	vp, err := ui.NewVideoPlayer(&timedVideo{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	p := wrapSystemPlayer(vp)
 	a.player.Close()
 	a.player = p
 	p.Pause()

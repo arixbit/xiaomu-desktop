@@ -9,7 +9,6 @@ import (
 
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
-	"github.com/egoist/mygo/ui"
 )
 
 const sourceMemoryLimit = 200
@@ -185,7 +184,7 @@ type sourcePlaybackAttempt struct {
 	item      library.Item
 	line      string
 	episode   string
-	player    *ui.VideoPlayer
+	player    mediaPlayer
 	started   time.Time
 	position  time.Duration
 	sampled   bool
@@ -239,7 +238,7 @@ func (a *app) failSourceAttempt() {
 	}
 }
 
-func (a *app) observeSourcePlayback(now time.Time, p *ui.VideoPlayer, err error) {
+func (a *app) observeSourcePlayback(now time.Time, p mediaPlayer, err error) {
 	s := &a.sourceAttempt
 	if s.title == nil || s.title != a.title || p != s.player || a.playingSource != s.line || a.playingEpisode != s.episode {
 		return

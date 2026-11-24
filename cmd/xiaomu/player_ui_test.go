@@ -31,7 +31,7 @@ func newPlayerTestApp(t *testing.T) *app {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &app{player: player, autoNext: true, playingSource: "线路", playingEpisode: "第1集"}
+	a := &app{player: wrapSystemPlayer(player), autoNext: true, playingSource: "线路", playingEpisode: "第1集"}
 	a.title = &titlePage{name: "示例片", failed: map[string]string{}}
 	a.title.detail = &catalog.Detail{
 		Name: "示例片",

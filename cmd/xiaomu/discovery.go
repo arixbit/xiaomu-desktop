@@ -167,10 +167,15 @@ func (a *app) homeView(c *ui.Context) {
 		if a.library.root == nil {
 			ui.Column(c).FillWidth().Padding(20).Gap(12).Radius(22).Material(glassPane).Children(func() {
 				ui.Text(c, "添加片源，继续观看").FontSize(22).Bold()
-				ui.Text(c, "观看记录和追剧仍保存在本机。重新添加片源后即可继续播放。").TextColor(textMuted)
-				if primaryButton(c, "添加片源").AlignSelf(ui.Start).Clicked() {
-					a.browser.importOpen = true
-				}
+				ui.Text(c, "观看记录和追剧仍保存在本机。重新添加片源后即可继续播放，也可直接打开或拖入本地视频文件。").TextColor(textMuted)
+				ui.Row(c).Gap(10).Children(func() {
+					if primaryButton(c, "添加片源").Clicked() {
+						a.browser.importOpen = true
+					}
+					if glassButton(c, "打开本地视频").Clicked() {
+						a.openLocalFileDialog()
+					}
+				})
 			})
 			return
 		}

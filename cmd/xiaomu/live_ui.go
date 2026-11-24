@@ -483,7 +483,7 @@ func (a *app) liveDialog(c *ui.Context) {
 }
 
 // advanceLive tries each alternative once when the player fails or never starts.
-func (a *app) advanceLive(p *ui.VideoPlayer) {
+func (a *app) advanceLive(p mediaPlayer) {
 	if !a.playingLive || p == nil || a.live.playingChannel < 0 || a.live.playingChannel >= len(a.live.channels) {
 		return
 	}

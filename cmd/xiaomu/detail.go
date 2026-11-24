@@ -10,6 +10,7 @@ import (
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
+	"github.com/arixbit/xiaomu-desktop/internal/pan"
 	"github.com/arixbit/xiaomu-desktop/internal/resolve"
 	"github.com/arixbit/xiaomu-desktop/internal/source"
 	"github.com/egoist/mygo/ui"
@@ -259,6 +260,13 @@ func openItem(ctx context.Context, item library.Item, assets string) (source.Ses
 		session.Close()
 		return nil, catalog.Detail{}, err
 	}
+	if expanded, handled, expErr := pan.ExpandDetailShares(ctx, detail); handled {
+		if expErr != nil {
+			session.Close()
+			return nil, catalog.Detail{}, expErr
+		}
+		detail = expanded
+	}
 	if detail.Name == "" {
 		detail.Name = item.Video.Name
 	}
@@ -351,12 +359,28 @@ func entryParsers(entry library.Entry) []config.Parser {
 	return entry.Config.Parsers
 }
 
-// resolvePlay turns an episode into media, through the line's parsers or a
-// web page when the site does not return a direct address.
+// resolvePlay turns an episode into media, through cloud-drive resolution,
+// the line's parsers or a web page when the site does not return a direct address.
 func resolvePlay(ctx context.Context, session source.Session, resolver resolve.Resolver, line string, episode catalog.Episode) (catalog.Playback, error) {
+	if pan.IsPanLink(episode.ID) {
+		return pan.ResolveEpisode(ctx, episode.ID)
+	}
 	play, err := session.Play(ctx, line, episode)
 	if err != nil {
 		return catalog.Playback{}, err
+	}
+	if play.PanShare != "" {
+		resolved, panErr := pan.ResolveEpisode(ctx, play.PanShare)
+		if panErr != nil {
+			return catalog.Playback{}, panErr
+		}
+		if resolved.Danmaku == "" {
+			resolved.Danmaku = play.Danmaku
+		}
+		return resolved, nil
+	}
+	if len(play.Streams) > 0 {
+		return play, nil
 	}
 	return resolver.Resolve(ctx, play)
 }
@@ -423,12 +447,73 @@ func (a *app) loadEpisode(line string, episode catalog.Episode, at time.Duration
 		}}, nil
 	}, func(err error) {
 		a.failSourceAttempt()
+		if provider, needAuth := pan.AuthRequiredProvider(err); needAuth {
+			a.playFailure = &episodeFailure{
+				line:         line,
+				episode:      episode,
+				at:           at,
+				err:          err,
+				authProvider: provider,
+			}
+			a.status = ""
+			if a.player != nil {
+				a.player.Pause()
+			}
+			a.promptPanLogin(provider, err.Error(), func() {
+				a.resumeAfterPanLogin(line, episode, at)
+			})
+			return
+		}
 		a.playFailure = &episodeFailure{line: line, episode: episode, at: at, err: fmt.Errorf("%s", jobError(label, err))}
 		a.status = ""
 		if a.player != nil {
 			a.player.Pause()
 		}
 	})
+}
+
+// resumeAfterPanLogin refreshes the episode list if the clicked item was an
+// unexpanded share link placeholder, then immediately starts playback.
+func (a *app) resumeAfterPanLogin(line string, episode catalog.Episode, at time.Duration) {
+	t := a.title
+	if t == nil || t.session == nil {
+		return
+	}
+	if _, isRawShare := pan.ParseShareURL(episode.ID); isRawShare {
+		videoID := string(t.item.Video.ID)
+		session := t.session
+		a.run(jobPlay, "加载网盘剧集", func(ctx context.Context) (jobResult, error) {
+			detail, err := session.Detail(ctx, videoID)
+			if err != nil {
+				return jobResult{}, err
+			}
+			if expanded, handled, expErr := pan.ExpandDetailShares(ctx, detail); handled && expErr == nil {
+				detail = expanded
+			}
+			return jobResult{apply: func() {
+				if a.title != t {
+					return
+				}
+				t.detail = &detail
+				for i, src := range detail.Sources {
+					if src.Name == line && len(src.Episodes) > 0 {
+						t.line, t.chunk = i, 0
+						a.playEpisodeAt(src.Name, src.Episodes[0], at)
+						return
+					}
+				}
+				if len(detail.Sources) > 0 && len(detail.Sources[0].Episodes) > 0 {
+					t.line, t.chunk = 0, 0
+					a.playEpisodeAt(detail.Sources[0].Name, detail.Sources[0].Episodes[0], at)
+				}
+			}}, nil
+		}, func(err error) {
+			a.playFailure = &episodeFailure{line: line, episode: episode, at: at, err: fmt.Errorf("%s", jobError("加载网盘剧集", err))}
+			a.status = ""
+		})
+		return
+	}
+	a.playEpisodeAt(line, episode, at)
 }
 
 // startEpisode opens resolved media as an episode of the title on show.
@@ -453,13 +538,37 @@ func (a *app) startEpisode(play catalog.Playback, line string, episode catalog.E
 	a.notePlayingEpisode(line, episode, at)
 }
 
+func selectPlaybackStream(play catalog.Playback) (catalog.Stream, int, bool) {
+	if len(play.Streams) == 0 {
+		return catalog.Stream{}, -1, false
+	}
+	for i, s := range play.Streams {
+		if s.URL == play.URL {
+			return s, i, true
+		}
+	}
+	idx := pan.PickPreferredStream(play.Streams, pan.DefaultCredentials().EffectiveQuality())
+	if idx < 0 || idx >= len(play.Streams) {
+		idx = 0
+	}
+	return play.Streams[idx], idx, true
+}
+
 // An open episode panel stays in place across line and source changes,
 // including in compact windows and fullscreen.
 func (a *app) openEpisodeMedia(play catalog.Playback) bool {
 	replacing := a.player != nil
 	open, touched := a.panelOpen, a.panelTouched
-	if !a.openPlaybackURL(play.URL, play.Headers, replacing) {
-		return false
+	if stream, idx, ok := selectPlaybackStream(play); ok {
+		if !a.openPlaybackStream(stream, replacing) {
+			return false
+		}
+		a.playingStreams = append([]catalog.Stream(nil), play.Streams...)
+		a.playingStreamIdx = idx
+	} else {
+		if !a.openPlaybackURL(play.URL, play.Headers, replacing) {
+			return false
+		}
 	}
 	if replacing {
 		a.panelOpen, a.panelTouched = open, touched
@@ -638,6 +747,11 @@ func (a *app) sourceAccordion(c *ui.Context, candidates []library.Item) {
 		} else {
 			ui.Spacer(c)
 		}
+		if titleKey(search.query) == titleKey(t.name) && len(search.groups) > 1 && len(candidates) > 0 {
+			if glassButton(c, fmt.Sprintf("相近结果 (%d)", len(search.groups))).Clicked() {
+				a.showRelated()
+			}
+		}
 		if !a.inStack(routeSearch) && a.library.root != nil && titleKey(search.query) != titleKey(t.name) {
 			if glassButton(c, "查找其他来源").Clicked() {
 				a.startScan(search, t.name, false)
@@ -722,6 +836,12 @@ func (a *app) sourceRowContent(c *ui.Context, item library.Item, dot, state stri
 		ui.Box(c).Size(8, 8).Radius(4).Background(ui.Hex(dot))
 	}
 	ui.Text(c, item.Entry.Label()).Bold().SingleLine()
+	switch item.Entry.Site.Kind {
+	case config.KindPanWeb, config.KindPanShare:
+		ui.Text(c, "网盘").FontSize(12).TextColor(ui.Hex("#ff8b78")).SingleLine()
+	case config.KindAList:
+		ui.Text(c, "AList").FontSize(12).TextColor(ui.Hex("#ff8b78")).SingleLine()
+	}
 	if item.Video.Remarks != "" {
 		ui.Text(c, item.Video.Remarks).FontSize(13).TextColor(textMuted).SingleLine()
 	}
