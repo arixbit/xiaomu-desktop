@@ -2,6 +2,7 @@
 !macro customUnInstall
   SetOutPath "$TEMP"
   Delete "$INSTDIR\Xiaomu.exe"
+  Delete "$INSTDIR\mpv-2.dll"
   Delete "$INSTDIR\THIRD_PARTY_NOTICES.txt"
   Delete "$INSTDIR\icon.png"
   Delete "$INSTDIR\.mygo-files"

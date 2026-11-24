@@ -37,7 +37,7 @@ macOS 13+ · Apple Silicon / Intel · Windows 10/11 · x64 / ARM64 · [下载最
 
 ## 下载与安装
 
-v0.9.3 紧急修复导入的影视配置、多仓子线路与直播源每次启动或切到直播页都会重新联网拉取的问题：导入成功后配置与频道快照将保存在本机，原临时链接失效或断网后仍可正常恢复使用；手动点击「刷新配置」或「刷新直播」失败时也会保留已有缓存。macOS 提供通用 DMG 和 ZIP，Windows 提供 x64 和 ARM64 安装包。下载页附有 `SHA256SUMS` 校验文件。[最新版下载](https://github.com/arixbit/xiaomu-desktop/releases/latest) · [v0.9.3 版本说明](docs/releases/v0.9.3.md)
+v0.9.4 接入全格式原生 `mygo-player`（`libmpv` LGPL-2.1+，支持 macOS 通用与 Windows x64 原生直解 MKV / 多音轨 / 内外挂字幕）、独立本地视频播放与本地弹幕、原生聚合网盘/AList 与官方网页自动登录（夸克 / UC / 阿里云盘 / 百度网盘原画直链），并加入无效站点自动过滤与搜索加速。macOS 提供通用 DMG 和 ZIP，Windows 提供 x64 和 ARM64 安装包。下载页附有 `SHA256SUMS` 校验文件。[最新版下载](https://github.com/arixbit/xiaomu-desktop/releases/latest) · [v0.9.4 版本说明](docs/releases/v0.9.4.md)
 
 ### macOS
 
@@ -46,7 +46,7 @@ v0.9.3 紧急修复导入的影视配置、多仓子线路与直播源每次启�
 
 ### Windows
 
-在 GitHub Releases 下载 `xiaomu-setup-0.9.3-amd64.exe`，ARM64 设备使用 `xiaomu-setup-0.9.3-arm64.exe`。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
+在 GitHub Releases 下载 `xiaomu-setup-0.9.4-amd64.exe`，ARM64 设备使用 `xiaomu-setup-0.9.4-arm64.exe`。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
 
 打开小幕，在首页导入自己的配置。之后可以在侧边栏“片源”页更换配置，或在“直播”页导入自己的频道列表。
 
@@ -55,6 +55,8 @@ v0.9.3 紧急修复导入的影视配置、多仓子线路与直播源每次启�
 小幕只是播放器。它不提供、不收录、不分发任何影视内容。配置和规则由使用者自己提供，使用后果也由使用者自己承担。
 
 ## 功能
+
+v0.9.4 全格式播放、本地视频与网盘原生支持：通过 `mygo-player v0.2.1`（`libmpv` LGPL-2.1+，零 cgo）在 macOS 与 Windows x64 上原生直解 MKV/MP4/TS 等常见容器、切换多音轨与加载内外挂字幕；不导入片源也可直接打开或拖入本地视频并匹配弹幕；原生支持配置内的 AList 与网盘站点（夸克 / UC / 阿里云盘 / 百度网盘官方网页自动登录、原画直链播放、临时目录与回收站自动清理）以及无效站点自动过滤。
 
 v0.9.3 片源与直播本机缓存修复：导入影视配置（含多仓子线路）和直播源（含外链 IPTV 频道列表）后自动在本地原子保存快照，重启和进入直播页直接从本机恢复，不再依赖原配置链接长期有效；新增「刷新直播」按钮，手动刷新失败时保留现有缓存不丢失数据。
 
