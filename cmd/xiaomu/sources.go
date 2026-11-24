@@ -75,8 +75,13 @@ func (a *app) sourcesView(c *ui.Context) {
 						a.live.importOpen = true
 					}
 				})
-				if a.live.url != "" && glassButton(c, "移除直播源").Clicked() {
-					a.removeLive()
+				if a.live.url != "" {
+					if glassButton(c, "刷新直播").Disabled(a.running(jobLive)).Clicked() {
+						a.importLive(a.live.url)
+					}
+					if glassButton(c, "移除直播源").Clicked() {
+						a.removeLive()
+					}
 				}
 			})
 		})

@@ -13,6 +13,7 @@ import (
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
 	"github.com/arixbit/xiaomu-desktop/internal/douban"
+	"github.com/arixbit/xiaomu-desktop/internal/iptv"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/egoist/mygo/ui"
 )
@@ -65,6 +66,7 @@ type libraryScan struct {
 type libraryBrowser struct {
 	root         *config.Config
 	cached       map[string]*config.Config
+	liveChannels map[string][]iptv.Channel
 	searchCache  *library.SearchCache
 	documents    []libraryDocument
 	feed, search libraryScan
@@ -81,16 +83,25 @@ func (a *app) stopScan(s *libraryScan) {
 
 // resetLibrary replaces the imported configuration; nil removes it.
 func (a *app) resetLibrary(doc *config.Config) {
+	a.resetLibraryWithCache(doc, nil, nil)
+}
+
+func (a *app) resetLibraryWithCache(doc *config.Config, cached map[string]*config.Config, liveChannels map[string][]iptv.Channel) {
 	a.cancelSourceSpeedTest()
 	a.cancelFollowingRefresh()
 	l := &a.library
 	a.stopScan(&l.feed)
 	a.stopScan(&l.search)
+	docs := maps.Clone(cached)
+	if docs == nil {
+		docs = map[string]*config.Config{}
+	}
 	*l = libraryBrowser{
-		root:   doc,
-		cached: map[string]*config.Config{},
-		feed:   libraryScan{generation: l.feed.generation, selected: -1},
-		search: libraryScan{generation: l.search.generation, selected: -1},
+		root:         doc,
+		cached:       docs,
+		liveChannels: cloneLiveChannelsMap(liveChannels),
+		feed:         libraryScan{generation: l.feed.generation, selected: -1},
+		search:       libraryScan{generation: l.search.generation, selected: -1},
 	}
 	if doc != nil {
 		a.startScan(&l.feed, "", false)
@@ -253,9 +264,15 @@ func (a *app) applyLibraryEvents(s *libraryScan, events []library.Event) {
 	}
 	s.items = slices.Grow(s.items, additional)
 	changed := false
+	docsChanged := false
 	for _, event := range events {
-		a.appendLibraryEvent(s, event)
+		if a.appendLibraryEvent(s, event) {
+			docsChanged = true
+		}
 		changed = changed || (event.Result != nil && event.Err == nil)
+	}
+	if docsChanged && a.persist && a.library.root != nil && a.browser.configURL != "" {
+		_ = a.saveConfigCache()
 	}
 	if changed {
 		keys := a.rankLibraryItems(s)
@@ -340,11 +357,17 @@ func (a *app) rankLibraryItems(s *libraryScan) []string {
 	return s.keysOutBuf
 }
 
-func (a *app) appendLibraryEvent(s *libraryScan, event library.Event) {
+func (a *app) appendLibraryEvent(s *libraryScan, event library.Event) bool {
 	l := &a.library
 	s.progress = event
+	docAdded := false
 	if doc := event.Document; doc != nil {
-		l.cached[event.URL], l.cached[doc.URL] = doc, doc
+		if l.cached[event.URL] != doc || l.cached[doc.URL] != doc {
+			l.cached[event.URL], l.cached[doc.URL] = doc, doc
+			if doc != l.root {
+				docAdded = true
+			}
+		}
 		known := false
 		for _, existing := range l.documents {
 			if existing.doc.URL == doc.URL {
@@ -362,7 +385,7 @@ func (a *app) appendLibraryEvent(s *libraryScan, event library.Event) {
 	}
 	result := event.Result
 	if result == nil {
-		return
+		return docAdded
 	}
 	// A site just answered: how long it took is its measured speed,
 	// whether the page came back or the request failed. A cached reply
@@ -377,7 +400,7 @@ func (a *app) appendLibraryEvent(s *libraryScan, event library.Event) {
 		if result.Target.Page > 1 {
 			s.more = append(s.more, result.Target)
 		}
-		return
+		return docAdded
 	}
 	if s.seen == nil {
 		s.seen = make(map[itemID]struct{})
@@ -397,6 +420,7 @@ func (a *app) appendLibraryEvent(s *libraryScan, event library.Event) {
 	if s.query != "" && result.Page.HasNext {
 		s.more = append(s.more, library.Target{Entry: result.Target.Entry, Page: result.Target.Page + 1})
 	}
+	return docAdded
 }
 
 func itemKey(item library.Item) string {

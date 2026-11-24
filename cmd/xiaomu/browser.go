@@ -9,6 +9,7 @@ import (
 
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/iptv"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/arixbit/xiaomu-desktop/internal/source"
 	"github.com/egoist/mygo/plugins/glass"
@@ -268,20 +269,34 @@ func (a *app) applyConfig(raw string, doc *config.Config, restoring bool) {
 		}
 		return
 	}
-	a.cancelJob(jobSite)
-	a.closeSite()
-	a.clearTitle()
-	a.nav = nil
-	b.configURL = raw
-	if a.live.url == "" {
-		a.setLiveSources(doc.Lives)
-	}
-	a.resetLibrary(doc)
+	a.applyLibraryConfig(raw, doc, nil, nil)
 	if a.persist {
 		if err := a.saveImportedSource(raw); err != nil {
 			a.status = "保存片源地址失败：" + err.Error()
 		}
 	}
+}
+
+func (a *app) applyCachedConfig(raw string, cached cachedSourceConfig) {
+	root, docs, liveChannels := cached.restore()
+	if root == nil {
+		return
+	}
+	a.browser.importOpen = false
+	a.applyLibraryConfig(raw, root, docs, liveChannels)
+}
+
+func (a *app) applyLibraryConfig(raw string, doc *config.Config, cached map[string]*config.Config, liveChannels map[string][]iptv.Channel) {
+	a.cancelJob(jobSite)
+	a.closeSite()
+	a.clearTitle()
+	a.nav = nil
+	a.browser.configURL = raw
+	if a.live.url == "" {
+		a.cancelJob(jobLive)
+		a.setLiveSources(doc.Lives)
+	}
+	a.resetLibraryWithCache(doc, cached, liveChannels)
 }
 
 // removeConfig forgets the imported configuration. Play history stays, shown
@@ -295,6 +310,7 @@ func (a *app) removeConfig() {
 	a.resetLibrary(nil)
 	a.browser.configURL = ""
 	if a.live.url == "" {
+		a.cancelJob(jobLive)
 		a.setLiveSources(nil)
 	}
 	a.status = "已移除片源"
