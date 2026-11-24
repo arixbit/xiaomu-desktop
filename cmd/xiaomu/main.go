@@ -61,7 +61,8 @@ type app struct {
 	// Only the latest navigation waits for a configuration still loading.
 	pendingLibrary func()
 
-	nav []routeKind
+	nav    []routeKind
+	navDir int // 1 push, -1 pop, 0 tab switch
 	// jobsMu guards jobs: a job's finish can run off the UI thread
 	// (in tests dispatch is nil), while cancelJob runs on the UI
 	// thread, so a slot's cancel function and generation are never
@@ -94,10 +95,19 @@ type app struct {
 	playbackWait    playbackWait
 	playFailure     *episodeFailure
 	linkOpen        bool
+	linkAdvanced    bool
+	linkErr         string
 	closed          bool
 	persist         bool
 	dispatch        func(func())
 	availableUpdate string
+
+	toast            toastFeedback
+	armed            armedConfirmState
+	playerOSD        playerOSDState
+	skipUndo         skipUndoState
+	windowThemeKnown bool
+	windowDarkTheme  bool
 
 	playingLive   bool
 	playingDirect bool
@@ -130,14 +140,18 @@ type app struct {
 	playerOverlay   playerOverlayState
 	playerPointer   playerPointerState
 	playerFocus     ui.Handle
-	autoNext        bool
-	autoNextPending bool
-	episodeEnd      playbackEnd
+	autoNext         bool
+	autoNextPending  bool
+	autoNextCanceled bool
+	muted            bool
+	savedVolume      float64
+	episodeEnd       playbackEnd
 }
 
 func (a *app) view(c *ui.Context) {
 	defer a.observeNowPlaying()
 	defer a.syncPlaybackPower(time.Now())
+	a.syncWindowCaptionTheme(c)
 	a.handleKeyboard(c)
 	if c.Vibrancy() {
 		c.Root().Background(ui.Transparent)
@@ -150,12 +164,16 @@ func (a *app) view(c *ui.Context) {
 }
 
 func (a *app) play() {
+	a.linkErr = ""
 	if ref, ok := pan.ParseShareURL(a.rawURL); ok {
 		a.openPanShare(ref)
 		return
 	}
 	if a.playDirectURL(a.rawURL, playbackHeaders(a.referer, a.ua)) {
 		a.linkOpen = false
+		a.linkErr = ""
+	} else {
+		a.linkErr = a.status
 	}
 }
 
@@ -185,6 +203,12 @@ func (a *app) adoptPlayer(p mediaPlayer) {
 	a.playerOverlay = playerOverlayState{}
 	a.playerPointer = playerPointerState{}
 	a.autoNextPending = false
+	a.autoNextCanceled = false
+	a.skipUndo = skipUndoState{}
+	a.playerOSD = playerOSDState{}
+	if a.muted {
+		p.SetMuted(true)
+	}
 	a.episodeEnd = playbackEnd{}
 	a.playingFile = false
 	a.playingName = ""

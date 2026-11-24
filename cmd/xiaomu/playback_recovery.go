@@ -118,11 +118,11 @@ func (a *app) recoveryActions(c *ui.Context) {
 		if len(a.title.detail.Sources) > 1 && primaryButton(c, "换下一条线路").Clicked() {
 			a.playNextLine()
 		}
-		if a.player != nil && len(a.candidates()) > 1 && glassButton(c, "换来源").TextColor(playerText).Clicked() {
+		if a.player != nil && len(a.candidates()) > 1 && glassButton(c, "换来源").Clicked() {
 			a.panelTab, a.panelOpen, a.panelTouched = 0, true, true
 			a.playerOverlay = playerOverlayState{}
 		}
-		if glassButton(c, "重试").TextColor(playerText).Clicked() {
+		if glassButton(c, "重试").Clicked() {
 			a.retryEpisode()
 		}
 	})

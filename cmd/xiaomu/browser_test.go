@@ -169,6 +169,10 @@ func TestBrowserFlow(t *testing.T) {
 	}
 	click("片源")
 	click("移除片源")
+	if a.library.root == nil {
+		t.Fatal("first tap on remove source should arm confirmation before deleting")
+	}
+	click("确认移除？")
 	if a.library.root != nil || len(a.library.feed.items) != 0 {
 		t.Fatal("removing the source kept its library")
 	}

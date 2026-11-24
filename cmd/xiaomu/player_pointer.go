@@ -8,7 +8,7 @@ import (
 
 // Wait briefly before committing a single click so a double click never
 // pauses and restarts the decoder. All state and timers stay on the UI thread.
-const playerClickDelay = 500 * time.Millisecond
+const playerClickDelay = 260 * time.Millisecond
 
 type playerPointerState struct {
 	player              mediaPlayer
@@ -70,6 +70,11 @@ func (a *app) flushPlayerClick(c *ui.Context, p mediaPlayer) {
 	if p.Playing() == s.wasPlaying {
 		togglePlayback(p)
 		a.syncNowPlayingState()
+		if p.Playing() {
+			a.showPlayerOSD("继续播放")
+		} else {
+			a.showPlayerOSD("已暂停")
+		}
 	}
 }
 

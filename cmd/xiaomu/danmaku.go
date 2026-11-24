@@ -341,8 +341,13 @@ func (a *app) searchDanmaku(automatic bool) {
 		var err error
 		number, err = strconv.Atoi(episode)
 		if err != nil || number <= 0 {
-			s.message = "集数请输入正整数，留空可查看全部分集"
-			return
+			// Accept natural episode forms like "第3集" or "EP3" when positive.
+			if parsed := danmakuNumber(episode); parsed > 0 && !strings.HasPrefix(episode, "-") {
+				number = parsed
+			} else {
+				s.message = "集数请输入正整数，留空可查看全部分集"
+				return
+			}
 		}
 		episode = strconv.Itoa(number)
 	}
@@ -470,7 +475,12 @@ func (a *app) danmakuButton(c *ui.Context) {
 	if !a.canUseDanmaku() {
 		return
 	}
-	if ui.Button(c, a.danmakuButtonLabel()).Label("弹幕").Radius(16).Material(glass.Glass{Style: glass.Clear, Interactive: true}).TextColor(playerText).Clicked() {
+	label := a.danmakuButtonLabel()
+	btn := playerGlassButton(c, "").Label("弹幕").Tooltip("弹幕设置 (按 D 开关)")
+	btn.Children(func() {
+		ui.Text(c, label).SingleLine().ContentTransition(ctReplace)
+	})
+	if btn.Clicked() {
 		a.ensurePreferences()
 		s := &a.danmaku
 		s.open, s.address = true, a.preferences.Danmaku.API
@@ -507,8 +517,8 @@ func danmakuEpisodeButton(c *ui.Context, label string, selected bool) ui.Element
 	if selected {
 		tint = ui.RGBA(255, 90, 64, 0.78)
 	}
-	return ui.Button(c, label).FillWidth().Padding(9, 12).Radius(12).
-		Material(glass.Glass{Style: glass.Clear, Tint: tint, Interactive: true}).TextColor(playerText)
+	return applyPressPose(ui.Button(c, label).FillWidth().Padding(9, 12).Radius(12).
+		Material(glass.Glass{Style: glass.Clear, Tint: tint, Interactive: true}).TextColor(playerText))
 }
 
 func (a *app) danmakuDialog(c *ui.Context) {
@@ -518,16 +528,18 @@ func (a *app) danmakuDialog(c *ui.Context) {
 	}
 	ui.Themed(c, ui.DarkTheme()).Absolute().Left(0).Right(0).Top(0).Bottom(0).
 		Background(ui.Transparent).PassThrough().Children(func() {
+		p := paletteFor(c)
 		ui.DialogBase(c, &s.open, func(backdrop, panel ui.Element) {
-			backdrop.Background(ui.RGBA(2, 8, 22, 0.67))
+			// Translucent scrim lets viewers preview live danmaku behind the sheet while adjusting sliders.
+			backdrop.Background(ui.RGBA(2, 8, 22, 0.24)).Transition(transDialogScrim)
 			_, height := c.Size()
 			panel.Width(548).MaxWidth(548).Height(min(float32(720), height-32)).
 				Padding(18, 8, 16, 20).Gap(10).Radius(24).
 				Material(glass.Glass{Style: glass.Regular, Tint: ui.RGBA(18, 22, 38, 0.84)}).
-				TextColor(playerText)
+				TextColor(playerText).Transition(transDialogPanel)
 			ui.Row(c).FillWidth().Padding(0, 16, 0, 0).Gap(10).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "弹幕设置").FontSize(20).Bold().Grow(1)
-				ui.Text(c, "按 D 键可快捷开关").FontSize(12).TextColor(textMuted)
+				ui.Text(c, "按 D 键可快捷开关").FontSize(12).TextColor(p.textMuted)
 			})
 			ui.Scroll(c).Label("弹幕设置内容").FillWidth().Grow(1).MinHeight(0).
 				Padding(4, 16, 4, 0).Gap(10).
@@ -547,35 +559,39 @@ func (a *app) danmakuDialog(c *ui.Context) {
 							if ui.Slider(c, &a.preferences.Danmaku.Size, 14, 36).Label("弹幕字号").Grow(1).Changed() {
 								a.savePreferences()
 							}
-							ui.Text(c, strconv.Itoa(int(math.Round(a.preferences.Danmaku.Size)))).Width(46).TextAlign(ui.End).TextColor(textMuted)
+							ui.Text(c, strconv.Itoa(int(math.Round(a.preferences.Danmaku.Size)))+" pt").Width(46).TextAlign(ui.End).TextColor(p.textMuted).ContentTransition(ctNumeric)
 						})
 						ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 							ui.Text(c, "不透明度").Width(64)
 							if ui.Slider(c, &a.preferences.Danmaku.Opacity, 0.1, 1).Label("弹幕不透明度").Grow(1).Changed() {
 								a.savePreferences()
 							}
-							ui.Text(c, fmt.Sprintf("%.0f%%", a.preferences.Danmaku.Opacity*100)).Width(46).TextAlign(ui.End).TextColor(textMuted)
+							ui.Text(c, fmt.Sprintf("%.0f%%", a.preferences.Danmaku.Opacity*100)).Width(46).TextAlign(ui.End).TextColor(p.textMuted).ContentTransition(ctNumeric)
 						})
 						ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 							ui.Text(c, "滚动速度").Width(64)
 							if ui.Slider(c, &a.preferences.Danmaku.Speed, 0.25, 1.5).Label("弹幕滚动速度").Grow(1).Changed() {
 								a.savePreferences()
 							}
-							ui.Text(c, fmt.Sprintf("%.2f×", a.preferences.Danmaku.Speed)).Width(46).TextAlign(ui.End).TextColor(textMuted)
+							ui.Text(c, fmt.Sprintf("%.2f×", a.preferences.Danmaku.Speed)).Width(46).TextAlign(ui.End).TextColor(p.textMuted).ContentTransition(ctNumeric)
 						})
 						ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 							ui.Text(c, "显示区域").Width(64)
 							if ui.Slider(c, &a.preferences.Danmaku.Area, 0.25, 1).Label("弹幕显示区域").Grow(1).Changed() {
 								a.savePreferences()
 							}
-							ui.Text(c, fmt.Sprintf("%.0f%%", a.preferences.Danmaku.Area*100)).Width(46).TextAlign(ui.End).TextColor(textMuted)
+							ui.Text(c, fmt.Sprintf("%.0f%%", a.preferences.Danmaku.Area*100)).Width(46).TextAlign(ui.End).TextColor(p.textMuted).ContentTransition(ctNumeric)
 						})
 						a.danmakuOffsetControls(c)
 					})
 					danmakuSection(c, func() {
 						a.danmakuSearchControls(c)
 						a.danmakuEpisodeResults(c, height)
-						if glassButton(c, "服务设置（可选）").FillWidth().Clicked() {
+						advPrefix := "▸ "
+						if s.advanced {
+							advPrefix = "▾ "
+						}
+						if glassButton(c, advPrefix+"服务设置（可选）").Label("服务设置（可选）").FillWidth().Clicked() {
 							s.advanced = !s.advanced
 						}
 						if s.advanced {
@@ -597,8 +613,9 @@ func (a *app) danmakuDialog(c *ui.Context) {
 
 func (a *app) danmakuStatusRow(c *ui.Context) {
 	s := &a.danmaku
+	p := paletteFor(c)
 	status := s.message
-	color := textMuted
+	color := p.textMuted
 	switch {
 	case s.failed:
 		color = ui.RGB(255, 166, 130)
@@ -613,7 +630,7 @@ func (a *app) danmakuStatusRow(c *ui.Context) {
 		return
 	}
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, status).FontSize(12).TextColor(color).Grow(1)
+		ui.Text(c, status).FontSize(12).TextColor(color).Grow(1).ContentTransition(ctReplace)
 		if s.failed && !a.running(jobDanmaku) {
 			if glassButton(c, "重试").Label("重试获取弹幕").Padding(4, 10).Clicked() {
 				a.loadCurrentDanmaku()
@@ -632,7 +649,7 @@ func (a *app) danmakuEpisodeResults(c *ui.Context, windowHeight float32) {
 		ui.Column(c).FillWidth().Gap(6).Children(func() {
 			for _, episode := range s.episodes {
 				selected := s.selected != nil && s.selected.ID == episode.ID
-				if danmakuEpisodeButton(c, episode.Anime+" · "+episode.Name, selected).Key(episode.ID).Clicked() {
+				if danmakuEpisodeButton(c.Key(episode.ID), episode.Anime+" · "+episode.Name, selected).Clicked() {
 					a.loadDanmakuEpisode(episode)
 				}
 			}
@@ -645,7 +662,7 @@ func (a *app) danmakuEpisodeResults(c *ui.Context, windowHeight float32) {
 			episode := s.episodes[i]
 			selected := s.selected != nil && s.selected.ID == episode.ID
 			ui.Box(c).FillWidth().Padding(0, 14, 6, 0).Children(func() {
-				if danmakuEpisodeButton(c, episode.Anime+" · "+episode.Name, selected).Key(episode.ID).Clicked() {
+				if danmakuEpisodeButton(c.Key(episode.ID), episode.Anime+" · "+episode.Name, selected).Clicked() {
 					a.loadDanmakuEpisode(episode)
 				}
 			})
@@ -688,7 +705,7 @@ func (a *app) danmakuOffsetControls(c *ui.Context) {
 				s.offset = clampDanmakuOffset(s.offset + step.delta)
 			}
 		}
-		ui.Text(c, formatDanmakuOffset(s.offset)).FontSize(13).TextColor(textMuted).TextAlign(ui.End).Grow(1)
+		ui.Text(c, formatDanmakuOffset(s.offset)).FontSize(13).TextColor(paletteFor(c).textMuted).TextAlign(ui.End).Grow(1).ContentTransition(ctNumeric)
 		if glassButton(c, "重置").Label("重置弹幕时间偏移").Padding(5, 10).Disabled(s.offset == 0).Clicked() {
 			s.offset = 0
 		}
@@ -700,8 +717,8 @@ func danmakuFilterChip(c *ui.Context, label string, active bool) ui.Element {
 	if active {
 		tint = ui.RGBA(255, 90, 64, 0.78)
 	}
-	return ui.Button(c, label).Label(label).Padding(6, 10).Radius(14).
-		Material(glass.Glass{Style: glass.Clear, Tint: tint, Interactive: true}).TextColor(playerText)
+	return applyPressPose(ui.Button(c, label).Label(label).Padding(6, 10).Radius(14).
+		Material(glass.Glass{Style: glass.Clear, Tint: tint, Interactive: true}).TextColor(playerText))
 }
 
 func (a *app) danmakuFilterControls(c *ui.Context) {

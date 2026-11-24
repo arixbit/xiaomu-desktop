@@ -9,6 +9,7 @@ package main
 
 import (
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -71,6 +72,42 @@ func isPlayableFile(path string) bool {
 
 func isSubtitleFile(path string) bool {
 	return subtitleFileExts[strings.ToLower(filepath.Ext(path))]
+}
+
+// discoverSiblingSubtitles automatically locates sidecar subtitle files sharing
+// the same directory and basename as the opened video (e.g. movie.srt,
+// movie.zh.ass), sparing the user from manually loading companion subtitles.
+func discoverSiblingSubtitles(videoPath string) []string {
+	dir := filepath.Dir(videoPath)
+	base := filepath.Base(videoPath)
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	if stem == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	stemLower := strings.ToLower(stem)
+	var exact, tagged []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !isSubtitleFile(name) {
+			continue
+		}
+		subStem := strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name)))
+		full := filepath.Join(dir, name)
+		switch {
+		case subStem == stemLower:
+			exact = append(exact, full)
+		case strings.HasPrefix(subStem, stemLower+".") || strings.HasPrefix(subStem, stemLower+"_") || strings.HasPrefix(subStem, stemLower+"-"):
+			tagged = append(tagged, full)
+		}
+	}
+	return append(exact, tagged...)
 }
 
 // deferUntilReady runs fn once the window exists. Events arriving before
@@ -166,6 +203,9 @@ func (a *app) openLocalFileWithSubtitles(path string, subtitles []string) bool {
 	}
 	a.prepareExternalPlayback()
 	a.closeCurrentPlayer()
+	if len(subtitles) == 0 {
+		subtitles = discoverSiblingSubtitles(path)
+	}
 	p, err := a.openMediaFile(path, subtitles)
 	if err != nil {
 		a.status = "打开文件失败：" + err.Error()
@@ -215,7 +255,8 @@ func (a *app) handleDroppedFiles(paths []string) bool {
 				a.status = "加载字幕失败：" + err.Error()
 				return false
 			}
-			a.status = "已加载外挂字幕：" + filepath.Base(subtitles[0])
+			a.setNotice("已加载外挂字幕：" + filepath.Base(subtitles[0]))
+			a.showPlayerOSD("已加载外挂字幕")
 			return true
 		}
 	}
@@ -269,7 +310,8 @@ func (a *app) openSubtitleFileDialog() {
 					a.status = "加载字幕失败：" + err.Error()
 					return
 				}
-				a.status = "已加载外挂字幕：" + filepath.Base(paths[0])
+				a.setNotice("已加载外挂字幕：" + filepath.Base(paths[0]))
+				a.showPlayerOSD("已加载外挂字幕")
 			}
 		}
 		if dispatch == nil {

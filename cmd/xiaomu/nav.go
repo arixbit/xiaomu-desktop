@@ -3,7 +3,6 @@ package main
 import (
 	"runtime"
 
-	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/plugins/updater"
 	"github.com/egoist/mygo/ui"
 )
@@ -34,33 +33,43 @@ var tabs = []struct {
 	{routeSources, "片源"},
 }
 
-const sidebarWidth = 204
+const (
+	sidebarWidth        = 204
+	sidebarCompactWidth = 172
+	sidebarRailWidth    = 64
+	sidebarCompactAt    = 820
+	sidebarRailAt       = 600
+)
 
 var librarySearchIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M15 15L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`))
 
-// Liquid Glass floats over the content: panes for the sidebar and panels,
-// clear capsules for controls, and one tint for the primary action.
-var (
-	glassPane    = glass.Glass{Clarity: 0.5}
-	glassControl = glass.Glass{Style: glass.Clear, Interactive: true}
-	glassPrimary = glass.Glass{Tint: ui.RGBA(255, 90, 64, 0.92), Interactive: true}
-	accentInk    = ui.Hex("#1a0f0c")
-	textMuted    = ui.RGBA(243, 239, 231, 0.78)
-	surface      = ui.RGBA(12, 13, 20, 0.55)
-	backdrop     = ui.LinearGradient{Angle: 180, Stops: []ui.GradientStop{
-		{Color: ui.Hex("#0b1530"), At: 0},
-		{Color: ui.Hex("#222c4e"), At: 0.42},
-		{Color: ui.Hex("#6b4057"), At: 0.74},
-		{Color: ui.Hex("#241727"), At: 1},
-	}}
-)
-
 func glassButton(c *ui.Context, label string) ui.Element {
-	return ui.Button(c, label).Radius(20).Padding(9, 16).Material(glassControl)
+	p := paletteFor(c)
+	btn := ui.Button(c, label).Radius(20).Padding(9, 16).TextColor(p.text)
+	if p.reduceTransparency {
+		bg := p.surfaceSubtle
+		if btn.Hovered() {
+			bg = p.surfaceHover
+		}
+		btn.Background(btn.AnimateColor("glass-bg", bg, animColor)).Border(1, p.border)
+	} else {
+		btn.Material(p.controlMat)
+		if !p.dark || p.highContrast {
+			btn.Border(1, p.border)
+		}
+	}
+	return applyPressPose(btn)
 }
 
 func primaryButton(c *ui.Context, label string) ui.Element {
-	return ui.Button(c, label).Radius(20).Padding(9, 18).Material(glassPrimary).TextColor(accentInk)
+	p := paletteFor(c)
+	btn := ui.Button(c, label).Radius(20).Padding(9, 18).TextColor(p.accentText)
+	if p.reduceTransparency {
+		btn.Background(p.accent)
+	} else {
+		btn.Material(p.primaryMat)
+	}
+	return applyPressPose(btn)
 }
 
 // route is the page on show; root is the tab it was reached from.
@@ -93,6 +102,8 @@ func (a *app) push(kind routeKind) {
 	}
 	if a.route() != kind {
 		a.nav = append(a.nav, kind)
+		a.navDir = 1
+		a.clearArmed()
 	}
 }
 
@@ -103,6 +114,8 @@ func (a *app) pop() {
 	}
 	left := a.route()
 	a.nav = a.nav[:len(a.nav)-1]
+	a.navDir = -1
+	a.clearArmed()
 	switch left {
 	case routeDetail:
 		a.clearTitle()
@@ -116,7 +129,7 @@ func (a *app) pop() {
 		a.cancelJob(jobSite)
 		a.closeSite()
 	}
-	a.status = ""
+	a.clearStatus()
 }
 
 func (a *app) switchTab(kind routeKind) {
@@ -126,7 +139,9 @@ func (a *app) switchTab(kind routeKind) {
 		a.pop()
 	}
 	a.nav = []routeKind{kind}
-	a.status = ""
+	a.navDir = 0
+	a.clearArmed()
+	a.clearStatus()
 	switch kind {
 	case routeHome:
 		a.loadDiscoveryTab(false)
@@ -153,10 +168,7 @@ func (a *app) pageTitle() string {
 }
 
 // dragStripHeight is the height of the title bar band, or 0 in full
-// screen, where the window has no title bar and cannot be dragged. The
-// shell and the player use it to decide whether their top bars act as
-// drag handles: the band itself draws nothing, so the layout stays
-// exactly as it was before any drag handle existed.
+// screen, where the window has no title bar and cannot be dragged.
 func dragStripHeight(c *ui.Context) float32 {
 	bar := c.TitleBar()
 	if bar == (ui.TitleBar{}) {
@@ -165,33 +177,52 @@ func dragStripHeight(c *ui.Context) float32 {
 	return max(bar.Height, 32)
 }
 
-// shell is every page but the player: the backdrop, the floating sidebar,
-// the toolbar and the page on show.
+func activeSidebarWidth(windowWidth float32) (width float32, rail bool) {
+	switch {
+	case windowWidth > 0 && windowWidth < sidebarRailAt:
+		return sidebarRailWidth, true
+	case windowWidth > 0 && windowWidth < sidebarCompactAt:
+		return sidebarCompactWidth, false
+	default:
+		return sidebarWidth, false
+	}
+}
+
+// shell is every page but the player: the adaptive backdrop, floating sidebar,
+// toolbar and the active page.
 func (a *app) shell(c *ui.Context) {
-	ui.Themed(c, ui.DarkTheme()).Fill().LinearGradient(backdrop).Children(func() {
+	p := paletteFor(c)
+	ui.Box(c).Fill().LinearGradient(p.backdrop).TextColor(p.text).Children(func() {
 		ui.Row(c).Fill().Padding(10).Gap(10).Children(func() {
 			a.sidebar(c)
 			ui.Column(c).Grow(1).FillHeight().MinWidth(0).Padding(4, 8, 8, 8).Gap(14).Children(func() {
 				a.toolbar(c)
-				ui.Box(c).Grow(1).FillWidth().MinHeight(0).Children(func() {
-					switch a.route() {
-					case routeLive:
-						a.liveView(c)
-					case routeHistory:
-						a.historyView(c)
-					case routeFavorites:
-						a.favoritesView(c)
-					case routeSources:
-						a.sourcesView(c)
-					case routeSearch:
-						a.searchView(c)
-					case routeDetail:
-						a.detailView(c)
-					case routeSite:
-						a.siteView(c)
-					default:
-						a.homeView(c)
-					}
+				rt := routeTransition(a.navDir)
+				pageHost := ui.Box(c).Grow(1).FillWidth().MinHeight(0)
+				if rt.Exit != nil {
+					pageHost.ChildExit(*rt.Exit)
+				}
+				pageHost.Children(func() {
+					ui.Box(c.Key(a.route())).Fill().Transition(rt).Children(func() {
+						switch a.route() {
+						case routeLive:
+							a.liveView(c)
+						case routeHistory:
+							a.historyView(c)
+						case routeFavorites:
+							a.favoritesView(c)
+						case routeSources:
+							a.sourcesView(c)
+						case routeSearch:
+							a.searchView(c)
+						case routeDetail:
+							a.detailView(c)
+						case routeSite:
+							a.siteView(c)
+						default:
+							a.homeView(c)
+						}
+					})
 				})
 			})
 		})
@@ -204,45 +235,144 @@ func (a *app) shell(c *ui.Context) {
 }
 
 func (a *app) sidebar(c *ui.Context) {
-	// The window controls sit in the title bar band above this pane
-	// (top-left on macOS, top-right on Windows), so it starts below
-	// them.
+	p := paletteFor(c)
+	winW, winH := c.Size()
+	sideW, rail := activeSidebarWidth(winW)
+	shortWin := winH > 0 && winH < 480
 	top := max(float32(52), c.TitleBar().Bottom+14)
-	// The pane itself is a drag handle: MyGo only starts a drag when
-	// the pressed element carries no other interactive flags, so the
-	// tabs and buttons on it keep working and only its empty areas
-	// drag; a double click on it maximizes the window.
-	side := ui.Column(c).Width(sidebarWidth).FillHeight().Radius(22).Padding(top, 10, 10, 10).Gap(4).
-		Material(glassPane)
+	padX, gap := float32(10), float32(4)
+	if rail {
+		padX = 8
+	}
+	if shortWin {
+		gap = 2
+	}
+	side := ui.Column(c.Key("sidebar")).Width(sideW).FillHeight().Radius(22).Padding(top, padX, 10, padX).Gap(gap).
+		Transition(ui.ElementTransition{Animation: &animSurface, Width: true})
+	applyPane(side, p, p.paneMat)
 	if dragStripHeight(c) > 0 {
 		side.DragWindow().Label("拖动窗口（侧边栏）")
 	}
 	side.Children(func() {
-		ui.Text(c, "小幕").FontSize(20).Bold().Padding(0, 12, 12, 12)
+		if rail {
+			titleBottom := float32(10)
+			if shortWin {
+				titleBottom = 4
+			}
+			ui.Text(c, "小幕").FontSize(15).Bold().FillWidth().TextAlign(ui.Center).Padding(0, 0, titleBottom, 0)
+			rowH := float32(40)
+			if shortWin {
+				rowH = 32
+			}
+			for _, tab := range tabs {
+				if railNavButton(c, tab.kind, tab.label, a.root() == tab.kind, rowH).Clicked() {
+					a.switchTab(tab.kind)
+				}
+			}
+			ui.Spacer(c)
+			btnH := float32(38)
+			if shortWin {
+				btnH = 32
+			}
+			if railIconButton(c, navIconFile, "打开文件", btnH).Clicked() {
+				a.openLocalFileDialog()
+			}
+			if railIconButton(c, navIconLink, "打开链接", btnH).Clicked() {
+				a.linkErr = ""
+				a.linkOpen = true
+			}
+			if updateRailButton(c, a.availableUpdate, btnH).Clicked() {
+				updater.CheckForUpdates()
+			}
+			return
+		}
+		titleBottom := float32(12)
+		if shortWin {
+			titleBottom = 6
+		}
+		ui.Text(c, "小幕").FontSize(20).Bold().Padding(0, 12, titleBottom, 12)
 		for _, tab := range tabs {
-			if listRow(c, tab.label, a.root() == tab.kind).Clicked() {
+			row := listRow(c, tab.label, a.root() == tab.kind)
+			if shortWin {
+				row.Height(32)
+			}
+			if row.Clicked() {
 				a.switchTab(tab.kind)
 			}
 		}
 		ui.Spacer(c)
-		if glassButton(c, "打开文件").FillWidth().Clicked() {
+		openFileBtn := glassButton(c, "打开文件").FillWidth()
+		openLinkBtn := glassButton(c, "打开链接").FillWidth()
+		updBtn := updateButton(c, a.availableUpdate)
+		if shortWin {
+			openFileBtn.Padding(6, 12)
+			openLinkBtn.Padding(6, 12)
+			updBtn.Padding(6, 12)
+		}
+		if openFileBtn.Clicked() {
 			a.openLocalFileDialog()
 		}
-		if glassButton(c, "打开链接").FillWidth().Clicked() {
+		if openLinkBtn.Clicked() {
+			a.linkErr = ""
 			a.linkOpen = true
 		}
-		if updateButton(c, a.availableUpdate).Clicked() {
+		if updBtn.Clicked() {
 			updater.CheckForUpdates()
 		}
 	})
 }
 
+func railNavButton(c *ui.Context, kind routeKind, label string, selected bool, height float32) ui.Element {
+	p := paletteFor(c)
+	row := ui.Row(c.Key("rail-"+label)).FillWidth().Height(height).Radius(12).
+		Center().Cursor(ui.CursorPointer).Label(label).Tooltip(label)
+	targetBg := ui.Transparent
+	targetFg := p.textMuted
+	if selected {
+		targetBg = p.surfaceSelected
+		targetFg = p.text
+	} else if row.Hovered() {
+		targetBg = p.surfaceHover
+		targetFg = p.text
+	}
+	row.Background(row.AnimateColor("rail-bg", targetBg, animColor))
+	applyPressPose(row)
+	fg := row.AnimateColor("rail-fg", targetFg, animColor)
+	row.Children(func() {
+		ui.Icon(c, tabIcon(kind)).Size(19, 19).TextColor(fg).PassThrough()
+	})
+	return row
+}
+
+func railIconButton(c *ui.Context, icon *ui.SVG, label string, height float32) ui.Element {
+	p := paletteFor(c)
+	btn := ui.Button(c.Key("rail-action-"+label), "").FillWidth().Height(height).Radius(14).
+		Center().Label(label).Tooltip(label).TextColor(p.text)
+	if p.reduceTransparency {
+		bg := p.surfaceSubtle
+		if btn.Hovered() {
+			bg = p.surfaceHover
+		}
+		btn.Background(btn.AnimateColor("rail-btn-bg", bg, animColor)).Border(1, p.border)
+	} else {
+		btn.Material(p.controlMat)
+		if !p.dark || p.highContrast {
+			btn.Border(1, p.border)
+		}
+	}
+	applyPressPose(btn)
+	btn.Children(func() {
+		ui.Icon(c, icon).Size(17, 17).TextColor(p.text).PassThrough()
+	})
+	return btn
+}
+
 func (a *app) toolbar(c *ui.Context) {
 	width, _ := c.Size()
+	sideW, _ := activeSidebarWidth(width)
 	// Match shell's outer padding, sidebar, gap and content padding.
-	contentWidth := max(0, width-20-sidebarWidth-10-16)
+	contentWidth := max(0, width-20-sideW-10-16)
 	// Equal space on either side keeps search centered as back appears.
-	// Each side leaves room for back, the page title and a 12px gap.
 	searchWidth := min(float32(560), contentWidth-2*192)
 	compact := searchWidth < 280
 	height, searchTop, searchLeft := float32(44), float32(2), (contentWidth-searchWidth)/2
@@ -261,10 +391,13 @@ func (a *app) toolbar(c *ui.Context) {
 		}
 		bar.Children(func() {
 			ui.Row(c).Width(navWidth).MinWidth(0).Gap(10).AlignItems(ui.Center).Children(func() {
-				if len(a.nav) > 1 && glassButton(c, "返回").Clicked() {
-					a.pop()
+				if len(a.nav) > 1 {
+					if glassButton(c.Key("toolbar-back"), "返回").Transition(transBackButton).Clicked() {
+						a.pop()
+					}
 				}
-				ui.Text(c, a.pageTitle()).FontSize(22).Bold().SingleLine().Grow(1).MinWidth(0)
+				ui.Text(c, a.pageTitle()).FontSize(22).Bold().SingleLine().Grow(1).MinWidth(0).
+					ContentTransition(ctReplace)
 			})
 		})
 		if a.library.root != nil {
@@ -285,49 +418,92 @@ func searchShortcutHint() string {
 }
 
 func (a *app) librarySearch(c *ui.Context) ui.Element {
+	p := paletteFor(c)
 	return ui.Box(c).Key("library-search").Height(40).Children(func() {
-		if ui.Autocomplete(c, &a.browser.query, a.searchSuggestions()).Label("片名").Placeholder("搜索整个片库").
-			Fill().Padding(0, 58, 0, 40).FontSize(16).Radius(20).Material(glassControl).
-			FocusBind(&a.searchFocused, true).Bind(&a.searchFocus).Submitted() {
+		field := ui.Autocomplete(c, &a.browser.query, a.searchSuggestions()).Label("片名").Placeholder("搜索整个片库").
+			Fill().Padding(0, 58, 0, 40).FontSize(16).Radius(20).
+			FocusBind(&a.searchFocused, true).Bind(&a.searchFocus)
+		if p.reduceTransparency {
+			field.Background(p.surface).Border(1, p.border)
+		} else {
+			field.Material(p.controlMat)
+			if !p.dark || p.highContrast {
+				field.Border(1, p.border)
+			}
+		}
+		if field.Changed() {
+			a.focusSearchGrid = false
+		}
+		if field.Submitted() {
 			a.searchLibrary()
 		}
-		ui.Icon(c, librarySearchIcon).Size(18, 18).Absolute().Left(14).Top(11).TextColor(textMuted).PassThrough()
-		ui.Text(c, searchShortcutHint()).FontSize(12).TextColor(textMuted).Absolute().Right(14).Top(11).PassThrough()
+		ui.Icon(c, librarySearchIcon).Size(18, 18).Absolute().Left(14).Top(11).TextColor(p.textMuted).PassThrough()
+		ui.Text(c, searchShortcutHint()).FontSize(12).TextColor(p.textMuted).Absolute().Right(14).Top(11).PassThrough()
 	})
 }
 
 func (a *app) statusView(c *ui.Context) {
 	busy := a.busy()
+	a.syncToastState(c, busy)
 	if a.status == "" && !busy {
 		return
 	}
-	ui.Row(c).Absolute().Right(16).Bottom(16).MaxWidth(640).Padding(9, 13).Gap(10).
-		Radius(16).Material(glass.Glass{}).AlignItems(ui.Center).Children(func() {
+	p := paletteFor(c)
+	toast := ui.Row(c.Key("status-toast")).Absolute().Right(16).Bottom(16).MaxWidth(640).Padding(9, 14).Gap(10).
+		Radius(16).AlignItems(ui.Center).Transition(transToast)
+	applyPane(toast, p, p.dialogMat)
+	toast.Children(func() {
 		if a.status != "" {
-			ui.Text(c, a.status).Selectable().Grow(1)
+			ui.Text(c, a.status).Selectable().Grow(1).ContentTransition(ctReplace)
 		}
-		if busy && ui.Button(c, "取消加载").Clicked() {
-			a.cancelJobs()
+		if !busy && a.toast.undoFn != nil {
+			undoLabel := a.toast.undoLabel
+			if undoLabel == "" {
+				undoLabel = "撤销"
+			}
+			if primaryButton(c, undoLabel).Padding(5, 12).Clicked() {
+				fn := a.toast.undoFn
+				a.clearStatus()
+				fn()
+			}
+		}
+		if busy {
+			if glassButton(c, "取消").Label("取消加载").Padding(5, 12).Clicked() {
+				a.cancelJobs()
+			}
+		} else if a.toast.ttl == 0 && a.status != "" {
+			if glassButton(c, "关闭").Label("关闭提示").Padding(4, 10).Clicked() {
+				a.clearStatus()
+			}
 		}
 	})
 }
 
 // linkDialog plays one address the user pastes, without a library.
 func (a *app) linkDialog(c *ui.Context) {
+	p := paletteFor(c)
 	ui.DialogBase(c, &a.linkOpen, func(backdrop, panel ui.Element) {
-		backdrop.Background(ui.RGBA(2, 8, 22, 0.67))
-		panel.Width(520).MaxWidth(520).Padding(26).Gap(14).Radius(26).Material(glass.Glass{})
+		backdrop.Background(p.dialogScrim).Transition(transDialogScrim)
+		panel.Width(520).MaxWidth(520).Padding(26).Gap(14).Radius(26).TextColor(p.text).Transition(transDialogPanel)
+		applyPane(panel, p, p.dialogMat)
 		ui.Text(c, "打开链接").FontSize(24).Bold()
-		ui.Text(c, "粘贴 mp4 / m3u8 视频直链，或夸克 / UC 等网盘分享链接").TextColor(textMuted)
-		ui.TextInput(c, &a.rawURL).Label("地址").Placeholder("https://example.com/video.mp4 或网盘分享链接").FillWidth()
-		ui.TextInput(c, &a.referer).Label("Referer").Placeholder("Referer（可选）").FillWidth()
-		ui.TextInput(c, &a.ua).Label("User-Agent").Placeholder("User-Agent（可选）").FillWidth()
-		if a.status != "" {
-			ui.Text(c, a.status).TextColor(textMuted)
+		ui.Text(c, "粘贴视频直链（mp4 / m3u8）或夸克、UC、阿里云盘、百度网盘分享链接").TextColor(p.textMuted)
+		if ui.TextInput(c, &a.rawURL).Label("地址").Placeholder("https://example.com/video.mp4 或网盘分享链接").FillWidth().Submitted() {
+			a.play()
+		}
+		ui.Collapsible(c.Key("link-advanced"), "高级选项（请求头）", &a.linkAdvanced, func() {
+			ui.Column(c).FillWidth().Padding(6, 0, 2, 0).Gap(10).Children(func() {
+				ui.TextInput(c, &a.referer).Label("Referer").Placeholder("来源页地址（可选）").FillWidth()
+				ui.TextInput(c, &a.ua).Label("User-Agent").Placeholder("自定义客户端标识（可选）").FillWidth()
+			})
+		})
+		if a.linkErr != "" {
+			ui.Text(c, a.linkErr).FontSize(13).TextColor(p.warning)
 		}
 		ui.Row(c).FillWidth().Gap(8).Justify(ui.End).Children(func() {
 			if glassButton(c, "取消").Clicked() {
 				a.linkOpen = false
+				a.linkErr = ""
 			}
 			if primaryButton(c, "播放").Clicked() {
 				a.play()

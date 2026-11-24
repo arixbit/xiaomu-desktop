@@ -47,7 +47,7 @@ func (a *app) followingHasNew(e favoriteEntry) bool {
 	}
 	h, ok := a.followingHistory(e.Name)
 	if !ok {
-		return true
+		return false
 	}
 	n, err := strconv.Atoi(episodeButtonLabel(h.Episode))
 	latest, latestErr := strconv.Atoi(episodeButtonLabel(e.LatestEpisode))
@@ -120,11 +120,17 @@ func (a *app) cancelFollowingRefresh() {
 }
 
 func (a *app) followingRefreshButton(c *ui.Context) {
-	label := "刷新追剧"
-	if a.favorites.refreshing {
-		label = "检查更新中…"
+	if a.library.root == nil {
+		return
 	}
-	if glassButton(c, label).Disabled(a.library.root == nil || a.favorites.refreshing).Clicked() {
+	if a.favorites.refreshing {
+		if glassButton(c, "取消检查").Label("取消检查更新").Clicked() {
+			a.cancelFollowingRefresh()
+			a.setNotice("已取消检查更新")
+		}
+		return
+	}
+	if glassButton(c, "刷新追剧").Clicked() {
 		a.refreshFollowing()
 	}
 }

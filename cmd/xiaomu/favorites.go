@@ -72,7 +72,7 @@ func readFavorites(path string) ([]favoriteEntry, error) {
 	}
 	var entries []favoriteEntry
 	if err := json.Unmarshal(data, &entries); err != nil {
-		return nil, fmt.Errorf("读取收藏：%w", err)
+		return nil, fmt.Errorf("读取追剧列表：%w", err)
 	}
 	return entries, nil
 }
@@ -92,13 +92,37 @@ func (a *app) restoreFavorites() {
 
 func (a *app) removeFavorite(name string) {
 	kept := make([]favoriteEntry, 0, len(a.favorites.entries))
-	for _, e := range a.favorites.entries {
+	var removed *favoriteEntry
+	removedIdx := -1
+	for i, e := range a.favorites.entries {
 		if titleKey(e.Name) != titleKey(name) {
 			kept = append(kept, e)
+		} else if removed == nil {
+			cp := e
+			removed = &cp
+			removedIdx = i
 		}
 	}
 	if err := a.favorites.replace(kept); err != nil {
-		a.status = "保存收藏失败：" + err.Error()
+		a.status = "保存追剧失败：" + err.Error()
+		return
+	}
+	if removed != nil {
+		entry := *removed
+		idx := removedIdx
+		a.setUndoNotice("已取消追剧「"+entry.Name+"」", "撤销", func() {
+			if a.favorites.contains(entry.Name) {
+				return
+			}
+			pos := min(max(idx, 0), len(a.favorites.entries))
+			restored := make([]favoriteEntry, 0, len(a.favorites.entries)+1)
+			restored = append(restored, a.favorites.entries[:pos]...)
+			restored = append(restored, entry)
+			restored = append(restored, a.favorites.entries[pos:]...)
+			if err := a.favorites.replace(restored); err != nil {
+				a.status = "保存追剧失败：" + err.Error()
+			}
+		})
 	}
 }
 
@@ -127,7 +151,9 @@ func (a *app) toggleFavorite() {
 	}
 	entries := append([]favoriteEntry{e}, a.favorites.entries...)
 	if err := a.favorites.replace(entries); err != nil {
-		a.status = "保存收藏失败：" + err.Error()
+		a.status = "保存追剧失败：" + err.Error()
+	} else {
+		a.setNotice("已加入追剧")
 	}
 }
 
@@ -145,7 +171,7 @@ func (a *app) favoriteButton(c *ui.Context) {
 // library; removing or replacing a configuration never removes favorites.
 func (a *app) openFavorite(e favoriteEntry) {
 	if a.library.root == nil {
-		a.status = "请先添加片源，再打开收藏的影片"
+		a.status = "请先添加片源，再打开追剧影片"
 		return
 	}
 	if !a.configAvailable(e.ConfigURL) || e.VideoID == "" {
@@ -156,7 +182,7 @@ func (a *app) openFavorite(e favoriteEntry) {
 	if a.library.root.URL == e.ConfigURL {
 		cached = a.library.root
 	}
-	a.run(jobTitle, "打开收藏", func(ctx context.Context) (jobResult, error) {
+	a.run(jobTitle, "打开追剧", func(ctx context.Context) (jobResult, error) {
 		doc := cached
 		if doc == nil {
 			var err error
@@ -180,6 +206,7 @@ func (a *app) favoritesStrip(c *ui.Context) {
 	if len(a.favorites.entries) == 0 {
 		return
 	}
+	p := paletteFor(c)
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "我的追剧").FontSize(16).Bold()
@@ -191,20 +218,21 @@ func (a *app) favoritesStrip(c *ui.Context) {
 		})
 		ui.ScrollHorizontal(c).FillWidth().Gap(12).Children(func() {
 			for _, e := range a.favorites.entries {
-				card := ui.Column(c).Key("favstrip-" + titleKey(e.Name)).Width(144).Gap(6).
+				card := ui.Column(c).Key("favstrip-" + titleKey(e.Name)).Width(104).Gap(6).
 					Cursor(ui.CursorPointer).Label("打开追剧 " + e.Name)
 				card.Children(func() {
-					ui.Box(c).Size(96, 144).Radius(12).Clip().Background(ui.Hex("#24242c")).Children(func() {
-						if poster := a.poster(e.Pic); poster != nil {
-							ui.Image(c, poster).Fill().Fit(ui.Cover)
+					posterBox := ui.Box(c).Size(104, 152).Radius(12).Clip().Background(p.cardPlaceholder)
+					posterBox.Children(func() {
+						applyPosterImage(c, posterBox, a.poster(e.Pic))
+						if a.followingHasNew(e) {
+							ui.Text(c, "有新集").Absolute().Left(6).Top(6).Padding(2, 7).Radius(8).
+								FontSize(11).Bold().Background(p.accent).TextColor(p.accentText).SingleLine()
 						}
 					})
-					ui.Text(c, e.Name).FontSize(13).SingleLine()
-					ui.Text(c, a.followingProgress(e)).FontSize(11).TextColor(textMuted).SingleLine()
-					if a.followingHasNew(e) {
-						ui.Text(c, "有新集").FontSize(11).Bold()
-					}
+					ui.Text(c, e.Name).FontSize(13).Bold().SingleLine()
+					ui.Text(c, a.followingProgress(e)).FontSize(11).TextColor(p.textMuted).SingleLine()
 				})
+				applyCardPose(card)
 				if card.Clicked() {
 					a.openFollowing(e)
 				}
@@ -214,46 +242,59 @@ func (a *app) favoritesStrip(c *ui.Context) {
 }
 
 func (a *app) favoritesView(c *ui.Context) {
+	p := paletteFor(c)
 	if a.favorites.readErr != nil {
-		emptyState(c, "追剧暂时无法读取", a.favorites.readErr.Error())
+		emptyState(c, "追剧列表暂时无法读取", "本地追剧文件格式异常，可检查后重试。")
 		return
 	}
 	if len(a.favorites.entries) == 0 {
-		emptyState(c, "还没有追剧", "在影片详情页点“加入追剧”，这里会显示观看进度和更新。")
+		emptyState(c, "还没有追剧", "在影片详情页点「加入追剧」，这里会显示观看进度和更新。")
 		return
 	}
 	ui.Column(c).Fill().Gap(14).Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "追剧和进度 · 只保存在本机").FontSize(13).TextColor(textMuted).Grow(1)
+			ui.Text(c, "追剧和进度 · 只保存在本机").FontSize(13).TextColor(p.textMuted).Grow(1)
 			a.followingRefreshButton(c)
 		})
 		ui.Scroll(c).Grow(1).FillWidth().Gap(8).Children(func() {
 			for _, e := range a.favorites.entries {
-				ui.Row(c).Key(titleKey(e.Name)).FillWidth().Padding(10).Gap(12).Radius(18).AlignItems(ui.Center).Background(surface).Children(func() {
-					ui.Box(c).Size(60, 90).Radius(10).Clip().Background(ui.Hex("#24242c")).Children(func() {
-						if poster := a.poster(e.Pic); poster != nil {
-							ui.Image(c, poster).Fill().Fit(ui.Cover)
-						}
+				action := a.followingAction(e)
+				row := ui.Row(c).Key(titleKey(e.Name)).FillWidth().Padding(10).Gap(12).AlignItems(ui.Center)
+				applySurface(row, p, 18).Children(func() {
+					mainArea := ui.Row(c).Grow(1).MinWidth(0).Gap(12).AlignItems(ui.Center).Cursor(ui.CursorPointer)
+					mainArea.Children(func() {
+						posterBox := ui.Box(c).Size(60, 90).Radius(10).Clip().Background(p.cardPlaceholder)
+						posterBox.Children(func() {
+							applyPosterImage(c, posterBox, a.poster(e.Pic))
+						})
+						ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
+							ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+								ui.Text(c, e.Name).Bold().SingleLine()
+								if a.followingHasNew(e) {
+									ui.Text(c, "有新集").Padding(2, 8).Radius(9).FontSize(11).Bold().
+										Background(p.accent).TextColor(p.accentText).SingleLine()
+								}
+							})
+							ui.Text(c, a.followingProgress(e)).FontSize(12).TextColor(p.textMuted).SingleLine()
+							if message := a.favorites.refreshErrors[titleKey(e.Name)]; message != "" {
+								ui.Text(c, message).FontSize(11).TextColor(p.warning).SingleLine()
+							}
+							if a.library.root == nil {
+								ui.Text(c, "添加片源后可选集播放").FontSize(12).TextColor(p.textMuted)
+							}
+						})
 					})
-					ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
-						ui.Text(c, e.Name).Bold().SingleLine()
-						ui.Text(c, a.followingProgress(e)).FontSize(12).TextColor(textMuted).SingleLine()
-						if a.followingHasNew(e) {
-							ui.Text(c, "有新集").FontSize(12).Bold()
-						}
-						if message := a.favorites.refreshErrors[titleKey(e.Name)]; message != "" {
-							ui.Text(c, message).FontSize(11).TextColor(textMuted).SingleLine()
-						}
-						if a.library.root == nil {
-							ui.Text(c, "添加片源后可选集播放").FontSize(12).TextColor(textMuted)
-						}
-					})
-					ui.Column(c).Width(108).Gap(5).Children(func() {
-						if primaryButton(c, a.followingAction(e)).FillWidth().Label("打开追剧 " + e.Name).Clicked() {
+					if mainArea.Clicked() {
+						a.openFollowing(e)
+					}
+					ui.Column(c).Width(108).Gap(6).Children(func() {
+						if primaryButton(c, action).FillWidth().Label("打开追剧 " + e.Name).Clicked() {
 							a.openFollowing(e)
 						}
-						if glassButton(c, "详情").FillWidth().Label("追剧详情 " + e.Name).Clicked() {
-							a.openFavorite(e)
+						if action != "查看详情" {
+							if glassButton(c, "详情").FillWidth().Label("追剧详情 " + e.Name).Clicked() {
+								a.openFavorite(e)
+							}
 						}
 						if glassButton(c, "移除").FillWidth().Label("移除追剧 " + e.Name).Clicked() {
 							a.removeFavorite(e.Name)

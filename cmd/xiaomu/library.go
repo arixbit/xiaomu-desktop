@@ -589,8 +589,9 @@ func (s *libraryScan) summary() string {
 
 // scanBar is a pass's progress with the buttons to stop or repeat it.
 func (a *app) scanBar(c *ui.Context, s *libraryScan) {
+	p := paletteFor(c)
 	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, s.summary()).FontSize(13).TextColor(textMuted).Grow(1)
+		ui.Text(c, s.summary()).FontSize(13).TextColor(p.textMuted).Grow(1).ContentTransition(ctNumeric)
 		if s.running {
 			if glassButton(c, "停止").Clicked() {
 				a.stopScan(s)

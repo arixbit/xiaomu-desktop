@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-const siteHealthStoreLimit = 2048
+const (
+	siteHealthStoreLimit = 2048
+	siteHealthTTL        = 30 * time.Minute
+)
 
 // siteHealthStore remembers site entry keys that failed live checks (home feed,
 // speed test, or opening the site). Broken sites are filtered out on the
@@ -66,8 +69,16 @@ func (a *app) isSiteFailed(key string) bool {
 	if key == "" || a.siteHealth.failed == nil {
 		return false
 	}
-	_, ok := a.siteHealth.failed[key]
-	return ok
+	at, ok := a.siteHealth.failed[key]
+	if !ok {
+		return false
+	}
+	// Automatically allow sites to recover after a cool-down window so
+	// transient network blips never banish a source forever.
+	if !at.IsZero() && time.Since(at) >= siteHealthTTL {
+		return false
+	}
+	return true
 }
 
 func (a *app) markSiteFailed(key string) {
@@ -116,9 +127,16 @@ func (s *siteHealthStore) snapshotKeys() map[string]bool {
 	if len(s.failed) == 0 {
 		return nil
 	}
+	now := time.Now()
 	out := make(map[string]bool, len(s.failed))
-	for k := range s.failed {
+	for k, at := range s.failed {
+		if !at.IsZero() && now.Sub(at) >= siteHealthTTL {
+			continue
+		}
 		out[k] = true
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
