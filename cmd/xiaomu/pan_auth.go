@@ -308,8 +308,12 @@ func (a *app) beginPanWebLogin(provider pan.Provider, onSuccess func()) {
 	session := mygo.NewEphemeralSession()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	uaSuffix := panLoginUserAgentSuffix()
+	title := "登录" + provider.Label()
+	if onSuccess != nil {
+		title += " · 完成后自动继续播放"
+	}
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:  "登录" + provider.Label() + " · 登录成功后将自动关闭并继续播放",
+		Title:  title,
 		Width:  1040,
 		Height: 740,
 		Parent: a.window,
@@ -332,7 +336,8 @@ func (a *app) beginPanWebLogin(provider pan.Provider, onSuccess func()) {
 	})
 	ls := &panLoginSession{provider: provider, win: win, cancel: cancel, cleanup: offChild}
 	a.panLogin = ls
-	a.status = fmt.Sprintf("请在弹出的%s官方页面完成登录，成功后将自动返回…", provider.Label())
+	waitMsg := fmt.Sprintf("请在弹出的%s官方页面完成登录，成功后将自动返回…", provider.Label())
+	a.status = waitMsg
 
 	win.OnClosed(func() {
 		ls.finishCleanup()
@@ -341,6 +346,9 @@ func (a *app) beginPanWebLogin(provider pan.Provider, onSuccess func()) {
 			a.dispatch(func() {
 				if a.panLogin == ls {
 					a.panLogin = nil
+					if a.status == waitMsg {
+						a.setNotice("已取消登录")
+					}
 				}
 			})
 		}

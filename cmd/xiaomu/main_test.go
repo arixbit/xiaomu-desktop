@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -115,6 +116,10 @@ func TestViewPlay(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Type("https://example.com/clip.m3u8")
+	if err := tt.Click("高级选项（请求头）"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Advance(300 * time.Millisecond)
 	if err := tt.Click("Referer"); err != nil {
 		t.Fatal(err)
 	}

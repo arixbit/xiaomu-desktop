@@ -161,15 +161,19 @@ func (a *app) homeView(c *ui.Context) {
 			tab = i
 		}
 	}
+	p := paletteFor(c)
 	ui.Scroll(c).Key("home-scroll").Label("首页内容").Fill().Gap(14).Children(func() {
 		a.continueWatchingStrip(c)
 		a.favoritesStrip(c)
 		if a.library.root == nil {
-			ui.Column(c).FillWidth().Padding(20).Gap(12).Radius(22).Material(glassPane).Children(func() {
+			card := ui.Column(c).FillWidth().Padding(20).Gap(12).Radius(22)
+			applyPane(card, p, p.paneMat)
+			card.Children(func() {
 				ui.Text(c, "添加片源，继续观看").FontSize(22).Bold()
-				ui.Text(c, "观看记录和追剧仍保存在本机。重新添加片源后即可继续播放，也可直接打开或拖入本地视频文件。").TextColor(textMuted)
+				ui.Text(c, "观看记录和追剧仍保存在本机。重新添加片源后即可继续播放，也可直接打开或拖入本地视频文件。").TextColor(p.textMuted)
 				ui.Row(c).Gap(10).Children(func() {
 					if primaryButton(c, "添加片源").Clicked() {
+						a.browser.importErr = ""
 						a.browser.importOpen = true
 					}
 					if glassButton(c, "打开本地视频").Clicked() {
@@ -190,10 +194,12 @@ func (a *app) homeView(c *ui.Context) {
 			}
 			list := d.current()
 			if !list.feed.Updated.IsZero() {
-				ui.Text(c, "豆瓣榜单 · 更新于 "+list.feed.Updated.Local().Format("01-02 15:04")).FontSize(13).TextColor(textMuted)
+				ui.Text(c, "豆瓣榜单 · 更新于 "+list.feed.Updated.Local().Format("01-02 15:04")).FontSize(13).TextColor(p.textMuted)
 			}
-			if glassButton(c, "刷新榜单").Disabled(list.loading).Clicked() {
-				a.loadDiscoveryTab(true)
+			if list.message == "" {
+				if glassButton(c, "刷新榜单").Disabled(list.loading).Clicked() {
+					a.loadDiscoveryTab(true)
+				}
 			}
 		})
 		ui.Column(c).Label("首页推荐").FillWidth().Height(recommendationHeight).MinHeight(recommendationHeight).Gap(14).Children(func() {
@@ -211,7 +217,7 @@ func (a *app) homeView(c *ui.Context) {
 func (a *app) discoveryView(c *ui.Context) {
 	list := a.discovery.current()
 	if list.message != "" {
-		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Key("discovery-message").FillWidth().Gap(10).AlignItems(ui.Center).Transition(transInlineBanner).Children(func() {
 			ui.Text(c, list.message).FontSize(13).Grow(1)
 			if glassButton(c, "重试").Disabled(list.loading).Clicked() {
 				a.loadDiscoveryTab(true)
@@ -222,7 +228,9 @@ func (a *app) discoveryView(c *ui.Context) {
 		if list.loading {
 			emptyState(c, "正在加载豆瓣热播…", "也可以直接搜索片名。")
 		} else {
-			emptyState(c, "暂无豆瓣榜单", "切换到“最近更新”浏览片库，或直接搜索片名。")
+			emptyStateWithAction(c, "暂无豆瓣榜单", "可查看片库最近更新，或直接搜索片名。", "看最近更新", func() {
+				a.discovery.tab = "sites"
+			})
 		}
 		return
 	}

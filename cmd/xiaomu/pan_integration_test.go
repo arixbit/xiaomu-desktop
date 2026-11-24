@@ -307,7 +307,7 @@ func TestSourcesPageSurfacesPanAndAListSitesDirectly(t *testing.T) {
 
 	tt := ui.NewTester(a.view, 1120, 760)
 	tt.Frame()
-	if !tt.HasText("已识别的网盘 / AList 站点（2 个，点击直接浏览）") {
+	if !tt.HasText("已识别的网盘站点（2 个，点击直接浏览）") {
 		t.Fatalf("pan sites summary missing: %v", tt.Texts())
 	}
 	if !tt.HasText("玩偶4K示例") || !tt.HasText("公开AList示例") {

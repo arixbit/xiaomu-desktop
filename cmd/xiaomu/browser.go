@@ -12,7 +12,6 @@ import (
 	"github.com/arixbit/xiaomu-desktop/internal/iptv"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/arixbit/xiaomu-desktop/internal/source"
-	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -21,6 +20,8 @@ import (
 type browser struct {
 	configURL, assets, query string
 	importOpen               bool
+	importAdvanced           bool
+	importErr                string
 
 	site       library.Entry
 	session    source.Session
@@ -241,9 +242,14 @@ func (a *app) loadConfig(raw string) {
 func (a *app) readConfig(raw string, restoring bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		a.status = "请先粘贴配置地址"
+		msg := "请先粘贴配置地址"
+		a.status = msg
+		if a.browser.importOpen {
+			a.browser.importErr = msg
+		}
 		return
 	}
+	a.browser.importErr = ""
 	a.run(jobConfig, "加载配置", func(ctx context.Context) (jobResult, error) {
 		doc, err := config.Read(ctx, raw, nil)
 		if err != nil {
@@ -255,21 +261,26 @@ func (a *app) readConfig(raw string, restoring bool) {
 		}}, nil
 	}, func(err error) {
 		a.pendingLibrary = nil
-		a.status = jobError("加载配置", err)
+		msg := jobError("加载配置", err)
+		a.status = msg
+		if a.browser.importOpen {
+			a.browser.importErr = msg
+		}
 	})
 }
 
 func (a *app) applyConfig(raw string, doc *config.Config, restoring bool) {
 	b := &a.browser
 	b.importOpen = false
+	b.importErr = ""
 	if len(doc.Sites) == 0 && len(doc.Lines) == 0 {
 		if len(doc.Lives) == 0 {
-			a.status = "这个地址里没有站点，也没有直播频道"
+			a.status = "这个地址里没有影视站点，也没有直播频道"
 			return
 		}
 		// A plain channel list is a live source; the film library stays.
 		if !restoring || a.live.url == "" {
-			a.applyLiveImport(raw, doc.Lives)
+			a.applyLiveImport(raw, doc.Lives, true)
 		}
 		return
 	}
@@ -323,7 +334,7 @@ func (a *app) removeConfig() {
 		a.cancelJob(jobLive)
 		a.setLiveSources(nil)
 	}
-	a.status = "已移除片源"
+	a.setNotice("已移除片源")
 	if a.persist {
 		if err := a.saveImportedSource(""); err != nil {
 			a.status = "移除片源失败：" + err.Error()
@@ -391,37 +402,51 @@ func (a *app) loadPage(category string, page int) {
 		return jobResult{apply: func() {
 			b := &a.browser
 			b.category, b.page, b.results, b.selected = category, page, result, -1
-			a.status = fmt.Sprintf("第 %d 页 · %d 部影片", page, len(result.Videos))
+			msg := fmt.Sprintf("第 %d 页 · %d 部影片", page, len(result.Videos))
 			if len(result.Videos) == 0 {
-				a.status += "，可换分类或换站点"
+				msg += "，可换分类或换站点"
 			}
+			a.setNotice(msg)
 		}}, nil
 	}, nil)
 }
 
 func unsupported(kind config.Kind) string {
 	if kind == config.KindCSP {
-		return "此站点依赖私有混淆 Android 爬虫，当前未适配；XBPQ、AList 与开放网盘站点已原生支持"
+		return "该站点依赖安卓专属插件，桌面端暂不支持"
 	}
 	return fmt.Sprintf("当前版本暂不支持 %s 站点，请选择其他站点", kind)
 }
 
 // chip is one choice among several: a category, a play line or an episode.
 func chip(c *ui.Context, label string, selected bool) ui.Element {
+	p := paletteFor(c)
 	button := ui.Button(c, label).Radius(18).Padding(7, 14)
 	if selected {
-		return button.Background(ui.RGB(243, 239, 231)).TextColor(playerInk)
+		return applyPressPose(button.Background(p.chipSelectedBg).TextColor(p.chipSelectedText))
 	}
-	return button.Material(glassControl)
+	if p.reduceTransparency {
+		bg := p.surfaceSubtle
+		if button.Hovered() {
+			bg = p.surfaceHover
+		}
+		return applyPressPose(button.Background(button.AnimateColor("chip-bg", bg, animColor)).Border(1, p.border).TextColor(p.text))
+	}
+	button.Material(p.controlMat).TextColor(p.text)
+	if !p.dark || p.highContrast {
+		button.Border(1, p.border)
+	}
+	return applyPressPose(button)
 }
 
 // siteView browses the categories of one site.
 func (a *app) siteView(c *ui.Context) {
 	b := &a.browser
+	p := paletteFor(c)
 	ui.Column(c).Fill().Gap(14).Children(func() {
 		ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
 			for i, category := range b.categories {
-				if chip(c, category.Name, b.category == string(category.ID)).Key(fmt.Sprintf("category-%d", i)).Clicked() {
+				if chip(c.Key(fmt.Sprintf("category-%d", i)), category.Name, b.category == string(category.ID)).Clicked() {
 					a.loadPage(string(category.ID), 1)
 				}
 			}
@@ -433,7 +458,7 @@ func (a *app) siteView(c *ui.Context) {
 			} else if b.page > 0 {
 				state = fmt.Sprintf("第 %d 页", b.page)
 			}
-			ui.Text(c, state).TextColor(textMuted).Grow(1)
+			ui.Text(c, state).TextColor(p.textMuted).Grow(1).ContentTransition(ctNumeric)
 			if b.page > 0 {
 				if glassButton(c, "上一页").Disabled(b.page <= 1).Clicked() {
 					a.loadPage(b.category, b.page-1)
@@ -467,27 +492,48 @@ func (a *app) siteView(c *ui.Context) {
 }
 
 func emptyState(c *ui.Context, title, hint string) {
+	p := paletteFor(c)
 	ui.Column(c).Grow(1).FillWidth().Center().Gap(10).Children(func() {
 		ui.Text(c, title).FontSize(22).Bold()
-		ui.Text(c, hint).TextColor(textMuted)
+		ui.Text(c, hint).TextColor(p.textMuted)
+	})
+}
+
+func emptyStateWithAction(c *ui.Context, title, hint, actionLabel string, onAction func()) {
+	p := paletteFor(c)
+	ui.Column(c).Grow(1).FillWidth().Center().Gap(12).Children(func() {
+		ui.Text(c, title).FontSize(22).Bold()
+		ui.Text(c, hint).TextColor(p.textMuted)
+		if actionLabel != "" && onAction != nil && primaryButton(c, actionLabel).Clicked() {
+			onAction()
+		}
 	})
 }
 
 // welcomeView is the home page before any source was imported.
 func (a *app) welcomeView(c *ui.Context) {
 	b := &a.browser
+	p := paletteFor(c)
 	ui.Column(c).Fill().Center().Children(func() {
-		ui.Column(c).Width(540).MaxWidth(540).Padding(30).Gap(18).Radius(30).Material(glassPane).Children(func() {
+		box := ui.Column(c).Width(540).MaxWidth(540).Padding(30).Gap(18).Radius(30)
+		applyPane(box, p, p.paneMat)
+		box.Children(func() {
 			ui.Text(c, "添加片源，开始观看").FontSize(30).Bold()
 			ui.Text(c, "小幕不内置任何片源。粘贴你自己的配置地址，影片和直播就会出现在这里。地址只保存在本机。").
-				TextColor(textMuted)
-			ui.TextInput(c, &b.configURL).Label("配置地址").Placeholder("https://example.com/config.json").FillWidth()
+				TextColor(p.textMuted)
+			if ui.TextInput(c, &b.configURL).Label("配置地址").Placeholder("https://example.com/config.json").FillWidth().Submitted() {
+				a.loadConfig(b.configURL)
+			}
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "支持 TVBox 配置、M3U / TXT 直播列表，也可直接拖入本地视频。").FontSize(13).TextColor(textMuted).Grow(1)
+				ui.Text(c, "自动识别影视配置与直播频道表，也可直接拖入本地视频。").FontSize(13).TextColor(p.textMuted).Grow(1)
 				if glassButton(c, "打开本地视频").Clicked() {
 					a.openLocalFileDialog()
 				}
-				if primaryButton(c, "导入").Clicked() {
+				importLabel := "导入"
+				if a.running(jobConfig) {
+					importLabel = "导入中…"
+				}
+				if primaryButton(c, importLabel).Disabled(a.running(jobConfig)).Clicked() {
 					a.loadConfig(b.configURL)
 				}
 			})
@@ -497,21 +543,36 @@ func (a *app) welcomeView(c *ui.Context) {
 
 func (a *app) importDialog(c *ui.Context) {
 	b := &a.browser
+	p := paletteFor(c)
 	ui.DialogBase(c, &b.importOpen, func(backdrop, panel ui.Element) {
-		backdrop.Background(ui.RGBA(2, 8, 22, 0.67))
-		panel.Width(520).MaxWidth(520).Padding(26).Gap(14).Radius(26).Material(glass.Glass{})
+		backdrop.Background(p.dialogScrim).Transition(transDialogScrim)
+		panel.Width(520).MaxWidth(520).Padding(26).Gap(14).Radius(26).TextColor(p.text).Transition(transDialogPanel)
+		applyPane(panel, p, p.dialogMat)
 		ui.Text(c, "添加片源").FontSize(24).Bold()
-		ui.Text(c, "导入后自动汇集影片推荐，可直接搜索整个片库。也支持 M3U 和 TXT 直播列表。").TextColor(textMuted)
-		ui.TextInput(c, &b.configURL).Label("配置地址").Placeholder("https://example.com/config.json").FillWidth()
-		ui.TextInput(c, &b.assets).Label("脚本目录（可选）").Placeholder("本地依赖目录").FillWidth()
-		if a.status != "" {
-			ui.Text(c, a.status).TextColor(textMuted)
+		ui.Text(c, "粘贴影视配置或直播频道表地址（自动识别）。导入后即可全库搜索与观看。").TextColor(p.textMuted)
+		if ui.TextInput(c, &b.configURL).Label("配置地址").Placeholder("https://example.com/config.json").FillWidth().Submitted() {
+			if !a.running(jobConfig) {
+				a.loadConfig(b.configURL)
+			}
+		}
+		ui.Collapsible(c.Key("import-advanced"), "高级选项", &b.importAdvanced, func() {
+			ui.Column(c).FillWidth().Padding(6, 0, 2, 0).Gap(6).Children(func() {
+				ui.TextInput(c, &b.assets).Label("自定义脚本目录（可选）").Placeholder("本地脚本依赖目录").FillWidth()
+			})
+		})
+		if b.importErr != "" {
+			ui.Text(c, b.importErr).FontSize(13).TextColor(p.warning)
 		}
 		ui.Row(c).FillWidth().Gap(8).Justify(ui.End).Children(func() {
 			if glassButton(c, "取消").Clicked() {
 				b.importOpen = false
+				b.importErr = ""
 			}
-			if primaryButton(c, "加载配置").Clicked() {
+			submitLabel := "加载配置"
+			if a.running(jobConfig) {
+				submitLabel = "加载中…"
+			}
+			if primaryButton(c, submitLabel).Disabled(a.running(jobConfig)).Clicked() {
 				a.loadConfig(b.configURL)
 			}
 		})
@@ -521,14 +582,14 @@ func (a *app) importDialog(c *ui.Context) {
 // videoCard is a poster with its title over it. badge, when set, says where
 // the video comes from; a strong badge marks an exact match.
 func (a *app) videoCard(c *ui.Context, video catalog.Video, badge string, strong bool) ui.Element {
-	return ui.Box(c).Fill().Radius(14).Clip().Background(ui.Hex("#24242c")).Children(func() {
-		if poster := a.poster(video.Pic); poster != nil {
-			ui.Image(c, poster).Fill().Fit(ui.Cover)
-		}
+	p := paletteFor(c)
+	card := ui.Box(c).Fill().Radius(14).Clip().Background(p.cardPlaceholder).Cursor(ui.CursorPointer)
+	card.Children(func() {
+		applyPosterImage(c, card, a.poster(video.Pic))
 		if badge != "" {
 			text := ui.Text(c, badge).Absolute().Left(8).Top(8).Padding(3, 8).Radius(10).FontSize(12).SingleLine()
 			if strong {
-				text.Background(ui.RGBA(255, 90, 64, 0.92)).TextColor(accentInk)
+				text.Background(p.accent).TextColor(p.accentText)
 			} else {
 				text.Background(ui.RGBA(10, 13, 24, 0.78)).TextColor(ui.RGB(255, 255, 255))
 			}
@@ -541,6 +602,7 @@ func (a *app) videoCard(c *ui.Context, video catalog.Video, badge string, strong
 			}
 		})
 	})
+	return applyCardPose(card)
 }
 
 func videoTitle(video catalog.Video) string {

@@ -10,7 +10,6 @@ import (
 	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/arixbit/xiaomu-desktop/internal/pan"
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -21,6 +20,7 @@ type panUIState struct {
 	promptProvider pan.Provider
 	promptReason   string
 	onAuthSuccess  func()
+	cardExpanded   bool
 }
 
 var panAccountProviders = []pan.Provider{
@@ -82,12 +82,12 @@ func (a *app) logoutPanProvider(p pan.Provider) {
 		a.status = "退出登录保存失败：" + err.Error()
 		return
 	}
-	a.status = "已退出" + p.Label() + "登录"
+	a.setNotice("已退出" + p.Label() + "登录")
 }
 
 func (a *app) cleanupPanTempFiles() {
 	if !a.panUI.creds.Has(pan.ProviderQuark) && !a.panUI.creds.Has(pan.ProviderUC) && !a.panUI.creds.Has(pan.ProviderBaidu) {
-		a.status = "尚未登录夸克、UC 或百度网盘"
+		a.setNotice("尚未登录夸克、UC 或百度网盘")
 		return
 	}
 	a.run(jobPan, "清理网盘临时文件", func(ctx context.Context) (jobResult, error) {
@@ -97,9 +97,9 @@ func (a *app) cleanupPanTempFiles() {
 		}
 		return jobResult{apply: func() {
 			if n == 0 {
-				a.status = "网盘临时目录已经是空的"
+				a.setNotice("网盘临时目录已经是空的")
 			} else {
-				a.status = fmt.Sprintf("已清理 %d 个临时转存文件", n)
+				a.setNotice(fmt.Sprintf("已清理 %d 个临时转存文件", n))
 			}
 		}}, nil
 	}, func(err error) {
@@ -109,12 +109,21 @@ func (a *app) cleanupPanTempFiles() {
 
 func (a *app) panCredentialsCard(c *ui.Context) {
 	creds := a.panUI.creds
-	ui.Column(c).FillWidth().Padding(18).Gap(12).Radius(22).Background(surface).Children(func() {
+	panSites := a.panSiteEntries()
+	anySignedIn := false
+	for _, provider := range panAccountProviders {
+		if creds.Has(provider) {
+			anySignedIn = true
+			break
+		}
+	}
+	p := paletteFor(c)
+	renderBody := func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-				ui.Text(c, "网盘账号（聚合 4K 源自动授权）").FontSize(17).Bold()
-				ui.Text(c, "点击播放配置中的网盘影片时，未登录会自动弹出对应网盘的官方页面授权，登录完成后自动保存到本机。公开 AList 站无需登录。").
-					FontSize(13).TextColor(textMuted)
+				ui.Text(c, "网盘账号").FontSize(17).Bold()
+				ui.Text(c, "播放网盘影片时，未登录会自动弹出官方授权页面，完成后仅保存在本机。").
+					FontSize(13).TextColor(p.textMuted)
 			})
 			if creds.Has(pan.ProviderQuark) || creds.Has(pan.ProviderUC) || creds.Has(pan.ProviderBaidu) {
 				if glassButton(c, "清理临时文件").Disabled(a.running(jobPan)).Clicked() {
@@ -125,11 +134,11 @@ func (a *app) panCredentialsCard(c *ui.Context) {
 		ui.Row(c).FillWidth().Wrap().Gap(10).Children(func() {
 			for _, provider := range panAccountProviders {
 				signedIn := creds.Has(provider)
-				ui.Row(c).Key(string(provider)).Padding(8, 12).Gap(10).Radius(16).Background(ui.RGBA(255, 255, 255, 0.06)).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Key(string(provider)).Padding(8, 12).Gap(10).Radius(16).Background(p.surfaceSubtle).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, provider.Label()).Bold().FontSize(13)
-					ui.Text(c, creds.Masked(provider)).FontSize(12).TextColor(textMuted)
+					ui.Text(c, creds.Masked(provider)).FontSize(12).TextColor(p.textMuted)
 					if signedIn {
-						if glassButton(c, "退出").Padding(5, 10).Clicked() {
+						if a.armedDangerButton(c, "pan-logout-"+string(provider), "退出", "确认退出？") {
 							a.logoutPanProvider(provider)
 						}
 					} else {
@@ -140,24 +149,35 @@ func (a *app) panCredentialsCard(c *ui.Context) {
 				})
 			}
 		})
-		if panSites := a.panSiteEntries(); len(panSites) > 0 {
+		if len(panSites) > 0 {
 			ui.Column(c).FillWidth().Gap(8).Children(func() {
-				ui.Text(c, fmt.Sprintf("已识别的网盘 / AList 站点（%d 个，点击直接浏览）", len(panSites))).FontSize(13).TextColor(textMuted)
+				ui.Text(c, fmt.Sprintf("已识别的网盘站点（%d 个，点击直接浏览）", len(panSites))).FontSize(13).TextColor(p.textMuted)
 				ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
 					for i, entry := range panSites {
 						ui.Row(c).Key(i).Gap(6).AlignItems(ui.Center).Children(func() {
-							if glassButton(c, entry.Site.Name).Padding(6, 12).Clicked() {
+							if glassButton(c, entry.Site.Name).Clicked() {
 								a.openSite(entry)
 							}
 							if d, ok := a.latency.get(entry.Key()); ok {
-								ui.Text(c, formatLatency(d)).FontSize(12).TextColor(textMuted)
+								ui.Text(c, formatLatency(d)).FontSize(12).TextColor(p.textMuted).ContentTransition(ctNumeric)
 							}
 						})
 					}
 				})
 			})
 		}
-	})
+	}
+	col := ui.Column(c).FillWidth().Padding(18).Gap(12)
+	applySurface(col, p, 22)
+	if len(panSites) == 0 && !anySignedIn {
+		col.Children(func() {
+			ui.Collapsible(c.Key("pan-accounts-optional"), "网盘账号（播放网盘影片时自动按需授权）", &a.panUI.cardExpanded, func() {
+				ui.Column(c).FillWidth().Padding(8, 0, 0, 0).Gap(12).Children(renderBody)
+			})
+		})
+		return
+	}
+	col.Children(renderBody)
 }
 
 func (a *app) panSiteEntries() []library.Entry {
@@ -186,16 +206,18 @@ func (a *app) panSiteEntries() []library.Entry {
 }
 
 func (a *app) panAuthPromptDialog(c *ui.Context) {
+	pal := paletteFor(c)
 	ui.DialogBase(c, &a.panUI.promptOpen, func(backdrop, panel ui.Element) {
 		p := a.panUI.promptProvider
-		backdrop.Background(ui.RGBA(2, 8, 22, 0.67))
-		panel.Width(500).MaxWidth(500).Padding(26).Gap(14).Radius(26).Material(glass.Glass{})
+		backdrop.Background(pal.dialogScrim).Transition(transDialogScrim)
+		panel.Width(520).MaxWidth(520).Padding(26).Gap(14).Radius(26).TextColor(pal.text).Transition(transDialogPanel)
+		applyPane(panel, pal, pal.dialogMat)
 		ui.Text(c, "需要登录"+p.Label()).FontSize(22).Bold()
 		if a.panUI.promptReason != "" {
-			ui.Text(c, a.panUI.promptReason).TextColor(textMuted)
+			ui.Text(c, a.panUI.promptReason).TextColor(pal.textMuted)
 		}
-		ui.Text(c, "点击下方按钮将打开"+p.Label()+"官方登录页面。你完成登录后，小幕会自动保存授权到本机、关闭登录窗口并继续播放当前影片。").
-			FontSize(13).TextColor(textMuted)
+		ui.Text(c, "将打开"+p.Label()+"官方登录页面。登录完成后会自动保存授权到本机并继续播放。").
+			FontSize(13).TextColor(pal.textMuted)
 		ui.Row(c).FillWidth().Gap(8).Justify(ui.End).Children(func() {
 			if glassButton(c, "暂不登录").Clicked() {
 				a.panUI.promptOpen = false

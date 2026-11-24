@@ -201,6 +201,7 @@ func (a *app) startSourceSpeedTest() {
 	}
 	entries := a.speedTestEntries()
 	if len(entries) == 0 {
+		a.setNotice("当前还没有可测速的站点")
 		return
 	}
 	a.cancelSourceSpeedTest()

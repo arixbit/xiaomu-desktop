@@ -88,7 +88,7 @@ func TestFavoritesUIRestartAndSourceChanges(t *testing.T) {
 		t.Fatal("removing the source removed the favorite")
 	}
 	b.openFavorite(entries[0])
-	if b.title != nil || b.status != "请先添加片源，再打开收藏的影片" {
+	if b.title != nil || b.status != "请先添加片源，再打开追剧影片" {
 		t.Fatal("favorite opened a source that is no longer imported")
 	}
 	b.switchTab(routeFavorites)
@@ -171,7 +171,7 @@ func TestFavoritesAllowSavingBeforeDetailAndPreserveFileOnError(t *testing.T) {
 	}
 	a.favorites.path = t.TempDir() // a directory cannot be replaced by a file
 	a.toggleFavorite()
-	if len(a.favorites.entries) != 0 || !strings.Contains(a.status, "保存收藏失败") {
+	if len(a.favorites.entries) != 0 || !strings.Contains(a.status, "保存追剧失败") {
 		t.Fatal("failed save appeared successful")
 	}
 	path := filepath.Join(t.TempDir(), "favorites.json")

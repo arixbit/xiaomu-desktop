@@ -98,7 +98,7 @@ func TestSourcesPageFiltersInvalidSitesAndAllowsRecovery(t *testing.T) {
 	if tt.HasText("故障站点A") || tt.HasText("停靠网盘B") || tt.HasText("全挂线路") {
 		t.Fatalf("invalid sites or dead-only line were not filtered out: %v", tt.Texts())
 	}
-	if !tt.HasText("已过滤 3 个失效站点、1 个不兼容站点") {
+	if !tt.HasText("已隐藏 3 个失效站点、1 个暂不兼容站点") {
 		t.Fatalf("filtered summary missing: %v", tt.Texts())
 	}
 

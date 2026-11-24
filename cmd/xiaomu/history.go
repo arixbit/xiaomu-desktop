@@ -207,11 +207,35 @@ func (h *historyStore) note(e historyEntry) {
 	h.dirty = true
 }
 
-func (h *historyStore) remove(i int) {
+func (h *historyStore) remove(i int) (historyEntry, bool) {
 	if i < 0 || i >= len(h.entries) {
-		return
+		return historyEntry{}, false
 	}
+	removed := h.entries[i]
 	h.entries = append(h.entries[:i:i], h.entries[i+1:]...)
+	h.byTitle, h.rowsCache = nil, nil
+	h.dirty = true
+	return removed, true
+}
+
+func (h *historyStore) restore(i int, e historyEntry) {
+	key := e.dedupKey()
+	for _, existing := range h.entries {
+		if existing.dedupKey() == key {
+			return
+		}
+	}
+	if i < 0 {
+		i = 0
+	}
+	if i > len(h.entries) {
+		i = len(h.entries)
+	}
+	out := make([]historyEntry, 0, len(h.entries)+1)
+	out = append(out, h.entries[:i]...)
+	out = append(out, e)
+	out = append(out, h.entries[i:]...)
+	h.entries = out
 	h.byTitle, h.rowsCache = nil, nil
 	h.dirty = true
 }
@@ -502,17 +526,19 @@ func (a *app) resume(e historyEntry) {
 
 func (a *app) historyView(c *ui.Context) {
 	h := &a.history
+	p := paletteFor(c)
 	if len(h.entries) == 0 {
 		emptyState(c, "还没有播放记录", "看过的影片会出现在这里，点一下从上次的进度继续。")
 		return
 	}
 	ui.Column(c).Fill().Gap(14).Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "只保存在本机").FontSize(13).TextColor(textMuted).Grow(1)
-			if glassButton(c, "清空历史").Clicked() {
+			ui.Text(c, "只保存在本机").FontSize(13).TextColor(p.textMuted).Grow(1)
+			if a.armedDangerButton(c, "clear-history", "清空历史", "确认清空？") {
 				h.entries, h.dirty = nil, true
 				h.byTitle, h.rowsCache, h.list = nil, nil, ui.ListState{}
 				a.flushHistory()
+				a.setNotice("已清空播放历史")
 			}
 		})
 		rows := h.listRows(c.Now())
@@ -532,32 +558,53 @@ func (a *app) historyView(c *ui.Context) {
 }
 
 func (a *app) historyRow(c *ui.Context, i int, e historyEntry) {
+	p := paletteFor(c)
 	available := a.historyAvailable(e)
-	ui.Row(c).Key(e.dedupKey()).FillWidth().Padding(10, 14, 10, 10).Gap(14).Radius(18).
-		AlignItems(ui.Center).Background(surface).Children(func() {
-		ui.Box(c).Size(60, 90).Radius(10).Clip().Background(ui.Hex("#24242c")).Children(func() {
-			if poster := a.poster(e.Pic); poster != nil {
-				ui.Image(c, poster).Fill().Fit(ui.Cover)
-			}
+	row := ui.Row(c).Key(e.dedupKey()).FillWidth().Padding(10, 14, 10, 10).Gap(14).
+		AlignItems(ui.Center)
+	applySurface(row, p, 18).Children(func() {
+		mainArea := ui.Row(c).Grow(1).MinWidth(0).Gap(14).AlignItems(ui.Center)
+		if available {
+			mainArea.Cursor(ui.CursorPointer)
+		}
+		mainArea.Children(func() {
+			posterBox := ui.Box(c).Size(60, 90).Radius(10).Clip().Background(p.cardPlaceholder)
+			posterBox.Children(func() {
+				applyPosterImage(c, posterBox, a.poster(e.Pic))
+			})
+			ui.Column(c).Grow(1).MinWidth(0).Gap(5).Children(func() {
+				ui.Text(c, e.Name).Bold().SingleLine()
+				ui.Text(c, e.progress()).FontSize(13).TextColor(p.textMuted).SingleLine()
+				if e.Duration > 0 {
+					ui.Progress(c, min(e.Position/e.Duration, 1)).FillWidth().MaxWidth(360).Label("观看进度")
+				}
+				origin := e.Origin
+				if !available {
+					origin = "片源已移除"
+				}
+				ui.Text(c, origin).FontSize(12).TextColor(p.textMuted).SingleLine()
+			})
 		})
-		ui.Column(c).Grow(1).MinWidth(0).Gap(5).Children(func() {
-			ui.Text(c, e.Name).Bold().SingleLine()
-			ui.Text(c, e.progress()).FontSize(13).TextColor(textMuted).SingleLine()
-			if e.Duration > 0 {
-				ui.Progress(c, min(e.Position/e.Duration, 1)).FillWidth().MaxWidth(360).Label("观看进度")
-			}
-			origin := e.Origin
-			if !available {
-				origin = "片源已移除"
-			}
-			ui.Text(c, origin).FontSize(12).TextColor(textMuted).SingleLine()
-		})
+		if available && mainArea.Clicked() {
+			a.resume(e)
+		}
 		if primaryButton(c, "继续播放").Label("继续播放 " + e.Name).Disabled(!available).Clicked() {
 			a.resume(e)
 		}
+		if !available && a.library.root != nil {
+			if glassButton(c, "搜片库").Label("搜片库 " + e.Name).Clicked() {
+				a.openTitle(e.Name, e.Pic, nil)
+			}
+		}
 		if glassButton(c, "移除").Label("移除 " + e.Name).Clicked() {
-			a.history.remove(i)
-			a.flushHistory()
+			idx := i
+			if removed, ok := a.history.remove(idx); ok {
+				a.flushHistory()
+				a.setUndoNotice("已移除「"+removed.Name+"」", "撤销", func() {
+					a.history.restore(idx, removed)
+					a.flushHistory()
+				})
+			}
 		}
 	})
 }
