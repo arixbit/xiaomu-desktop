@@ -16,23 +16,20 @@ macOS 13+ · Apple Silicon / Intel · Windows 10/11 · x64 / ARM64 · [下载最
 
 <p>
   <a href="docs/screenshots/home.webp?raw=true"><img src="docs/screenshots/home.webp" alt="首页，展示继续观看、追剧和热播榜单" width="48%"></a>
-  <a href="docs/screenshots/player.webp?raw=true"><img src="docs/screenshots/player.webp" alt="播放器，右侧显示来源、线路和选集" width="48%"></a>
+  <a href="docs/screenshots/detail.webp?raw=true"><img src="docs/screenshots/detail.webp" alt="影片详情页，展开来源、线路和分集" width="48%"></a>
 </p>
 <p>
-  <a href="docs/screenshots/danmaku.webp?raw=true"><img src="docs/screenshots/danmaku.webp" alt="弹幕播放，展示滚动弹幕、进度条高能密度曲线与播放控制栏" width="96.5%"></a>
+  <a href="docs/screenshots/player.webp?raw=true"><img src="docs/screenshots/player.webp" alt="播放器，右侧显示来源、线路和选集" width="49%"></a>
+  <a href="docs/screenshots/danmaku.webp?raw=true"><img src="docs/screenshots/danmaku.webp" alt="弹幕播放，展示滚动弹幕、进度条高能密度曲线与播放控制栏" width="47%"></a>
 </p>
 
 点击截图查看原尺寸。截图展示了导入配置后的界面，播放内容来自用户自备的片源。
 
 <details>
-<summary>更多界面截图（4 张）</summary>
+<summary>更多界面截图（2 张）</summary>
 
 <p>
   <a href="docs/screenshots/search.webp?raw=true"><img src="docs/screenshots/search.webp" alt="跨站搜索结果，影片卡片显示来源数量" width="48%"></a>
-  <a href="docs/screenshots/detail.webp?raw=true"><img src="docs/screenshots/detail.webp" alt="影片详情页，展开来源、线路和分集" width="48%"></a>
-</p>
-<p>
-  <a href="docs/screenshots/player-wide.webp?raw=true"><img src="docs/screenshots/player-wide.webp" alt="收起选集面板后的播放界面" width="48%"></a>
   <a href="docs/screenshots/history.webp?raw=true"><img src="docs/screenshots/history.webp" alt="本机播放历史和续播进度" width="48%"></a>
 </p>
 
