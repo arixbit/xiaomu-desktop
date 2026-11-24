@@ -45,6 +45,8 @@ const (
 	jobTitle                  // reading a title from one of its sources
 	jobPlay                   // resolving an episode into media
 	jobDanmaku                // searching or loading this episode's comments
+	jobSubtitle               // searching or downloading online external subtitles
+	jobEPG                    // loading IPTV EPG program guides
 	jobPan                    // verifying cloud-drive credentials or cleaning temp files
 	jobSlots
 )
@@ -205,7 +207,6 @@ func (a *app) closeSession(s source.Session) {
 func (a *app) close() {
 	a.closed = true
 	a.cancelSourceSpeedTest()
-	a.posters.close()
 	a.pending, a.pendingLibrary = nil, nil
 	a.cancelFollowingRefresh()
 	a.stopScan(&a.library.feed)
@@ -288,7 +289,7 @@ func (a *app) applyConfig(raw string, doc *config.Config, restoring bool) {
 		a.clearSiteHealth()
 		a.showFailedSites = false
 	}
-	a.applyLibraryConfig(raw, doc, nil, nil)
+	a.applyLibraryConfig(raw, doc, nil, nil, nil)
 	if a.persist {
 		if err := a.saveImportedSource(raw); err != nil {
 			a.status = "保存片源地址失败：" + err.Error()
@@ -297,15 +298,15 @@ func (a *app) applyConfig(raw string, doc *config.Config, restoring bool) {
 }
 
 func (a *app) applyCachedConfig(raw string, cached cachedSourceConfig) {
-	root, docs, liveChannels := cached.restore()
+	root, docs, liveChannels, liveEPG := cached.restore()
 	if root == nil {
 		return
 	}
 	a.browser.importOpen = false
-	a.applyLibraryConfig(raw, root, docs, liveChannels)
+	a.applyLibraryConfig(raw, root, docs, liveChannels, liveEPG)
 }
 
-func (a *app) applyLibraryConfig(raw string, doc *config.Config, cached map[string]*config.Config, liveChannels map[string][]iptv.Channel) {
+func (a *app) applyLibraryConfig(raw string, doc *config.Config, cached map[string]*config.Config, liveChannels map[string][]iptv.Channel, liveEPG map[string]string) {
 	a.cancelJob(jobSite)
 	a.closeSite()
 	a.clearTitle()
@@ -315,7 +316,7 @@ func (a *app) applyLibraryConfig(raw string, doc *config.Config, cached map[stri
 		a.cancelJob(jobLive)
 		a.setLiveSources(doc.Lives)
 	}
-	a.resetLibraryWithCache(doc, cached, liveChannels)
+	a.resetLibraryWithCache(doc, cached, liveChannels, liveEPG)
 }
 
 // removeConfig forgets the imported configuration. Play history stays, shown
@@ -585,7 +586,7 @@ func (a *app) videoCard(c *ui.Context, video catalog.Video, badge string, strong
 	p := paletteFor(c)
 	card := ui.Box(c).Fill().Radius(14).Clip().Background(p.cardPlaceholder).Cursor(ui.CursorPointer)
 	card.Children(func() {
-		applyPosterImage(c, card, a.poster(video.Pic))
+		applyPosterImage(c, card, a.poster(c, video.Pic))
 		if badge != "" {
 			text := ui.Text(c, badge).Absolute().Left(8).Top(8).Padding(3, 8).Radius(10).FontSize(12).SingleLine()
 			if strong {

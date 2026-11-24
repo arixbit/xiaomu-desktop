@@ -67,6 +67,7 @@ type libraryBrowser struct {
 	root         *config.Config
 	cached       map[string]*config.Config
 	liveChannels map[string][]iptv.Channel
+	liveEPG      map[string]string
 	searchCache  *library.SearchCache
 	documents    []libraryDocument
 	feed, search libraryScan
@@ -83,10 +84,10 @@ func (a *app) stopScan(s *libraryScan) {
 
 // resetLibrary replaces the imported configuration; nil removes it.
 func (a *app) resetLibrary(doc *config.Config) {
-	a.resetLibraryWithCache(doc, nil, nil)
+	a.resetLibraryWithCache(doc, nil, nil, nil)
 }
 
-func (a *app) resetLibraryWithCache(doc *config.Config, cached map[string]*config.Config, liveChannels map[string][]iptv.Channel) {
+func (a *app) resetLibraryWithCache(doc *config.Config, cached map[string]*config.Config, liveChannels map[string][]iptv.Channel, liveEPG map[string]string) {
 	a.cancelSourceSpeedTest()
 	a.cancelFollowingRefresh()
 	l := &a.library
@@ -100,6 +101,7 @@ func (a *app) resetLibraryWithCache(doc *config.Config, cached map[string]*confi
 		root:         doc,
 		cached:       docs,
 		liveChannels: cloneLiveChannelsMap(liveChannels),
+		liveEPG:      cloneStringMap(liveEPG),
 		feed:         libraryScan{generation: l.feed.generation, selected: -1},
 		search:       libraryScan{generation: l.search.generation, selected: -1},
 	}

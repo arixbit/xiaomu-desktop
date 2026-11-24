@@ -11,20 +11,41 @@ import (
 // LiveChannels loads one live provider, including nested TVBox lists. Headers
 // apply both to loading its playlist and to media unless a channel overrides it.
 func LiveChannels(ctx context.Context, source iptv.Source, fetch Fetcher) ([]iptv.Channel, error) {
-	remaining := 32
-	return liveChannels(ctx, source, fetch, 0, &remaining)
+	pl, err := LivePlaylist(ctx, source, fetch)
+	if err != nil {
+		return nil, err
+	}
+	return pl.Channels, nil
 }
 
-func liveChannels(ctx context.Context, source iptv.Source, fetch Fetcher, depth int, remaining *int) ([]iptv.Channel, error) {
+// LivePlaylist loads one live provider and also returns any EPG URL discovered
+// in the source or nested M3U/TVBox playlists.
+func LivePlaylist(ctx context.Context, source iptv.Source, fetch Fetcher) (iptv.Playlist, error) {
+	remaining := 32
+	var epg string
+	channels, err := liveChannels(ctx, source, fetch, 0, &remaining, &epg)
+	if err != nil {
+		return iptv.Playlist{}, err
+	}
+	return iptv.Playlist{Channels: channels, EPG: epg}, nil
+}
+
+func liveChannels(ctx context.Context, source iptv.Source, fetch Fetcher, depth int, remaining *int, epgOut *string) ([]iptv.Channel, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if depth > 4 || *remaining <= 0 {
 		return nil, fmt.Errorf("直播列表嵌套过多或重复引用，请检查地址")
 	}
+	if *epgOut == "" && source.EPG != "" {
+		*epgOut = source.EPG
+	}
 	var out []iptv.Channel
 	for _, channel := range source.Channels {
 		copy := channel
+		if copy.Logo == "" && source.Logo != "" {
+			copy.Logo = iptv.ExpandLogoTemplate(source.Logo, copy.Name)
+		}
 		copy.Streams = make([]iptv.Stream, len(channel.Streams))
 		for i, stream := range channel.Streams {
 			copy.Streams[i] = iptv.Stream{URL: stream.URL, Headers: iptv.MergeHeaders(source.Headers, stream.Headers)}
@@ -47,7 +68,13 @@ func liveChannels(ctx context.Context, source iptv.Source, fetch Fetcher, depth 
 		}
 		for _, child := range doc.Lives {
 			child.Headers = iptv.MergeHeaders(source.Headers, child.Headers)
-			channels, err := liveChannels(ctx, child, fetch, depth+1, remaining)
+			if child.EPG == "" {
+				child.EPG = source.EPG
+			}
+			if child.Logo == "" {
+				child.Logo = source.Logo
+			}
+			channels, err := liveChannels(ctx, child, fetch, depth+1, remaining, epgOut)
 			if err != nil {
 				return nil, err
 			}

@@ -230,6 +230,7 @@ func (a *app) skipUndoPill(c *ui.Context, p mediaPlayer) {
 // seconds of a video.
 func (a *app) upNextTarget(p mediaPlayer) (nextName string, playNext func(), remaining time.Duration, ok bool) {
 	if !a.autoNext || a.autoNextPending || a.autoNextCanceled ||
+		a.playerExtra.loop || a.playerExtra.sleepMode == sleepAfterEpisode ||
 		a.running(jobPlay) || a.playFailure != nil || a.resumeAt != 0 ||
 		p == nil || !p.Ready() || !p.Playing() || p.Buffering() || p.Err() != nil {
 		return "", nil, 0, false

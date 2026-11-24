@@ -221,8 +221,8 @@ func Read(ctx context.Context, pageURL string, fetch Fetcher) (*Config, error) {
 		what := "返回的内容不是 TVBox 配置 JSON 或 IPTV 频道列表，请检查配置地址"
 		if strings.HasPrefix(strings.TrimSpace(string(body)), "<") || strings.Contains(strings.ToLower(res.ContentType), "html") {
 			what = "返回的是 HTML 页面，不是 TVBox 配置 JSON，请检查配置地址"
-		} else if channels, err := iptv.Parse(base, body); err == nil {
-			return &Config{URL: base, Lives: []iptv.Source{{Name: "IPTV 直播", Channels: channels}}}, nil
+		} else if pl, err := iptv.ParsePlaylist(base, body); err == nil {
+			return &Config{URL: base, Lives: []iptv.Source{{Name: "IPTV 直播", EPG: pl.EPG, Channels: pl.Channels}}}, nil
 		}
 		return nil, fmt.Errorf("config: %s: HTTP %d%s: %s", pageURL, res.Status, contentTypeDetail(res.ContentType), what)
 	}

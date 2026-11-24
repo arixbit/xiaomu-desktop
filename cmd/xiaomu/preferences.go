@@ -6,17 +6,47 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
+type subtitlePreferences struct {
+	Scale         float64 `json:"scale"`
+	Pos           int     `json:"pos"`
+	PreferChinese bool    `json:"prefer_chinese"`
+	ASSRTToken    string  `json:"assrt_token,omitempty"`
+}
+
+func defaultSubtitlePreferences() subtitlePreferences {
+	return subtitlePreferences{Scale: 1.0, Pos: 100, PreferChinese: true}
+}
+
+func (p subtitlePreferences) normalized() subtitlePreferences {
+	if math.IsNaN(p.Scale) || p.Scale < 0.5 || p.Scale > 2.0 {
+		p.Scale = 1.0
+	}
+	if p.Pos < 50 || p.Pos > 100 {
+		p.Pos = 100
+	}
+	p.ASSRTToken = strings.TrimSpace(p.ASSRTToken)
+	return p
+}
+
 type playerPreferences struct {
-	Volume   float64            `json:"volume"`
-	Rate     float64            `json:"rate"`
-	AutoNext bool               `json:"auto_next"`
-	Danmaku  danmakuPreferences `json:"danmaku"`
+	Volume   float64             `json:"volume"`
+	Rate     float64             `json:"rate"`
+	AutoNext bool                `json:"auto_next"`
+	Danmaku  danmakuPreferences  `json:"danmaku"`
+	Subtitle subtitlePreferences `json:"subtitle"`
 }
 
 func defaultPlayerPreferences() playerPreferences {
-	return playerPreferences{Volume: 1, Rate: 1, AutoNext: true, Danmaku: defaultDanmakuPreferences()}
+	return playerPreferences{
+		Volume:   1,
+		Rate:     1,
+		AutoNext: true,
+		Danmaku:  defaultDanmakuPreferences(),
+		Subtitle: defaultSubtitlePreferences(),
+	}
 }
 
 func readPlayerPreferences(path string) (playerPreferences, error) {
@@ -40,6 +70,7 @@ func readPlayerPreferences(path string) (playerPreferences, error) {
 		p.Rate = 1
 	}
 	p.Danmaku = p.Danmaku.normalized()
+	p.Subtitle = p.Subtitle.normalized()
 	return p, nil
 }
 
@@ -63,6 +94,7 @@ func (a *app) ensurePreferences() {
 		a.preferences = defaultPlayerPreferences()
 	}
 	a.preferences.Danmaku = a.preferences.Danmaku.normalized()
+	a.preferences.Subtitle = a.preferences.Subtitle.normalized()
 }
 
 func (a *app) savePreferences() {
@@ -82,4 +114,5 @@ func (a *app) applyPlayerPreferences(p mediaPlayer) {
 	a.ensurePreferences()
 	p.SetVolume(a.preferences.Volume)
 	p.SetRate(a.preferences.Rate)
+	a.applySubtitlePreferences(p)
 }

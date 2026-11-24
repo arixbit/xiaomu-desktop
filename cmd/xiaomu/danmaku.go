@@ -71,6 +71,11 @@ func danmakuDensityParams(density string) (maxRows int, minGap float32) {
 	}
 }
 
+type danmakuLayoutEntry struct {
+	layout *ui.TextLayout
+	frame  uint64
+}
+
 type danmakuState struct {
 	open, advanced          bool
 	failed, empty           bool
@@ -82,15 +87,53 @@ type danmakuState struct {
 	episodes                []danmaku.Episode
 	selected                *danmaku.Episode
 	comments                []danmaku.Comment
-	profile         []float32
-	profileDuration time.Duration
-	curveProfilePtr *float32
-	curveProfileLen int
-	curveRect       ui.Rect
-	curvePoints     [][2]float32
-	curvePath       ui.Path
-	list            ui.ListState
-	screen          danmaku.Screen
+	profile                 []float32
+	profileDuration         time.Duration
+	curveProfilePtr         *float32
+	curveProfileLen         int
+	curveRect               ui.Rect
+	curvePoints             [][2]float32
+	curvePath               ui.Path
+	layoutSize              float32
+	layoutFrame             uint64
+	layouts                 map[string]danmakuLayoutEntry
+	list                    ui.ListState
+	screen                  danmaku.Screen
+}
+
+func (s *danmakuState) clearLayouts() {
+	s.layouts = nil
+	s.layoutSize = 0
+	s.layoutFrame = 0
+}
+
+func (s *danmakuState) layoutFor(text string, size float32) *ui.TextLayout {
+	if s.layoutSize != size {
+		s.layouts = nil
+		s.layoutSize = size
+	}
+	if s.layouts == nil {
+		s.layouts = make(map[string]danmakuLayoutEntry)
+	}
+	if entry, ok := s.layouts[text]; ok {
+		entry.frame = s.layoutFrame
+		s.layouts[text] = entry
+		return entry.layout
+	}
+	layout := ui.ShapeText(text, ui.Font{Size: size}, 0)
+	s.layouts[text] = danmakuLayoutEntry{layout: layout, frame: s.layoutFrame}
+	return layout
+}
+
+func (s *danmakuState) pruneLayouts(activeCount int) {
+	if len(s.layouts) <= activeCount+32 {
+		return
+	}
+	for text, entry := range s.layouts {
+		if entry.frame < s.layoutFrame {
+			delete(s.layouts, text)
+		}
+	}
 }
 
 func (a *app) cancelDanmakuJob() {
@@ -105,11 +148,13 @@ func (a *app) stopDanmaku() {
 	s.episodes, s.selected, s.comments = nil, nil, nil
 	s.profile, s.profileDuration, s.curveProfilePtr, s.curveProfileLen = nil, 0, nil, 0
 	s.curvePoints = nil
+	s.clearLayouts()
 	s.screen.Reset(nil)
 }
 
 func (a *app) refreshDanmakuTrack() {
 	s := &a.danmaku
+	s.clearLayouts()
 	p := a.preferences.Danmaku.normalized()
 	filtered := danmaku.Filter(s.comments, danmaku.FilterOptions{
 		HideTop:     p.HideTop,
@@ -926,22 +971,25 @@ func (a *app) danmakuOverlay(c *ui.Context, player mediaPlayer, avoidControls bo
 			return
 		}
 		position := player.Position() + a.danmaku.offset
+		a.danmaku.layoutFrame++
 		sprites := a.danmaku.screen.Frame(position, area.W, area.H, size, float32(settings.Speed), func(text string) float32 {
-			width, _ := p.MeasureText(0, ui.Span{Text: text, Size: size})
+			width, _ := a.danmaku.layoutFor(text, size).Size()
 			return width
 		})
 		outline := ui.RGBA(0, 0, 0, float32(settings.Opacity)*0.85)
 		p.Clip(area, 0, func() {
 			for _, sprite := range sprites {
+				layout := a.danmaku.layoutFor(sprite.Text, size)
 				color := ui.RGBA(uint8(sprite.Color>>16), uint8(sprite.Color>>8), uint8(sprite.Color), float32(settings.Opacity))
 				x, y := area.X+sprite.X, area.Y+sprite.Y
-				p.Text(x-1, y, sprite.Text, size, outline)
-				p.Text(x+1, y, sprite.Text, size, outline)
-				p.Text(x, y-1, sprite.Text, size, outline)
-				p.Text(x, y+1, sprite.Text, size, outline)
-				p.Text(x, y, sprite.Text, size, color)
+				p.TextLayout(layout, x-1, y, outline)
+				p.TextLayout(layout, x+1, y, outline)
+				p.TextLayout(layout, x, y-1, outline)
+				p.TextLayout(layout, x, y+1, outline)
+				p.TextLayout(layout, x, y, color)
 			}
 		})
+		a.danmaku.pruneLayouts(len(sprites))
 		if player.Playing() && !player.Buffering() {
 			if len(sprites) > 0 {
 				p.AnimationFrameRate(60)

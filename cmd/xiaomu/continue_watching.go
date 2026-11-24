@@ -67,7 +67,7 @@ func (a *app) continueWatchingStrip(c *ui.Context) {
 					poster := ui.Box(c).Size(60, 90).Radius(8).Clip().Background(p.cardPlaceholder).
 						Cursor(ui.CursorPointer).Label("继续观看 " + e.Name).Disabled(!available)
 					poster.Children(func() {
-						applyPosterImage(c, poster, a.poster(e.Pic))
+						applyPosterImage(c, poster, a.poster(c, e.Pic))
 					})
 					ui.Column(c).Grow(1).MinWidth(0).Gap(5).Children(func() {
 						info := ui.Column(c).FillWidth().Gap(5).Cursor(ui.CursorPointer).

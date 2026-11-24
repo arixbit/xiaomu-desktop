@@ -223,7 +223,7 @@ func (a *app) favoritesStrip(c *ui.Context) {
 				card.Children(func() {
 					posterBox := ui.Box(c).Size(104, 152).Radius(12).Clip().Background(p.cardPlaceholder)
 					posterBox.Children(func() {
-						applyPosterImage(c, posterBox, a.poster(e.Pic))
+						applyPosterImage(c, posterBox, a.poster(c, e.Pic))
 						if a.followingHasNew(e) {
 							ui.Text(c, "有新集").Absolute().Left(6).Top(6).Padding(2, 7).Radius(8).
 								FontSize(11).Bold().Background(p.accent).TextColor(p.accentText).SingleLine()
@@ -265,7 +265,7 @@ func (a *app) favoritesView(c *ui.Context) {
 					mainArea.Children(func() {
 						posterBox := ui.Box(c).Size(60, 90).Radius(10).Clip().Background(p.cardPlaceholder)
 						posterBox.Children(func() {
-							applyPosterImage(c, posterBox, a.poster(e.Pic))
+							applyPosterImage(c, posterBox, a.poster(c, e.Pic))
 						})
 						ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
 							ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {

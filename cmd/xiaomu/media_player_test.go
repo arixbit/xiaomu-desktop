@@ -11,6 +11,7 @@ import (
 
 type fakeTrackPlayer struct {
 	*systemMediaPlayer
+	videos      []mediaTrack
 	audios      []mediaTrack
 	subs        []mediaTrack
 	subVisible  bool
@@ -18,6 +19,8 @@ type fakeTrackPlayer struct {
 	activeAudio int64
 	activeSub   int64
 	hwdec       string
+	loop        bool
+	props       map[string]string
 }
 
 func newFakeTrackPlayer(t *testing.T) *fakeTrackPlayer {
@@ -28,9 +31,12 @@ func newFakeTrackPlayer(t *testing.T) *fakeTrackPlayer {
 	}
 	return &fakeTrackPlayer{
 		systemMediaPlayer: &systemMediaPlayer{p: vp},
+		videos: []mediaTrack{
+			{ID: 1, Codec: "hevc", Width: 3840, Height: 2160, FPS: 23.976, Selected: true},
+		},
 		audios: []mediaTrack{
-			{ID: 1, Title: "国语", Lang: "zh", Codec: "dts", Channels: 6, Selected: true},
-			{ID: 2, Title: "原声", Lang: "en", Codec: "eac3", Channels: 6, Selected: false},
+			{ID: 1, Title: "国语", Lang: "zh", Codec: "dts", Channels: 6, SampleRate: 48000, Selected: true},
+			{ID: 2, Title: "原声", Lang: "en", Codec: "eac3", Channels: 6, SampleRate: 48000, Selected: false},
 		},
 		subs: []mediaTrack{
 			{ID: 1, Title: "简体中字", Lang: "zh", Codec: "ass", Selected: true},
@@ -40,6 +46,7 @@ func newFakeTrackPlayer(t *testing.T) *fakeTrackPlayer {
 		activeAudio: 1,
 		activeSub:   1,
 		hwdec:       "videotoolbox",
+		props:       map[string]string{},
 	}
 }
 
@@ -81,6 +88,26 @@ func (f *fakeTrackPlayer) AddSubtitleFile(path string) error {
 	return nil
 }
 func (f *fakeTrackPlayer) CurrentHWDec() string { return f.hwdec }
+func (f *fakeTrackPlayer) SetLoop(loop bool) error {
+	f.loop = loop
+	return nil
+}
+func (f *fakeTrackPlayer) SetPropertyString(name, value string) error {
+	if f.props == nil {
+		f.props = map[string]string{}
+	}
+	f.props[name] = value
+	return nil
+}
+func (f *fakeTrackPlayer) GetPropertyString(name string) (string, error) {
+	if f.props != nil {
+		if v, ok := f.props[name]; ok {
+			return v, nil
+		}
+	}
+	return "", nil
+}
+func (f *fakeTrackPlayer) VideoTracks() []mediaTrack { return f.videos }
 
 func TestPlayerTrackAndSubtitleControls(t *testing.T) {
 	fp := newFakeTrackPlayer(t)

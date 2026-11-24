@@ -30,7 +30,6 @@ type app struct {
 	ua      string
 	status  string
 	player  mediaPlayer
-	posters posterCache
 	proxy   *proxy.Proxy
 	open    func(string) (*ui.VideoPlayer, error)
 	openMPV func(string, mpvplayer.OpenOptions) (mediaPlayer, error)
@@ -150,6 +149,7 @@ type app struct {
 	muted            bool
 	savedVolume      float64
 	episodeEnd       playbackEnd
+	playerExtra      playerExtraState
 }
 
 func (a *app) view(c *ui.Context) {
@@ -183,6 +183,8 @@ func (a *app) play() {
 
 func (a *app) closeCurrentPlayer() {
 	a.stopDanmaku()
+	a.cancelJob(jobSubtitle)
+	a.releaseRightKeyHold(a.player)
 	if a.player != nil {
 		a.player.Close()
 		a.player = nil
@@ -194,6 +196,7 @@ func (a *app) closeCurrentPlayer() {
 func (a *app) adoptPlayer(p mediaPlayer) {
 	a.closeCurrentPlayer()
 	a.player = p
+	a.resetPerVideoExtraState()
 	a.applyPlayerPreferences(p)
 	a.playbackWait = playbackWait{}
 	a.playFailure = nil
@@ -214,6 +217,7 @@ func (a *app) adoptPlayer(p mediaPlayer) {
 		p.SetMuted(true)
 	}
 	a.episodeEnd = playbackEnd{}
+	a.live.catchupProgram = nil
 	a.playingFile = false
 	a.playingFilePath = ""
 	a.playingName = ""
@@ -504,6 +508,7 @@ func main() {
 		a.initDiscovery()
 		a.restoreHistory()
 		a.restoreFavorites()
+		a.restoreLiveState()
 		a.restoreSearchHistory()
 		a.restoreLatency()
 		a.restoreSiteHealth()
