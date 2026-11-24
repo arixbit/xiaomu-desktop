@@ -251,7 +251,9 @@ func execute(parent context.Context, work task, options Options) (out completion
 	defer cancel()
 	out = completion{task: work}
 	start := time.Now()
-	defer func() { out.duration = time.Since(start) }()
+	// Windows' clock can read zero for a quick local reply; a request
+	// that ran still took time, and zero means "nothing measured".
+	defer func() { out.duration = max(time.Since(start), time.Nanosecond) }()
 	if work.target == nil {
 		if work.depth > 4 {
 			out.err = fmt.Errorf("配置仓库嵌套超过 4 层")

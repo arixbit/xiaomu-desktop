@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"net/url"
+	"path/filepath"
 	"testing"
 
 	"github.com/arixbit/xiaomu-desktop/internal/config"
@@ -77,7 +78,7 @@ func TestOpenLocalFile(t *testing.T) {
 	if !a.openLocalFile("/tmp/示例片.mp4") || a.player == nil || !a.playingFile || a.playingName != "示例片.mp4" || a.status != "正在播放" {
 		t.Fatalf("local file did not play: player=%v file=%v name=%q status=%q", a.player != nil, a.playingFile, a.playingName, a.status)
 	}
-	if len(recent) != 1 || recent[0] != "/tmp/示例片.mp4" {
+	if len(recent) != 1 || recent[0] != filepath.Clean("/tmp/示例片.mp4") {
 		t.Fatalf("local file was not recorded as recent: %v", recent)
 	}
 	if a.playingDirect && a.hasEpisodes() {
@@ -137,7 +138,7 @@ func TestHandleDroppedFilesPicksFirstPlayableVideo(t *testing.T) {
 	if !a.handleDroppedFiles([]string{"/tmp/readme.txt", "/tmp/sub.srt", "/tmp/demo.mp4", "/tmp/other.mov"}) {
 		t.Fatalf("expected playable video in drop list to open: status=%q", a.status)
 	}
-	if opened != "/tmp/demo.mp4" || !a.playingFile || a.playingName != "demo.mp4" {
+	if opened != filepath.Clean("/tmp/demo.mp4") || !a.playingFile || a.playingName != "demo.mp4" {
 		t.Fatalf("opened=%q playingFile=%v name=%q", opened, a.playingFile, a.playingName)
 	}
 
@@ -168,7 +169,7 @@ func TestOpenLocalFileUIEntryPointsAndShortcut(t *testing.T) {
 	if err := tt.Click("打开本地视频"); err != nil {
 		t.Fatalf("welcome open local button missing: %v (texts=%v)", err, tt.Texts())
 	}
-	if opened != "/tmp/welcome.mp4" || a.player == nil || !a.playingFile {
+	if opened != filepath.Clean("/tmp/welcome.mp4") || a.player == nil || !a.playingFile {
 		t.Fatalf("welcome button did not start playback: opened=%q player=%v file=%v", opened, a.player != nil, a.playingFile)
 	}
 
@@ -177,7 +178,7 @@ func TestOpenLocalFileUIEntryPointsAndShortcut(t *testing.T) {
 		return []string{"/tmp/next.mov"}, nil
 	}
 	tt.Key(ui.Cmd, ui.KeyO)
-	if opened != "/tmp/next.mov" || a.playingName != "next.mov" {
+	if opened != filepath.Clean("/tmp/next.mov") || a.playingName != "next.mov" {
 		t.Fatalf("Cmd+O in player did not open next file: opened=%q name=%q", opened, a.playingName)
 	}
 
@@ -190,7 +191,7 @@ func TestOpenLocalFileUIEntryPointsAndShortcut(t *testing.T) {
 	if err := tt.Click("打开文件"); err != nil {
 		t.Fatalf("sidebar open file button missing: %v (texts=%v)", err, tt.Texts())
 	}
-	if opened != "/tmp/sidebar.m4v" || a.playingName != "sidebar.m4v" {
+	if opened != filepath.Clean("/tmp/sidebar.m4v") || a.playingName != "sidebar.m4v" {
 		t.Fatalf("sidebar button did not open file: opened=%q name=%q", opened, a.playingName)
 	}
 

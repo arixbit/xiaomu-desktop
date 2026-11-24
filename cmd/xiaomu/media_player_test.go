@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -150,7 +151,8 @@ func TestDropMKVWithCompanionSubtitlePassesSubtitlesToMPV(t *testing.T) {
 	if !a.handleDroppedFiles([]string{"/tmp/movie.ass", "/tmp/movie.mkv"}) {
 		t.Fatalf("expected MKV + subtitle drop to open: status=%q", a.status)
 	}
-	if gotTarget != "/tmp/movie.mkv" || len(gotOpts.Subtitles) != 1 || gotOpts.Subtitles[0] != "/tmp/movie.ass" {
+	// The video path is cleaned for the OS; subtitles pass through as dropped.
+	if gotTarget != filepath.Clean("/tmp/movie.mkv") || len(gotOpts.Subtitles) != 1 || gotOpts.Subtitles[0] != "/tmp/movie.ass" {
 		t.Fatalf("openMPV args = (%q, %+v)", gotTarget, gotOpts)
 	}
 }

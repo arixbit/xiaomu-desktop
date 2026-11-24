@@ -59,7 +59,7 @@ func (s *latencyStore) record(key string, d time.Duration) error {
 		}
 		delete(kept, oldest)
 	}
-	kept[key] = latencyEntry{Ms: d.Milliseconds(), At: time.Now()}
+	kept[key] = newLatencyEntry(d)
 	if s.path != "" {
 		if err := writeJSONFile(s.path, kept); err != nil {
 			return err
@@ -173,7 +173,20 @@ func measureSite(ctx context.Context, entry library.Entry, assets string) time.D
 		return 0
 	}
 	session.Close()
-	return time.Since(start)
+	return answered(start)
+}
+
+// answered is how long a request that did answer took. Windows' clock
+// can read zero for a quick local reply; an answer still took time, and
+// zero means "no answer" to the callers.
+func answered(start time.Time) time.Duration {
+	return max(time.Since(start), time.Nanosecond)
+}
+
+// newLatencyEntry stores a measurement in whole milliseconds; a reply
+// under 1ms stays a measurement instead of reading as none.
+func newLatencyEntry(d time.Duration) latencyEntry {
+	return latencyEntry{Ms: max(d.Milliseconds(), 1), At: time.Now()}
 }
 
 type speedTestResult struct {

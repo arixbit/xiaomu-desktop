@@ -82,7 +82,7 @@ func (a *app) recordLatency(key string, d time.Duration) {
 	}
 	w := s.writer
 	w.mu.Lock()
-	keepLatency(w.pending, key, latencyEntry{Ms: d.Milliseconds(), At: time.Now()})
+	keepLatency(w.pending, key, newLatencyEntry(d))
 	w.mu.Unlock()
 	select {
 	case w.wake <- struct{}{}:
