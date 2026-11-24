@@ -44,6 +44,7 @@ const (
 	jobTitle                  // reading a title from one of its sources
 	jobPlay                   // resolving an episode into media
 	jobDanmaku                // searching or loading this episode's comments
+	jobPan                    // verifying cloud-drive credentials or cleaning temp files
 	jobSlots
 )
 
@@ -227,7 +228,9 @@ func (a *app) close() {
 	if a.proxy != nil {
 		_ = a.proxy.Close()
 		a.proxy = nil
+		a.proxySession = ""
 	}
+	a.closePanLoginWindow()
 }
 
 func (a *app) loadConfig(raw string) {
@@ -387,7 +390,7 @@ func (a *app) loadPage(category string, page int) {
 
 func unsupported(kind config.Kind) string {
 	if kind == config.KindCSP {
-		return "此站点依赖专用 Android 爬虫，当前尚未适配；通用 XBPQ 规则已支持"
+		return "此站点依赖私有混淆 Android 爬虫，当前未适配；XBPQ、AList 与开放网盘站点已原生支持"
 	}
 	return fmt.Sprintf("当前版本暂不支持 %s 站点，请选择其他站点", kind)
 }

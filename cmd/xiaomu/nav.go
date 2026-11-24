@@ -199,6 +199,7 @@ func (a *app) shell(c *ui.Context) {
 		a.importDialog(c)
 		a.liveDialog(c)
 		a.linkDialog(c)
+		a.panAuthPromptDialog(c)
 	})
 }
 
@@ -314,8 +315,8 @@ func (a *app) linkDialog(c *ui.Context) {
 		backdrop.Background(ui.RGBA(2, 8, 22, 0.67))
 		panel.Width(520).MaxWidth(520).Padding(26).Gap(14).Radius(26).Material(glass.Glass{})
 		ui.Text(c, "打开链接").FontSize(24).Bold()
-		ui.Text(c, "粘贴 mp4 / m3u8 视频直链").TextColor(textMuted)
-		ui.TextInput(c, &a.rawURL).Label("地址").Placeholder("https://example.com/video.mp4").FillWidth()
+		ui.Text(c, "粘贴 mp4 / m3u8 视频直链，或夸克 / UC 等网盘分享链接").TextColor(textMuted)
+		ui.TextInput(c, &a.rawURL).Label("地址").Placeholder("https://example.com/video.mp4 或网盘分享链接").FillWidth()
 		ui.TextInput(c, &a.referer).Label("Referer").Placeholder("Referer（可选）").FillWidth()
 		ui.TextInput(c, &a.ua).Label("User-Agent").Placeholder("User-Agent（可选）").FillWidth()
 		if a.status != "" {

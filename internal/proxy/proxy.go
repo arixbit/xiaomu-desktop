@@ -39,6 +39,7 @@ type Proxy struct {
 
 	mu          sync.RWMutex
 	headers     map[string]string
+	sessions    map[string]*proxySession
 	client      *http.Client
 	readTimeout time.Duration
 
@@ -76,16 +77,21 @@ func Start(headers map[string]string) (*Proxy, error) {
 	transport := netproxy.Transport().Clone()
 	transport.DisableCompression = true
 	p := &Proxy{
-		base:    "http://" + ln.Addr().String(),
-		ln:      ln,
-		headers: clone(headers),
-		client:  &http.Client{Transport: transport},
+		base:     "http://" + ln.Addr().String(),
+		ln:       ln,
+		headers:  clone(headers),
+		sessions: map[string]*proxySession{},
+		client:   &http.Client{Transport: transport},
 	}
 	p.client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {
 			return errors.New("proxy: too many redirects")
 		}
-		p.apply(req)
+		if hdr, ok := req.Context().Value(sessionHeadersKey{}).(map[string]string); ok {
+			applyMap(req, hdr)
+		} else {
+			p.apply(req)
+		}
 		return nil
 	}
 	p.srv = &http.Server{Handler: p}
@@ -132,6 +138,10 @@ func (p *Proxy) Close() error {
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w = countingWriter{ResponseWriter: w, served: &p.served}
+	if strings.HasPrefix(r.URL.Path, "/s/") {
+		p.serveSession(w, r)
+		return
+	}
 	if r.URL.Path != "/u" {
 		http.NotFound(w, r)
 		return

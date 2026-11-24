@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
@@ -125,6 +126,7 @@ func (a *app) playerScreen(c *ui.Context) {
 		}
 	})
 	a.danmakuDialog(c)
+	a.panAuthPromptDialog(c)
 }
 
 func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
@@ -288,6 +290,7 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 					a.savePreferences()
 				}
 				ui.Spacer(c)
+				a.streamControls(c)
 				a.danmakuButton(c)
 				rate := p.Rate()
 				if rate <= 0 {
@@ -551,6 +554,11 @@ func (a *app) leavePlayer() {
 	a.clearPanelChoice()
 	a.flushHistory()
 	a.closeCurrentPlayer()
+	if a.proxy != nil && a.proxySession != "" {
+		a.proxy.RemoveSession(a.proxySession)
+		a.proxySession = ""
+	}
+	a.playingStreams, a.playingStreamIdx = nil, 0
 	a.syncNowPlaying()
 	a.playingLive, a.playingDirect = false, false
 	a.playingFile = false
@@ -635,6 +643,53 @@ func trimNumericLabel(digits, original string) string {
 		}
 	}
 	return trimmed
+}
+
+func (a *app) streamControls(c *ui.Context) {
+	if len(a.playingStreams) <= 1 {
+		return
+	}
+	currentLabel := "清晰度"
+	if a.playingStreamIdx >= 0 && a.playingStreamIdx < len(a.playingStreams) {
+		if l := a.playingStreams[a.playingStreamIdx].Label; l != "" {
+			currentLabel = l
+		}
+	}
+	ui.MenuButton(c, currentLabel, func(m *ui.Menu) {
+		for i, s := range a.playingStreams {
+			label := s.Label
+			if label == "" {
+				label = fmt.Sprintf("流 %d", i+1)
+			}
+			selected := i == a.playingStreamIdx
+			if m.Item(label).ID(fmt.Sprintf("stream-%d", i)).Radio(selected).Chosen() {
+				a.switchPlayingStream(i)
+			}
+		}
+	}).Label("切换画质")
+}
+
+func (a *app) switchPlayingStream(idx int) {
+	if idx < 0 || idx >= len(a.playingStreams) || idx == a.playingStreamIdx {
+		return
+	}
+	s := a.playingStreams[idx]
+	at := a.playbackPosition()
+	streams := append([]catalog.Stream(nil), a.playingStreams...)
+	line, ep := a.playingSource, a.playingEpisode
+	srcIdx, epIdx := a.playingSourceIdx, a.playingEpisodeIdx
+	danmakuURL := a.danmaku.sourceURL
+	open, touched := a.panelOpen, a.panelTouched
+	if !a.openPlaybackStream(s, true) {
+		return
+	}
+	a.playingStreams, a.playingStreamIdx = streams, idx
+	a.playingSource, a.playingEpisode = line, ep
+	a.playingSourceIdx, a.playingEpisodeIdx = srcIdx, epIdx
+	a.resumeAt = at
+	a.panelOpen, a.panelTouched = open, touched
+	a.danmaku.sourceURL = danmakuURL
+	a.syncNowPlaying()
 }
 
 func (a *app) livePlayerControls(c *ui.Context) {

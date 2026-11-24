@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
+	"github.com/arixbit/xiaomu-desktop/internal/pan"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -36,10 +37,11 @@ func (w *playbackWait) check(now time.Time, ready, buffering, playing bool, posi
 // A failure keeps the requested episode even when resolving it never opened
 // a player, or a previous episode is still on screen. It holds no media URL.
 type episodeFailure struct {
-	line    string
-	episode catalog.Episode
-	at      time.Duration
-	err     error
+	line         string
+	episode      catalog.Episode
+	at           time.Duration
+	err          error
+	authProvider pan.Provider
 }
 
 func (a *app) playbackPosition() time.Duration {
@@ -104,6 +106,15 @@ func (a *app) retryEpisode() {
 
 func (a *app) recoveryActions(c *ui.Context) {
 	ui.Row(c).Wrap().Gap(8).Children(func() {
+		if f := a.playFailure; f != nil && f.authProvider != "" {
+			provider := f.authProvider
+			line, ep, at := f.line, f.episode, f.at
+			if primaryButton(c, "登录"+provider.Label()).Clicked() {
+				a.beginPanWebLogin(provider, func() {
+					a.resumeAfterPanLogin(line, ep, at)
+				})
+			}
+		}
 		if len(a.title.detail.Sources) > 1 && primaryButton(c, "换下一条线路").Clicked() {
 			a.playNextLine()
 		}

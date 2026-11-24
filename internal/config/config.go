@@ -31,14 +31,17 @@ const maxBytes = 32 << 20
 type Kind string
 
 const (
-	KindXML     Kind = "xml"    // type 0, XML CMS
-	KindJSON    Kind = "json"   // type 1, JSON CMS
-	KindDRPY2   Kind = "drpy2"  // type 3, drpy2 engine plus a rule
-	KindFongMi  Kind = "fongmi" // type 3, FongMi class spider
-	KindXBPQ    Kind = "xbpq"   // csp_XBPQ text rules interpreted natively
-	KindCSP     Kind = "csp"    // csp_ jar class, not supported
-	KindPython  Kind = "python" // .py spider, not supported
-	KindUnknown Kind = "unknown"
+	KindXML      Kind = "xml"      // type 0, XML CMS
+	KindJSON     Kind = "json"     // type 1, JSON CMS
+	KindDRPY2    Kind = "drpy2"    // type 3, drpy2 engine plus a rule
+	KindFongMi   Kind = "fongmi"   // type 3, FongMi class spider
+	KindXBPQ     Kind = "xbpq"     // csp_XBPQ text rules interpreted natively
+	KindAList    Kind = "alist"    // csp_Alist / alist.js over standard AList HTTP API
+	KindPanShare Kind = "panshare" // csp_*Share plaintext cloud-drive share lists
+	KindPanWeb   Kind = "panweb"   // plaintext-URL Wogg-style cloud-drive resource sites
+	KindCSP      Kind = "csp"      // csp_ jar class, not supported
+	KindPython   Kind = "python"   // .py spider, not supported
+	KindUnknown  Kind = "unknown"
 )
 
 // Unsupported reports kinds this prototype does not run.
@@ -336,9 +339,20 @@ func extString(base string, raw json.RawMessage) string {
 	}
 	var text string
 	if json.Unmarshal(s, &text) == nil {
-		return resolveMaybe(base, text)
+		return resolveExtString(base, text)
 	}
 	return string(s)
+}
+
+func resolveExtString(base, text string) string {
+	if !strings.Contains(text, "$$$") {
+		return resolveMaybe(base, text)
+	}
+	parts := strings.Split(text, "$$$")
+	for i, part := range parts {
+		parts[i] = resolveMaybe(base, part)
+	}
+	return strings.Join(parts, "$$$")
 }
 
 func resolveSpider(base, v string) string {
@@ -402,11 +416,32 @@ func Classify(typ int, api, ext, source string) Kind {
 	if extOf(api) == ".py" || extOf(ext) == ".py" {
 		return KindPython
 	}
+	if isAListScript(api) {
+		return KindAList
+	}
 	if isCSP(api) {
-		if strings.Split(path.Base(api), ";")[0] == "csp_XBPQ" {
+		name := strings.Split(path.Base(api), ";")[0]
+		switch {
+		case name == "csp_XBPQ":
 			return KindXBPQ
+		case strings.EqualFold(name, "csp_Alist"):
+			if strings.TrimSpace(ext) != "" {
+				return KindAList
+			}
+			return KindCSP
+		case isPanShareCSP(name):
+			if hasPlaintextListExt(ext) {
+				return KindPanShare
+			}
+			return KindCSP
+		case isPanWebCSP(name):
+			if hasPlaintextSiteURLExt(ext) {
+				return KindPanWeb
+			}
+			return KindCSP
+		default:
+			return KindCSP
 		}
-		return KindCSP
 	}
 	switch typ {
 	case 0:
@@ -418,6 +453,66 @@ func Classify(typ int, api, ext, source string) Kind {
 	default:
 		return KindUnknown
 	}
+}
+
+func isAListScript(api string) bool {
+	if extOf(api) != ".js" {
+		return false
+	}
+	base := strings.ToLower(path.Base(stripQuery(api)))
+	return base == "alist.js" || base == "alist.min.js"
+}
+
+func isPanShareCSP(name string) bool {
+	switch strings.ToLower(name) {
+	case "csp_quarkshare", "csp_ucshare", "csp_alishare", "csp_p115share", "csp_pushshare":
+		return true
+	default:
+		return false
+	}
+}
+
+func isPanWebCSP(name string) bool {
+	switch strings.ToLower(name) {
+	case "csp_wogg", "csp_wobg", "csp_wo4k", "csp_panta", "csp_xpanpan":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasPlaintextListExt(ext string) bool {
+	for _, part := range strings.Split(ext, "$$$") {
+		p := strings.TrimSpace(part)
+		l := strings.ToLower(p)
+		if !(strings.HasPrefix(l, "http://") || strings.HasPrefix(l, "https://") || strings.HasPrefix(l, "file://")) {
+			continue
+		}
+		if strings.Contains(l, "token.json") || strings.Contains(l, "token.txt") {
+			continue
+		}
+		e := extOf(p)
+		if e == ".txt" || e == ".json" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPlaintextSiteURLExt(ext string) bool {
+	for _, part := range strings.Split(ext, "$$$") {
+		p := strings.TrimSpace(part)
+		u, err := url.Parse(p)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			continue
+		}
+		e := extOf(p)
+		if e == ".json" || e == ".txt" || e == ".js" {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func classifyJS(api, ext, source string) Kind {

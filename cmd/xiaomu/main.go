@@ -13,7 +13,9 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/video"
 
+	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/danmaku"
+	"github.com/arixbit/xiaomu-desktop/internal/pan"
 	"github.com/arixbit/xiaomu-desktop/internal/proxy"
 )
 
@@ -29,6 +31,11 @@ type app struct {
 	posters posterCache
 	proxy   *proxy.Proxy
 	open    func(string) (*ui.VideoPlayer, error)
+
+	proxySession  string
+	panUI         panUIState
+	panLogin      *panLoginSession
+	startPanLogin func(pan.Provider, func())
 
 	newDanmakuClient func(string) (*danmaku.Client, error)
 	// openLocal plays a file from disk directly, without the proxy.
@@ -94,7 +101,9 @@ type app struct {
 	playingEpisode    string
 	playingSourceIdx  int
 	playingEpisodeIdx int
-	resumeAt       time.Duration
+	playingStreams    []catalog.Stream
+	playingStreamIdx  int
+	resumeAt          time.Duration
 	resumeIssued   bool
 	lastPosition   time.Duration
 
@@ -133,6 +142,10 @@ func (a *app) view(c *ui.Context) {
 }
 
 func (a *app) play() {
+	if ref, ok := pan.ParseShareURL(a.rawURL); ok {
+		a.openPanShare(ref)
+		return
+	}
 	if a.playDirectURL(a.rawURL, playbackHeaders(a.referer, a.ua)) {
 		a.linkOpen = false
 	}
@@ -168,6 +181,68 @@ func (a *app) adoptPlayer(p *ui.VideoPlayer) {
 	a.playingFile = false
 	a.playingName = ""
 	a.playingSource, a.playingEpisode = "", ""
+	a.playingStreams, a.playingStreamIdx = nil, 0
+}
+
+// openPlaybackStream serves a stream through an isolated proxy session that
+// preserves its filename extension and applies bounded range prefetch for
+// non-HLS cloud-drive media.
+func (a *app) openPlaybackStream(stream catalog.Stream, keepCurrent bool) bool {
+	raw := strings.TrimSpace(stream.URL)
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		a.status = "请输入 http 或 https 播放地址"
+		return false
+	}
+	p := a.proxy
+	if p == nil || keepCurrent {
+		p, err = proxy.Start(nil)
+		if err != nil {
+			a.status = "代理启动失败: " + err.Error()
+			return false
+		}
+		if !keepCurrent {
+			a.proxy = p
+		}
+	}
+	if !keepCurrent {
+		if a.proxySession != "" && p == a.proxy {
+			p.RemoveSession(a.proxySession)
+			a.proxySession = ""
+		}
+		a.closeCurrentPlayer()
+	}
+	sessID, localURL := p.RegisterSession(proxy.SessionConfig{
+		URL:      raw,
+		Headers:  stream.Headers,
+		Filename: stream.Filename,
+		Prefetch: !stream.IsHLS,
+	})
+	opener := a.open
+	if opener == nil {
+		opener = video.OpenURL
+	}
+	player, err := opener(localURL)
+	if err != nil {
+		p.RemoveSession(sessID)
+		if keepCurrent {
+			p.Close()
+		}
+		a.status = "无法打开: " + err.Error()
+		a.syncNowPlaying()
+		return false
+	}
+	a.adoptPlayer(player)
+	if keepCurrent {
+		if a.proxy != nil {
+			a.proxy.Close()
+		}
+		a.proxy = p
+	}
+	a.proxySession = sessID
+	a.playingLive, a.playingDirect = false, false
+	a.status = "正在播放"
+	return true
 }
 
 // playURL opens HTTP media through the proxy. The caller publishes Now
@@ -317,6 +392,7 @@ func main() {
 		a.restorePreferences()
 		a.restoreSeriesSkips()
 		a.restoreSourceMemory()
+		a.restorePanCredentials()
 		a.setFullScreen(win.IsFullScreen())
 		win.OnEnterFullScreen(func() { win.Update(func() { a.setFullScreen(true) }) })
 		win.OnLeaveFullScreen(func() {

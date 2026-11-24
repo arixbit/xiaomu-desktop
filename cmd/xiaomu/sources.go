@@ -59,6 +59,7 @@ func (a *app) sourcesView(c *ui.Context) {
 				a.documentSites(c, &l.documents[i])
 			}
 		})
+		a.panCredentialsCard(c)
 		card(func() {
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 				ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {

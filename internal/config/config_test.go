@@ -292,3 +292,49 @@ func TestParserTypeRejectsNonInteger(t *testing.T) {
 		}
 	}
 }
+
+func TestClassifyPanAndAListSites(t *testing.T) {
+	const page = "https://cdn.example.com/box/cfg.json"
+	body := []byte(`{
+		"spider": "./app.jar",
+		"sites": [
+			{"key":"al1","name":"Alist","type":3,"api":"csp_Alist","ext":{"演示盘":"https://alist.example.com"}},
+			{"key":"al2","name":"AlistJS","type":3,"api":"./lib/alist.min.js","ext":"./js/alist.json"},
+			{"key":"qs","name":"夸克分享","type":3,"api":"csp_QuarkShare","ext":"./lib/token.json$$$./json/quarkshare.txt$$$db$$$1"},
+			{"key":"wg","name":"开放玩偶","type":3,"api":"csp_Wobg","ext":"./lib/token.json$$$https://wogg.example.com/$$$null$$$1$$$./wogg.json"},
+			{"key":"guard1","name":"私有玩偶","type":3,"api":"csp_WoGGGuard","ext":{"Cloud-drive":"tvfan/Cloud-drive.txt"}},
+			{"key":"guard2","name":"私有密文","type":3,"api":"csp_SeedhubGuard","ext":"5++encrypted"}
+		]
+	}`)
+	cfg, err := Read(context.Background(), page, func(_ context.Context, u string) (Response, error) {
+		if strings.Contains(u, ".jar") {
+			t.Errorf("refused to fetch jar: %s", u)
+		}
+		return Response{Status: 200, Body: body, URL: page}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]Site{}
+	for _, s := range cfg.Sites {
+		by[s.Key] = s
+	}
+	if by["al1"].Kind != KindAList || by["al1"].Kind.Unsupported() {
+		t.Fatalf("csp_Alist = %+v", by["al1"])
+	}
+	if by["al2"].Kind != KindAList || by["al2"].Ext != "https://cdn.example.com/box/js/alist.json" {
+		t.Fatalf("alist.min.js = %+v", by["al2"])
+	}
+	if by["qs"].Kind != KindPanShare || !strings.Contains(by["qs"].Ext, "https://cdn.example.com/box/json/quarkshare.txt") {
+		t.Fatalf("csp_QuarkShare = %+v", by["qs"])
+	}
+	if by["wg"].Kind != KindPanWeb || !strings.Contains(by["wg"].Ext, "https://wogg.example.com/") {
+		t.Fatalf("csp_Wobg = %+v", by["wg"])
+	}
+	if by["guard1"].Kind != KindCSP || !by["guard1"].Kind.Unsupported() {
+		t.Fatalf("private Guard without plaintext URL must stay unsupported: %+v", by["guard1"])
+	}
+	if by["guard2"].Kind != KindCSP || !by["guard2"].Kind.Unsupported() {
+		t.Fatalf("encrypted Guard must stay unsupported: %+v", by["guard2"])
+	}
+}
