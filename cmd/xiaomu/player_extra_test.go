@@ -101,6 +101,154 @@ func TestRightKeyLongPress2xSpeedAndShortTapSeek(t *testing.T) {
 	}
 }
 
+func TestRightKeyLongPressReleasesWhenFocusEntersTextInput(t *testing.T) {
+	a := newKeyboardTestApp(t)
+	p := a.player
+	p.Seek(10 * time.Second)
+	text := ""
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.view(c)
+		ui.TextInput(c, &text).Label("输入内容").Absolute().Top(100).Left(100).Width(200)
+	}, 1120, 760)
+
+	tt.KeyDown(ui.KeyRight)
+	tt.Advance(350 * time.Millisecond)
+	if p.Rate() != 2.0 || !tt.HasText("▶▶ 2× 倍速中") {
+		t.Fatalf("long press did not boost rate: rate=%v texts=%v", p.Rate(), tt.Texts())
+	}
+	posBeforeFocus := p.Position()
+
+	// Move focus into text input before releasing Right; temporary boost must release cleanly.
+	if err := tt.Click("输入内容"); err != nil {
+		t.Fatal(err)
+	}
+	if p.Rate() != 1.0 || a.playerExtra.rightHold.down || tt.HasText("▶▶ 2× 倍速中") {
+		t.Fatalf("boost leaked into text input: rate=%v hold=%+v texts=%v", p.Rate(), a.playerExtra.rightHold, tt.Texts())
+	}
+	tt.KeyUp(ui.KeyRight)
+	if p.Rate() != 1.0 || p.Position()-posBeforeFocus >= 5*time.Second {
+		t.Fatalf("releasing Right after text focus altered playback: rate=%v before=%v after=%v", p.Rate(), posBeforeFocus, p.Position())
+	}
+}
+
+func TestMiniWindowDragStripAndSliderAutoHide(t *testing.T) {
+	a := newKeyboardTestApp(t)
+	a.enterMiniMode()
+	tt := ui.NewTester(a.view, miniWindowWidth, miniWindowHeight)
+	tt.SetTitleBar(dragBar)
+
+	// Top drag strip is always present in mini mode (even when controls are hidden)
+	// and does not get consumed by the video pointer handler.
+	tt.Move(-10, -10)
+	if tt.HasText("还原") {
+		t.Fatalf("mini controls should stay hidden while playing and not hovered: %v", tt.Texts())
+	}
+	strip, ok := tt.Find("拖动窗口（迷你小窗）")
+	if !ok || strip != (ui.Rect{X: 0, Y: 0, W: miniWindowWidth, H: 32}) {
+		t.Fatalf("mini drag strip mismatch: ok=%v rect=%+v", ok, strip)
+	}
+	// Clicking or double-clicking the top drag strip must not toggle playback or fullscreen.
+	tt.ClickAt(miniWindowWidth/2, 14)
+	tt.ClickAt(miniWindowWidth/2, 14)
+	tt.Advance(time.Second)
+	if !a.player.Playing() || a.fullScreen {
+		t.Fatalf("mini drag strip triggered video pointer gesture: playing=%v full=%v", a.player.Playing(), a.fullScreen)
+	}
+
+	// Clicking the video body below the drag strip still toggles playback.
+	tt.ClickAt(miniWindowWidth/2, miniWindowHeight/2)
+	tt.Advance(600 * time.Millisecond)
+	if a.player.Playing() {
+		t.Fatal("clicking mini video body did not pause playback")
+	}
+	a.player.Play()
+	tt.Frame()
+
+	// Hover to reveal mini controls, drag the slider, then leave the window:
+	// controls must not remain permanently stuck visible.
+	tt.Move(miniWindowWidth/2, miniWindowHeight/2)
+	sl, ok := tt.Find("小窗播放进度")
+	if !ok {
+		t.Fatalf("mini progress slider missing on hover: %v", tt.Texts())
+	}
+	sx, sy := sl.X+sl.W/3, sl.Y+sl.H/2
+	tt.Press(sx, sy)
+	tt.Move(sx+40, sy)
+	tt.Release(sx+40, sy)
+	tt.Move(-10, -10)
+	if tt.HasText("还原") || a.playerOverlay.keepVisible {
+		t.Fatalf("mini controls stayed pinned after slider drag: keepVisible=%v texts=%v", a.playerOverlay.keepVisible, tt.Texts())
+	}
+
+	// Dragging the slider outside the window bounds keeps controls visible while pressed,
+	// then hides them once released outside the window.
+	tt.Move(miniWindowWidth/2, miniWindowHeight/2)
+	sl, ok = tt.Find("小窗播放进度")
+	if !ok {
+		t.Fatalf("mini progress slider missing on second hover: %v", tt.Texts())
+	}
+	sx, sy = sl.X+sl.W/3, sl.Y+sl.H/2
+	tt.Press(sx, sy)
+	tt.Move(sx+30, miniWindowHeight+40)
+	if !tt.HasText("还原") {
+		t.Fatal("mini controls hid while still dragging slider outside window")
+	}
+	tt.Release(sx+30, miniWindowHeight+40)
+	if tt.HasText("还原") || a.playerOverlay.keepVisible {
+		t.Fatalf("mini controls stayed visible after releasing slider outside window: keepVisible=%v texts=%v", a.playerOverlay.keepVisible, tt.Texts())
+	}
+
+	// No drag strip when the window has no title bar (fullscreen).
+	tt.SetTitleBar(ui.TitleBar{})
+	if _, ok := tt.Find("拖动窗口（迷你小窗）"); ok {
+		t.Fatal("mini drag strip rendered without a title bar")
+	}
+}
+
+func TestScreenshotBurstDoesNotOverwrite(t *testing.T) {
+	fp := newFakeTrackPlayer(t)
+	shotDir := t.TempDir()
+	seq := 0
+	a := &app{
+		player:      fp,
+		playingName: "连拍测试.mkv",
+		playingFile: true,
+		playerExtra: playerExtraState{
+			captureScreenshot: func() ([]byte, error) {
+				seq++
+				return []byte{0x89, 'P', 'N', 'G', byte(seq)}, nil
+			},
+			screenshotDir: func() (string, error) { return shotDir, nil },
+		},
+	}
+	t.Cleanup(a.close)
+
+	tt := ui.NewTester(a.view, 1120, 760)
+	for range 3 {
+		tt.Key(0, ui.KeyS)
+	}
+	entries, err := os.ReadDir(shotDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("burst screenshots overwrote files: got %d entries (%v), want 3", len(entries), entries)
+	}
+
+	// Even with an identical timestamp stem, writeUniqueScreenshot appends collision suffixes.
+	sameDir := t.TempDir()
+	want := []string{"shot.png", "shot-1.png", "shot-2.png"}
+	for i, w := range want {
+		gotPath, err := writeUniqueScreenshot(sameDir, "shot", []byte{byte(i + 1)})
+		if err != nil {
+			t.Fatalf("write #%d failed: %v", i, err)
+		}
+		if filepath.Base(gotPath) != w {
+			t.Fatalf("write #%d filename = %q, want %q", i, filepath.Base(gotPath), w)
+		}
+	}
+}
+
 func TestMiniWindowAndAlwaysOnTop(t *testing.T) {
 	a := newKeyboardTestApp(t)
 	tt := ui.NewTester(a.view, 1120, 760)

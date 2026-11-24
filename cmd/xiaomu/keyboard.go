@@ -12,6 +12,7 @@ import (
 // get first use of shortcuts; single-key commands also leave text editing alone.
 func (a *app) handleKeyboard(c *ui.Context) {
 	if c.Shortcut(ui.Cmd, ui.KeyO) && !c.ShortcutRepeated() {
+		a.releaseRightKeyHold(a.player)
 		a.openLocalFileDialog()
 		return
 	}
@@ -21,6 +22,7 @@ func (a *app) handleKeyboard(c *ui.Context) {
 		return
 	}
 	if c.FocusTakesText() {
+		a.releaseRightKeyHold(a.player)
 		// Autocomplete consumes Escape while its suggestions are open.
 		// The next press leaves the field; only a later press goes back.
 		if ui.FocusedValue(c, &a.searchFocused) && c.Shortcut(0, ui.KeyEscape) && !c.ShortcutRepeated() {
@@ -125,7 +127,7 @@ func (a *app) handleKeyboard(c *ui.Context) {
 		a.adjustVolume(p, -0.05)
 		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 	}
-	if a.playingLive || p.Duration() <= 0 {
+	if a.isLiveStream() || p.Duration() <= 0 {
 		return
 	}
 	if c.Shortcut(0, ui.KeyLeft) {

@@ -39,6 +39,7 @@ func (a *app) playerOverlaysVisible(c *ui.Context, screen ui.Element) bool {
 	// DragWindow from handing them to the system. Only fullscreen needs pointer
 	// tracking: windowed controls are always visible and must remain draggable.
 	if !a.fullScreen {
+		a.playerOverlay.keepVisible = false
 		return true
 	}
 	s := &a.playerOverlay
@@ -95,9 +96,19 @@ func (a *app) playerScreen(c *ui.Context) {
 		if !a.fullScreen && dragStripHeight(c) > 0 {
 			screen.DragWindow().Label("拖动窗口（播放页空白）")
 		}
-		showControls := a.playerOverlaysVisible(c, screen)
+		miniDragH := float32(0)
+		miniKept := false
+		var showControls bool
 		if a.playerExtra.miniMode {
-			showControls = screen.Hovered() || !p.Playing() || a.playerOverlay.keepVisible
+			if !a.fullScreen {
+				miniDragH = dragStripHeight(c)
+			}
+			hovered := screen.Hovered()
+			miniKept = a.playerOverlay.keepVisible && !hovered && p.Playing()
+			showControls = hovered || !p.Playing() || a.playerOverlay.keepVisible
+			a.playerOverlay.keepVisible = false
+		} else {
+			showControls = a.playerOverlaysVisible(c, screen)
 		}
 		showPanel := !a.playerExtra.miniMode && hasEpisodes && a.panelOpen && (!compact || a.panelTouched) && showControls
 		if !showControls && !a.playerExtra.miniMode {
@@ -108,13 +119,19 @@ func (a *app) playerScreen(c *ui.Context) {
 				ui.Box(c).Grow(1).FillHeight().Clip().Children(func() {
 					p.View(c).Key(p).Fill().Fit(a.playerVideoFit()).Label("视频画面").Focusable().AutoFocus().Bind(&a.playerFocus).
 						HitTest(func(x, y float32, r ui.Rect) bool {
-							if a.playerExtra.miniMode || a.playerExtra.aspect == aspectFill {
+							if a.playerExtra.miniMode {
+								return miniDragH <= 0 || y >= r.Y+miniDragH
+							}
+							if a.playerExtra.aspect == aspectFill {
 								return true
 							}
 							w, h := p.Size()
 							return a.fullScreen || playerPictureRect(r, w, h).Contains(x, y)
 						}).HandleInput(func(ev ui.InputEvent) bool { return a.handlePlayerPointer(p, ev) })
 					a.danmakuOverlay(c, p, showControls)
+					if a.playerExtra.miniMode {
+						a.playerMiniDragStrip(c, miniDragH, showControls)
+					}
 					a.playerState(c, p)
 					a.playbackStatsOverlay(c, p)
 					a.rightHoldBoostPill(c)
@@ -124,6 +141,9 @@ func (a *app) playerScreen(c *ui.Context) {
 					if showControls {
 						if a.playerExtra.miniMode {
 							a.playerMiniControls(c, p)
+							if miniKept && !a.playerOverlay.keepVisible {
+								c.Invalidate()
+							}
 						} else {
 							a.playerControls(c, p, hasEpisodes, compact)
 							a.playerHeader(c, hasEpisodes, compact)
@@ -219,7 +239,11 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 		if hasEpisodes {
 			panelLabel, closeLabel := "换源与选集", "收起选集"
 			if a.playingLive {
-				panelLabel, closeLabel = "频道列表", "收起频道"
+				if len(a.live.channels) <= 1 && a.activeEPGURL() != "" {
+					panelLabel, closeLabel = "节目单", "收起节目单"
+				} else {
+					panelLabel, closeLabel = "频道列表", "收起频道"
+				}
 			} else if a.hasLocalPlaylist() {
 				panelLabel, closeLabel = "目录列表", "收起列表"
 			}
@@ -261,7 +285,7 @@ func (a *app) playerState(c *ui.Context, p mediaPlayer) {
 		message = "播放失败：" + p.Err().Error()
 	case !p.Ready():
 		message = "正在加载视频…"
-		if a.playingLive && time.Since(a.live.started) >= 15*time.Second {
+		if a.isLiveStream() && time.Since(a.live.started) >= 15*time.Second {
 			message = a.status
 		}
 	case p.Buffering():
@@ -299,7 +323,7 @@ func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact 
 			duration := p.Duration()
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 				switch {
-				case a.playingLive && a.live.catchupProgram == nil:
+				case a.isLiveStream():
 					ui.Text(c, "直播").FontSize(12).Grow(1)
 				case duration > 0:
 					ui.Text(c, playerClock(p.Position())).FontSize(12).ContentTransition(ctNumeric)
@@ -400,7 +424,7 @@ func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact 
 				if rate <= 0 {
 					rate = 1
 				}
-				if !a.playingLive {
+				if !a.isLiveStream() {
 					rateLabel := strconv.FormatFloat(rate, 'f', -1, 64) + "×"
 					rateBtn := playerGlassButton(c, "").Label("播放速度").Tooltip("点击切换倍速")
 					rateBtn.Children(func() {
@@ -563,6 +587,11 @@ func (a *app) panelSources(c *ui.Context, candidates []library.Item) {
 func (a *app) panelChannels(c *ui.Context) {
 	live := &a.live
 	hasEPG := a.activeEPGURL() != ""
+	if len(live.channels) <= 1 && hasEPG {
+		ui.Text(c, "节目单").FontSize(18).Bold()
+		a.panelChannelEPG(c)
+		return
+	}
 	if !hasEPG {
 		live.panelTab = 0
 		ui.Text(c, "频道").FontSize(18).Bold()

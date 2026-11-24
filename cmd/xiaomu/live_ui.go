@@ -38,7 +38,7 @@ type liveBrowser struct {
 	epgURL                   string
 	xmltvCache               map[string]*iptv.EPG
 	diypCache                map[string][]iptv.Program
-	diypLoading              map[string]bool
+	diypLoadingKey           string
 	epgErr                   string
 	epgClient                *http.Client
 	nowFn                    func() time.Time
@@ -198,6 +198,22 @@ func cloneLiveChannelsMap(m map[string][]iptv.Channel) map[string][]iptv.Channel
 	return out
 }
 
+func cloneStringMap(m map[string]string) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		if v = strings.TrimSpace(v); v != "" {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func (a *app) activeLiveChannelCache() map[string][]iptv.Channel {
 	if a.live.url != "" {
 		return a.live.cachedChannels
@@ -220,6 +236,36 @@ func (a *app) setActiveLiveChannelCache(key string, channels []iptv.Channel) {
 	a.library.liveChannels[key] = copied
 }
 
+func (a *app) activeLiveEPGCache() map[string]string {
+	if a.live.url != "" {
+		return a.live.cachedEPG
+	}
+	return a.library.liveEPG
+}
+
+func (a *app) setActiveLiveEPGCache(key, epgURL string) {
+	epgURL = strings.TrimSpace(epgURL)
+	if a.live.url != "" {
+		if epgURL == "" {
+			delete(a.live.cachedEPG, key)
+			return
+		}
+		if a.live.cachedEPG == nil {
+			a.live.cachedEPG = map[string]string{}
+		}
+		a.live.cachedEPG[key] = epgURL
+		return
+	}
+	if epgURL == "" {
+		delete(a.library.liveEPG, key)
+		return
+	}
+	if a.library.liveEPG == nil {
+		a.library.liveEPG = map[string]string{}
+	}
+	a.library.liveEPG[key] = epgURL
+}
+
 func (a *app) applyLiveChannels(index int, channels []iptv.Channel) {
 	a.applyLivePlaylist(index, channels, "")
 }
@@ -233,16 +279,20 @@ func (a *app) applyLivePlaylist(index int, channels []iptv.Channel, epgURL strin
 	}
 	a.live.epgURL = strings.TrimSpace(epgURL)
 	a.live.epgErr = ""
+	a.live.diypLoadingKey = ""
+	a.cancelJob(jobEPG)
 	a.ensureEPGLoaded()
 	a.tryPendingLiveResume()
 }
 
 func (a *app) setLiveSources(sources []iptv.Source) {
+	a.cancelJob(jobEPG)
 	a.live.sources = sources
 	a.live.channels = nil
 	a.live.selectedSource = -1
 	a.live.epgURL = ""
 	a.live.epgErr = ""
+	a.live.diypLoadingKey = ""
 	a.live.group, a.live.query = "", ""
 	a.live.channelList, a.live.panelChannelList = ui.ListState{}, ui.ListState{}
 }
@@ -299,6 +349,7 @@ func (a *app) applyLiveImport(raw string, sources []iptv.Source, switchToLive bo
 	prevURL := a.live.url
 	if prevURL != raw {
 		a.live.cachedChannels = nil
+		a.live.cachedEPG = nil
 		a.live.staleChannels = nil
 	} else if len(a.live.cachedChannels) > 0 {
 		a.live.staleChannels = make(map[string]bool, len(a.live.cachedChannels))
@@ -326,6 +377,7 @@ func (a *app) removeLive() {
 	a.cancelJob(jobLive)
 	a.live.url, a.live.input, a.live.restore = "", "", false
 	a.live.cachedChannels = nil
+	a.live.cachedEPG = nil
 	a.live.staleChannels = nil
 	var lives []iptv.Source
 	if root := a.library.root; root != nil {
@@ -362,8 +414,8 @@ func (a *app) loadLiveSource(index int) {
 	if !stale && len(cached) > 0 {
 		a.cancelJob(jobLive)
 		cachedEPG := source.EPG
-		if a.live.cachedEPG != nil && a.live.cachedEPG[key] != "" {
-			cachedEPG = a.live.cachedEPG[key]
+		if cachedEPG == "" {
+			cachedEPG = a.activeLiveEPGCache()[key]
 		}
 		a.applyLivePlaylist(index, cloneLiveChannels(cached), cachedEPG)
 		return
@@ -373,11 +425,15 @@ func (a *app) loadLiveSource(index int) {
 	var fail func(error)
 	if stale && len(cached) > 0 {
 		fallback := cloneLiveChannels(cached)
+		fallbackEPG := source.EPG
+		if fallbackEPG == "" {
+			fallbackEPG = a.activeLiveEPGCache()[key]
+		}
 		fail = func(err error) {
 			if a.live.url == expectedLiveURL && a.browser.configURL == expectedConfigURL &&
 				index < len(a.live.sources) && liveSourceCacheKey(a.live.sources[index]) == key {
 				delete(a.live.staleChannels, key)
-				a.applyLivePlaylist(index, fallback, source.EPG)
+				a.applyLivePlaylist(index, fallback, fallbackEPG)
 			}
 			a.status = jobError("加载频道", err)
 		}
@@ -396,12 +452,7 @@ func (a *app) loadLiveSource(index int) {
 			if key != "" {
 				delete(a.live.staleChannels, key)
 				a.setActiveLiveChannelCache(key, pl.Channels)
-				if pl.EPG != "" {
-					if a.live.cachedEPG == nil {
-						a.live.cachedEPG = map[string]string{}
-					}
-					a.live.cachedEPG[key] = pl.EPG
-				}
+				a.setActiveLiveEPGCache(key, pl.EPG)
 				if a.persist {
 					if a.live.url != "" {
 						_ = a.saveLiveCache()
@@ -702,7 +753,7 @@ func (a *app) liveDialog(c *ui.Context) {
 
 // advanceLive tries each alternative once when the player fails or never starts.
 func (a *app) advanceLive(p mediaPlayer) {
-	if !a.playingLive || p == nil || a.live.playingChannel < 0 || a.live.playingChannel >= len(a.live.channels) {
+	if !a.isLiveStream() || p == nil || a.live.playingChannel < 0 || a.live.playingChannel >= len(a.live.channels) {
 		return
 	}
 	if p.Err() == nil && (p.Ready() || time.Since(a.live.started) < 15*time.Second) {

@@ -182,6 +182,7 @@ func (a *app) enterMiniMode() {
 		}
 	}
 	a.panelOpen, a.panelTouched = false, false
+	a.playerOverlay.keepVisible = false
 	a.playerExtra.miniSavedPinned = a.playerExtra.pinned
 	a.playerExtra.miniMode = true
 	a.playerExtra.pinned = true
@@ -222,6 +223,22 @@ func (a *app) exitMiniMode() {
 	a.playerExtra.miniSavedBounds = mygo.Rectangle{}
 }
 
+func (a *app) playerMiniDragStrip(c *ui.Context, height float32, showHandle bool) {
+	if height <= 0 {
+		return
+	}
+	bar := c.TitleBar()
+	strip := ui.Row(c).Key("hud-mini-drag").Absolute().Top(0).Left(0).Right(0).Height(height).
+		Padding(0, bar.Right, 0, bar.Left).Justify(ui.Center).AlignItems(ui.Center).
+		DragWindow().Label("拖动窗口（迷你小窗）")
+	if !showHandle {
+		return
+	}
+	strip.Children(func() {
+		ui.Box(c).Width(36).Height(4).Radius(2).Background(ui.RGBA(248, 249, 255, 0.45))
+	})
+}
+
 func (a *app) playerMiniControls(c *ui.Context, p mediaPlayer) {
 	ui.Row(c).Key("hud-mini").Absolute().Left(10).Right(10).Bottom(10).Justify(ui.Center).
 		Transition(transHUDBottom).Children(func() {
@@ -236,10 +253,10 @@ func (a *app) playerMiniControls(c *ui.Context, p mediaPlayer) {
 				togglePlayback(p)
 				a.syncNowPlayingState()
 			}
-			if !a.playingLive && p.Duration() > 0 {
+			if !a.isLiveStream() && p.Duration() > 0 {
 				pos := p.Position().Seconds()
 				sl := ui.Slider(c, &pos, 0, p.Duration().Seconds()).Label("小窗播放进度").Grow(1)
-				if sl.Pressed() {
+				if btn, pressed := sl.PressedButton(); pressed && btn == 0 {
 					a.playerOverlay.keepVisible = true
 				}
 				if sl.Changed() {
@@ -338,7 +355,7 @@ func (a *app) releaseRightKeyHold(p mediaPlayer) {
 
 func (a *app) handleRightKeyHold(c *ui.Context, p mediaPlayer, pressed, repeated bool) {
 	rh := &a.playerExtra.rightHold
-	if a.playingLive || p == nil || p.Duration() <= 0 {
+	if a.isLiveStream() || p == nil || p.Duration() <= 0 {
 		a.releaseRightKeyHold(p)
 		return
 	}
@@ -437,8 +454,9 @@ func (a *app) capturePlayerScreenshot() {
 		}
 	}
 	title := sanitizeScreenshotName(a.currentPlaybackTitle())
-	stamp := time.Now().Format("20060102-150405")
-	filename := fmt.Sprintf("xiaomu-%s-%s.png", title, stamp)
+	now := time.Now()
+	stamp := fmt.Sprintf("%s-%03d", now.Format("20060102-150405"), now.Nanosecond()/int(time.Millisecond))
+	stem := fmt.Sprintf("xiaomu-%s-%s", title, stamp)
 
 	dispatch := a.dispatch
 	run := func() {
@@ -452,8 +470,7 @@ func (a *app) capturePlayerScreenshot() {
 				dir, err = dirFn()
 				if err == nil {
 					if err = os.MkdirAll(dir, 0o755); err == nil {
-						outPath = filepath.Join(dir, filename)
-						err = os.WriteFile(outPath, pngBytes, 0o644)
+						outPath, err = writeUniqueScreenshot(dir, stem, pngBytes)
 					}
 				}
 			}
@@ -480,6 +497,35 @@ func (a *app) capturePlayerScreenshot() {
 	} else {
 		go run()
 	}
+}
+
+func writeUniqueScreenshot(dir, stem string, data []byte) (string, error) {
+	for i := 0; i < 1000; i++ {
+		name := stem + ".png"
+		if i > 0 {
+			name = fmt.Sprintf("%s-%d.png", stem, i)
+		}
+		path := filepath.Join(dir, name)
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		_, werr := f.Write(data)
+		cerr := f.Close()
+		if werr != nil {
+			_ = os.Remove(path)
+			return "", werr
+		}
+		if cerr != nil {
+			_ = os.Remove(path)
+			return "", cerr
+		}
+		return path, nil
+	}
+	return "", errors.New("截图文件重名过多")
 }
 
 func (a *app) currentPlaybackTitle() string {

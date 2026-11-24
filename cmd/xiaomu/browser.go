@@ -289,7 +289,7 @@ func (a *app) applyConfig(raw string, doc *config.Config, restoring bool) {
 		a.clearSiteHealth()
 		a.showFailedSites = false
 	}
-	a.applyLibraryConfig(raw, doc, nil, nil)
+	a.applyLibraryConfig(raw, doc, nil, nil, nil)
 	if a.persist {
 		if err := a.saveImportedSource(raw); err != nil {
 			a.status = "保存片源地址失败：" + err.Error()
@@ -298,15 +298,15 @@ func (a *app) applyConfig(raw string, doc *config.Config, restoring bool) {
 }
 
 func (a *app) applyCachedConfig(raw string, cached cachedSourceConfig) {
-	root, docs, liveChannels := cached.restore()
+	root, docs, liveChannels, liveEPG := cached.restore()
 	if root == nil {
 		return
 	}
 	a.browser.importOpen = false
-	a.applyLibraryConfig(raw, root, docs, liveChannels)
+	a.applyLibraryConfig(raw, root, docs, liveChannels, liveEPG)
 }
 
-func (a *app) applyLibraryConfig(raw string, doc *config.Config, cached map[string]*config.Config, liveChannels map[string][]iptv.Channel) {
+func (a *app) applyLibraryConfig(raw string, doc *config.Config, cached map[string]*config.Config, liveChannels map[string][]iptv.Channel, liveEPG map[string]string) {
 	a.cancelJob(jobSite)
 	a.closeSite()
 	a.clearTitle()
@@ -316,7 +316,7 @@ func (a *app) applyLibraryConfig(raw string, doc *config.Config, cached map[stri
 		a.cancelJob(jobLive)
 		a.setLiveSources(doc.Lives)
 	}
-	a.resetLibraryWithCache(doc, cached, liveChannels)
+	a.resetLibraryWithCache(doc, cached, liveChannels, liveEPG)
 }
 
 // removeConfig forgets the imported configuration. Play history stays, shown

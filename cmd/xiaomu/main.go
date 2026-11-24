@@ -216,6 +216,7 @@ func (a *app) adoptPlayer(p mediaPlayer) {
 		p.SetMuted(true)
 	}
 	a.episodeEnd = playbackEnd{}
+	a.live.catchupProgram = nil
 	a.playingFile = false
 	a.playingFilePath = ""
 	a.playingName = ""

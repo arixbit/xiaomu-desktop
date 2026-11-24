@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/config"
 	"github.com/egoist/mygo/ui"
@@ -438,4 +439,144 @@ func TestCachedConfigReclassifiesLegacyCSPSites(t *testing.T) {
 	if restored.Sites[2].Kind != config.KindAList {
 		t.Fatalf("alist kind = %s, want %s", restored.Sites[2].Kind, config.KindAList)
 	}
+}
+
+func TestRestoreLiveM3UHeaderEPGAcrossRestart(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	now := time.Date(2026, 11, 24, 19, 15, 0, 0, loc)
+	const epgXML = `<?xml version="1.0" encoding="UTF-8"?>
+<tv>
+  <channel id="cctv1"><display-name>CCTV-1</display-name></channel>
+  <programme start="20261124190000 +0800" stop="20261124193000 +0800" channel="cctv1"><title>新闻联播</title></programme>
+</tv>`
+
+	t.Run("standalone live external M3U", func(t *testing.T) {
+		var expired atomic.Bool
+		var liveConfigHits, playlistHits atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/live.json":
+				liveConfigHits.Add(1)
+				if expired.Load() {
+					http.NotFound(w, r)
+					return
+				}
+				fmt.Fprint(w, `{"lives":[{"name":"测试直播","url":"./channels.m3u"}]}`)
+			case "/channels.m3u":
+				playlistHits.Add(1)
+				if expired.Load() {
+					http.NotFound(w, r)
+					return
+				}
+				fmt.Fprint(w, "#EXTM3U x-tvg-url=\"./epg.xml\"\n#EXTINF:-1 tvg-id=\"cctv1\" group-title=\"央视\",CCTV-1\nhttps://example.com/live.m3u8\n")
+			case "/epg.xml":
+				fmt.Fprint(w, epgXML)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer srv.Close()
+
+		sourcePath := filepath.Join(t.TempDir(), "source.json")
+		first := &app{persist: true, sourcePath: sourcePath}
+		first.live.epgClient = srv.Client()
+		first.live.nowFn = func() time.Time { return now }
+		defer first.close()
+
+		first.importLive(srv.URL + "/live.json")
+		if got := first.activeEPGURL(); got != srv.URL+"/epg.xml" {
+			t.Fatalf("initial M3U x-tvg-url not captured: got %q", got)
+		}
+
+		// Expire both live.json and channels.m3u, then restart from disk cache.
+		expired.Store(true)
+		liveConfigHits.Store(0)
+		playlistHits.Store(0)
+
+		restarted := &app{persist: true, sourcePath: sourcePath}
+		restarted.live.epgClient = srv.Client()
+		restarted.live.nowFn = func() time.Time { return now }
+		defer restarted.close()
+
+		restarted.restoreSavedSource()
+		if got := restarted.activeEPGURL(); got != srv.URL+"/epg.xml" {
+			t.Fatalf("M3U x-tvg-url lost after restart: got %q", got)
+		}
+		if cur, _ := restarted.channelEPGCurrent(restarted.live.channels[0]); cur == nil || cur.Title != "新闻联播" {
+			t.Fatalf("EPG did not load from persisted x-tvg-url: cur=%+v err=%q", cur, restarted.live.epgErr)
+		}
+		if liveConfigHits.Load() != 0 || playlistHits.Load() != 0 {
+			t.Fatalf("restart fetched expired live URLs: configHits=%d playlistHits=%d", liveConfigHits.Load(), playlistHits.Load())
+		}
+
+		// Stale refresh fallback on 404 also preserves cached EPG.
+		restarted.live.staleChannels = map[string]bool{liveSourceCacheKey(restarted.live.sources[0]): true}
+		restarted.loadLiveSource(0)
+		if got := restarted.activeEPGURL(); got != srv.URL+"/epg.xml" {
+			t.Fatalf("failed refresh fallback lost cached EPG: got %q", got)
+		}
+	})
+
+	t.Run("VOD config live external M3U", func(t *testing.T) {
+		var expired atomic.Bool
+		var configHits, playlistHits atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/vod.json":
+				configHits.Add(1)
+				if expired.Load() {
+					http.NotFound(w, r)
+					return
+				}
+				fmt.Fprint(w, `{"sites":[{"key":"cms","name":"示例站点","type":1,"api":"./api"}],"lives":[{"name":"附带直播","url":"./channels.m3u"}]}`)
+			case "/channels.m3u":
+				playlistHits.Add(1)
+				if expired.Load() {
+					http.NotFound(w, r)
+					return
+				}
+				fmt.Fprint(w, "#EXTM3U x-tvg-url=\"./epg.xml\"\n#EXTINF:-1 tvg-id=\"cctv1\" group-title=\"央视\",CCTV-1\nhttps://example.com/live.m3u8\n")
+			case "/epg.xml":
+				fmt.Fprint(w, epgXML)
+			case "/api":
+				fmt.Fprint(w, `{"pagecount":1,"list":[]}`)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer srv.Close()
+
+		sourcePath := filepath.Join(t.TempDir(), "source.json")
+		first := &app{persist: true, sourcePath: sourcePath}
+		first.live.epgClient = srv.Client()
+		first.live.nowFn = func() time.Time { return now }
+		defer first.close()
+
+		first.loadConfig(srv.URL + "/vod.json")
+		first.switchTab(routeLive)
+		if got := first.activeEPGURL(); got != srv.URL+"/epg.xml" {
+			t.Fatalf("initial VOD live x-tvg-url not captured: got %q", got)
+		}
+
+		expired.Store(true)
+		configHits.Store(0)
+		playlistHits.Store(0)
+
+		restarted := &app{persist: true, sourcePath: sourcePath}
+		restarted.live.epgClient = srv.Client()
+		restarted.live.nowFn = func() time.Time { return now }
+		defer restarted.close()
+
+		restarted.restoreSavedSource()
+		restarted.switchTab(routeLive)
+		if got := restarted.activeEPGURL(); got != srv.URL+"/epg.xml" {
+			t.Fatalf("VOD live x-tvg-url lost after restart: got %q", got)
+		}
+		if cur, _ := restarted.channelEPGCurrent(restarted.live.channels[0]); cur == nil || cur.Title != "新闻联播" {
+			t.Fatalf("VOD live EPG did not load after restart: cur=%+v err=%q", cur, restarted.live.epgErr)
+		}
+		if configHits.Load() != 0 || playlistHits.Load() != 0 {
+			t.Fatalf("restart fetched expired VOD live URLs: configHits=%d playlistHits=%d", configHits.Load(), playlistHits.Load())
+		}
+	})
 }

@@ -30,20 +30,22 @@ type cachedConfig struct {
 }
 
 // cachedSourceConfig is the local snapshot of the imported VOD configuration,
-// any depot sub-documents loaded from it, and any channels loaded from its lives.
+// any depot sub-documents loaded from it, and any channels/EPG loaded from its lives.
 type cachedSourceConfig struct {
 	URL          string                    `json:"url"`
 	Root         *cachedConfig             `json:"root"`
 	Docs         map[string]*cachedConfig  `json:"docs,omitempty"`
 	LiveChannels map[string][]iptv.Channel `json:"live_channels,omitempty"`
+	LiveEPG      map[string]string         `json:"live_epg,omitempty"`
 }
 
 // cachedLiveSource is the local snapshot of a separately imported live source
-// and any external playlists resolved from it.
+// and any external playlists/EPG resolved from it.
 type cachedLiveSource struct {
 	URL      string                    `json:"url"`
 	Sources  []iptv.Source             `json:"sources"`
 	Channels map[string][]iptv.Channel `json:"channels,omitempty"`
+	EPG      map[string]string         `json:"epg,omitempty"`
 }
 
 func savedSourcePath() (string, error) {
@@ -107,11 +109,12 @@ func (c *cachedConfig) toConfig() *config.Config {
 	return &doc
 }
 
-func snapshotSourceConfig(raw string, root *config.Config, docs map[string]*config.Config, liveChannels map[string][]iptv.Channel) cachedSourceConfig {
+func snapshotSourceConfig(raw string, root *config.Config, docs map[string]*config.Config, liveChannels map[string][]iptv.Channel, liveEPG map[string]string) cachedSourceConfig {
 	snap := cachedSourceConfig{
 		URL:          raw,
 		Root:         snapshotConfig(root),
 		LiveChannels: cloneLiveChannelsMap(liveChannels),
+		LiveEPG:      cloneStringMap(liveEPG),
 	}
 	if len(docs) > 0 {
 		copied := make(map[string]*cachedConfig, len(docs))
@@ -128,7 +131,7 @@ func snapshotSourceConfig(raw string, root *config.Config, docs map[string]*conf
 	return snap
 }
 
-func (c cachedSourceConfig) restore() (*config.Config, map[string]*config.Config, map[string][]iptv.Channel) {
+func (c cachedSourceConfig) restore() (*config.Config, map[string]*config.Config, map[string][]iptv.Channel, map[string]string) {
 	root := c.Root.toConfig()
 	docs := map[string]*config.Config{}
 	byURL := map[string]*config.Config{}
@@ -161,7 +164,7 @@ func (c cachedSourceConfig) restore() (*config.Config, map[string]*config.Config
 			}
 		}
 	}
-	return root, docs, cloneLiveChannelsMap(c.LiveChannels)
+	return root, docs, cloneLiveChannelsMap(c.LiveChannels), cloneStringMap(c.LiveEPG)
 }
 
 func readCachedSourceConfig(path, expectedURL string) (cachedSourceConfig, bool) {
@@ -254,7 +257,7 @@ func (a *app) saveConfigCache() error {
 	if err != nil {
 		return err
 	}
-	snap := snapshotSourceConfig(a.browser.configURL, a.library.root, a.library.cached, a.library.liveChannels)
+	snap := snapshotSourceConfig(a.browser.configURL, a.library.root, a.library.cached, a.library.liveChannels, a.library.liveEPG)
 	return writeJSONFile(configCachePath(path), snap)
 }
 
@@ -270,6 +273,7 @@ func (a *app) saveLiveCache() error {
 		URL:      a.live.url,
 		Sources:  a.live.sources,
 		Channels: cloneLiveChannelsMap(a.live.cachedChannels),
+		EPG:      cloneStringMap(a.live.cachedEPG),
 	}
 	return writeJSONFile(liveCachePath(path), snap)
 }
@@ -330,6 +334,7 @@ func (a *app) restoreSavedSource() {
 		a.live.url, a.live.input = source.LiveURL, source.LiveURL
 		if cached, ok := readCachedLiveSource(liveCachePath(path), source.LiveURL); ok {
 			a.live.cachedChannels = cloneLiveChannelsMap(cached.Channels)
+			a.live.cachedEPG = cloneStringMap(cached.EPG)
 			a.setLiveSources(cached.Sources)
 			a.live.restore = false
 		} else {

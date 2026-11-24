@@ -300,6 +300,12 @@ func (a *app) renderChannelLogo(c *ui.Context, ch iptv.Channel, size float32, da
 
 // --- EPG & Catchup ---
 
+// isLiveStream reports whether playback is a real-time live broadcast
+// rather than a seekable catchup replay or on-demand video.
+func (a *app) isLiveStream() bool {
+	return a.playingLive && a.live.catchupProgram == nil
+}
+
 func (a *app) liveNow() time.Time {
 	if a.live.nowFn != nil {
 		return a.live.nowFn()
@@ -330,6 +336,7 @@ func (a *app) ensureEPGLoaded() {
 		headers = a.live.sources[a.live.selectedSource].Headers
 	}
 	client := a.live.epgClient
+	a.live.diypLoadingKey = ""
 	a.live.epgErr = ""
 	a.run(jobEPG, "", func(ctx context.Context) (jobResult, error) {
 		epg, err := iptv.FetchXMLTV(ctx, client, epgURL, headers)
@@ -357,16 +364,15 @@ func (a *app) ensureChannelDIYPEPG(ch iptv.Channel) {
 	key := diypCacheKey(epgURL, ch, now)
 	if a.live.diypCache != nil {
 		if _, ok := a.live.diypCache[key]; ok {
+			a.live.epgErr = ""
 			return
 		}
 	}
-	if a.live.diypLoading[key] {
+	if a.live.diypLoadingKey == key && a.running(jobEPG) {
 		return
 	}
-	if a.live.diypLoading == nil {
-		a.live.diypLoading = map[string]bool{}
-	}
-	a.live.diypLoading[key] = true
+	a.live.diypLoadingKey = key
+	a.live.epgErr = ""
 	var headers map[string]string
 	if a.live.selectedSource >= 0 && a.live.selectedSource < len(a.live.sources) {
 		headers = a.live.sources[a.live.selectedSource].Headers
@@ -378,7 +384,9 @@ func (a *app) ensureChannelDIYPEPG(ch iptv.Channel) {
 			return jobResult{}, err
 		}
 		return jobResult{apply: func() {
-			delete(a.live.diypLoading, key)
+			if a.live.diypLoadingKey == key {
+				a.live.diypLoadingKey = ""
+			}
 			if a.live.diypCache == nil {
 				a.live.diypCache = map[string][]iptv.Program{}
 			}
@@ -386,7 +394,9 @@ func (a *app) ensureChannelDIYPEPG(ch iptv.Channel) {
 			a.live.epgErr = ""
 		}}, nil
 	}, func(err error) {
-		delete(a.live.diypLoading, key)
+		if a.live.diypLoadingKey == key {
+			a.live.diypLoadingKey = ""
+		}
 		a.live.epgErr = err.Error()
 	})
 }
