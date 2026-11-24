@@ -114,7 +114,8 @@ func TestDetailHeaderShowsPlayButtonAboveSources(t *testing.T) {
 	if !ok {
 		t.Fatal("favourite button is missing")
 	}
-	if fav.Y < play.Y || fav.Y >= play.Y+play.H || fav.X <= play.X+play.W {
+	// Same row (text metrics differ by sub-pixels across platforms), to the right.
+	if fav.Y >= play.Y+play.H || play.Y >= fav.Y+fav.H || fav.X <= play.X+play.W {
 		t.Fatalf("favourite button is not beside the play button: play=%+v fav=%+v", play, fav)
 	}
 }

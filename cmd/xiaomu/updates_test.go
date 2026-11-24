@@ -1,11 +1,18 @@
 package main
 
 import (
+	"math"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 )
+
+// nearRect allows for sub-pixel differences in text metrics across platforms.
+func nearRect(a, b ui.Rect) bool {
+	return math.Abs(float64(a.X-b.X)) < 0.5 && math.Abs(float64(a.Y-b.Y)) < 0.5 &&
+		math.Abs(float64(a.W-b.W)) < 0.5 && math.Abs(float64(a.H-b.H)) < 0.5
+}
 
 func TestSidebarUpdateHint(t *testing.T) {
 	a := &app{}
@@ -21,7 +28,7 @@ func TestSidebarUpdateHint(t *testing.T) {
 	a.setAvailableUpdate("0.8.5")
 	tt.Frame()
 	button, ok := tt.Find("有新版本")
-	if !ok || button != before {
+	if !ok || !nearRect(button, before) {
 		t.Fatalf("update hint moved or replaced the sidebar entry: before=%+v after=%+v", before, button)
 	}
 	dot, ok := tt.Find("新版本提示")

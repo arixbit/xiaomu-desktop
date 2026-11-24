@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -71,7 +72,8 @@ func TestFetchHotListsAndPersistIndependently(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Mode().Perm()&0077 != 0 {
+		// Windows has no Unix permission bits to check.
+		if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
 			t.Fatal("cache permissions are too broad")
 		}
 	}
