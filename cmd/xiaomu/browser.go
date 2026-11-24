@@ -472,7 +472,10 @@ func (a *app) welcomeView(c *ui.Context) {
 				TextColor(textMuted)
 			ui.TextInput(c, &b.configURL).Label("配置地址").Placeholder("https://example.com/config.json").FillWidth()
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "支持 TVBox 配置、M3U 和 TXT 直播列表。").FontSize(13).TextColor(textMuted).Grow(1)
+				ui.Text(c, "支持 TVBox 配置、M3U / TXT 直播列表，也可直接拖入本地视频。").FontSize(13).TextColor(textMuted).Grow(1)
+				if glassButton(c, "打开本地视频").Clicked() {
+					a.openLocalFileDialog()
+				}
 				if primaryButton(c, "导入").Clicked() {
 					a.loadConfig(b.configURL)
 				}

@@ -225,6 +225,9 @@ func (a *app) sidebar(c *ui.Context) {
 			}
 		}
 		ui.Spacer(c)
+		if glassButton(c, "打开文件").FillWidth().Clicked() {
+			a.openLocalFileDialog()
+		}
 		if glassButton(c, "打开链接").FillWidth().Clicked() {
 			a.linkOpen = true
 		}

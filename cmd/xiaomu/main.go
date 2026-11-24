@@ -44,6 +44,8 @@ type app struct {
 	// system Now Playing info. All four are replaceable for headless
 	// tests and wired to MyGo in main().
 	openLocal      func(string) (*ui.VideoPlayer, error)
+	pickLocalFile  func() ([]string, error)
+	fileDialogOpen bool
 	addRecent      func(string) error
 	notify         func(id, title, body string)
 	nowPlaying     nowPlayingSink
@@ -394,6 +396,17 @@ func main() {
 		a.restoreSourceMemory()
 		a.restorePanCredentials()
 		a.setFullScreen(win.IsFullScreen())
+		win.OnFileDrop(func(e *mygo.FileDropEvent) {
+			if e == nil || len(e.Paths) == 0 {
+				return
+			}
+			paths := append([]string(nil), e.Paths...)
+			win.Update(func() {
+				if !a.closed {
+					a.handleDroppedFiles(paths)
+				}
+			})
+		})
 		win.OnEnterFullScreen(func() { win.Update(func() { a.setFullScreen(true) }) })
 		win.OnLeaveFullScreen(func() {
 			win.Update(func() {

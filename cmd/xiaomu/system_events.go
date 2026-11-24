@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui/video"
 )
 
@@ -22,6 +23,10 @@ var playableFileExts = map[string]bool{
 	".mov":  true,
 	".m4v":  true,
 	".m3u8": true,
+}
+
+func playableFileExtensions() []string {
+	return []string{"mp4", "mov", "m4v", "m3u8"}
 }
 
 func isPlayableFile(path string) bool {
@@ -137,6 +142,75 @@ func (a *app) openLocalFile(path string) bool {
 	}
 	a.syncNowPlaying()
 	return true
+}
+
+// handleDroppedFiles opens the first playable video from dropped or selected
+// paths. When none matches a playable extension, it passes the first path to
+// openLocalFile so the user sees the format hint instead of a silent no-op.
+func (a *app) handleDroppedFiles(paths []string) bool {
+	if len(paths) == 0 {
+		return false
+	}
+	for _, p := range paths {
+		if isPlayableFile(p) {
+			return a.openLocalFile(p)
+		}
+	}
+	return a.openLocalFile(paths[0])
+}
+
+// openLocalFileDialog prompts the user to choose a local video file and plays
+// it immediately. The native dialog blocks until dismissed, so real runs invoke
+// it off the UI thread and dispatch the chosen path back onto the UI thread.
+func (a *app) openLocalFileDialog() {
+	if a.closed || a.fileDialogOpen {
+		return
+	}
+	pick := a.pickLocalFile
+	if pick == nil {
+		if a.window == nil {
+			return
+		}
+		win := a.window
+		pick = func() ([]string, error) {
+			return mygo.Dialog.Open(mygo.OpenDialogOptions{
+				Parent: win,
+				Title:  "打开本地视频",
+				Filters: []mygo.FileFilter{{
+					Name:       "视频文件",
+					Extensions: playableFileExtensions(),
+				}},
+			})
+		}
+	}
+	a.fileDialogOpen = true
+	dispatch := a.dispatch
+	run := func() {
+		paths, err := pick()
+		apply := func() {
+			a.fileDialogOpen = false
+			if a.closed {
+				return
+			}
+			if err != nil {
+				a.status = "选择文件失败：" + err.Error()
+				return
+			}
+			if len(paths) > 0 {
+				a.handleDroppedFiles(paths)
+			}
+		}
+		if dispatch == nil {
+			apply()
+		} else {
+			dispatch(apply)
+		}
+	}
+	if dispatch == nil {
+		run()
+	} else {
+		go run()
+	}
 }
 
 // deepLinkAction is one parsed xiaomu:// URL.
