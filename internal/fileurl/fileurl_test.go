@@ -1,6 +1,9 @@
 package fileurl
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
 func TestPathFor(t *testing.T) {
 	cases := []struct {
@@ -52,6 +55,9 @@ func TestPathFor(t *testing.T) {
 // Path uses the current OS; on Linux it behaves like PathFor with
 // windows=false.
 func TestPathOnLinux(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows paths are covered by PathFor(_, true)")
+	}
 	got, err := Path("file:///home/My%20Videos/x.json")
 	if err != nil {
 		t.Fatalf("Path = %q, %v", got, err)

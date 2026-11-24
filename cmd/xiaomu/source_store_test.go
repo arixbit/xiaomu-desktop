@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -13,6 +14,9 @@ import (
 	"github.com/arixbit/xiaomu-desktop/internal/config"
 	"github.com/egoist/mygo/ui"
 )
+
+// Windows has no Unix permission bits, so private-file checks skip it.
+const windowsOS = runtime.GOOS == "windows"
 
 func TestSavedSourceRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "source.json")
@@ -31,7 +35,7 @@ func TestSavedSourceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm()&0077 != 0 {
+	if !windowsOS && info.Mode().Perm()&0077 != 0 {
 		t.Fatalf("saved source is readable by others: %v", info.Mode())
 	}
 	if err := writeSavedSource(path, savedSource{URL: "https://example.com/other.json"}); err != nil {
@@ -92,7 +96,7 @@ func TestRestoreImportedVODAndLiveAfterTempLinkExpires(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config cache file missing: %v", err)
 	}
-	if info.Mode().Perm()&0077 != 0 {
+	if !windowsOS && info.Mode().Perm()&0077 != 0 {
 		t.Fatalf("config cache is readable by others: %v", info.Mode())
 	}
 
@@ -167,7 +171,7 @@ func TestRestoreStandaloneLiveAfterTempLinkExpires(t *testing.T) {
 	if err != nil {
 		t.Fatalf("live cache file missing: %v", err)
 	}
-	if info.Mode().Perm()&0077 != 0 {
+	if !windowsOS && info.Mode().Perm()&0077 != 0 {
 		t.Fatalf("live cache is readable by others: %v", info.Mode())
 	}
 
