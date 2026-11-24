@@ -38,16 +38,20 @@ type mediaPlayer interface {
 	View(c *ui.Context) ui.Element
 }
 
-// mediaTrack describes one audio or subtitle stream exposed by track-capable
-// playback engines such as mygo-player.
+// mediaTrack describes one video, audio, or subtitle stream exposed by
+// track-capable playback engines such as mygo-player.
 type mediaTrack struct {
-	ID       int64
-	Title    string
-	Lang     string
-	Codec    string
-	Channels int
-	Selected bool
-	External bool
+	ID         int64
+	Title      string
+	Lang       string
+	Codec      string
+	Width      int
+	Height     int
+	FPS        float64
+	Channels   int
+	SampleRate int
+	Selected   bool
+	External   bool
 }
 
 // trackCapablePlayer is optionally implemented by mediaPlayer backends that
@@ -62,6 +66,16 @@ type trackCapablePlayer interface {
 	DisableSubtitleTrack() error
 	AddSubtitleFile(path string) error
 	CurrentHWDec() string
+}
+
+// advancedMediaPlayer is optionally implemented by mediaPlayer backends (such
+// as mygo-player / libmpv) that expose loop control, arbitrary property
+// getters/setters, and video track metadata.
+type advancedMediaPlayer interface {
+	SetLoop(loop bool) error
+	SetPropertyString(name, value string) error
+	GetPropertyString(name string) (string, error)
+	VideoTracks() []mediaTrack
 }
 
 func mpvBackendSupported() bool {
@@ -306,6 +320,22 @@ func (m *mpvMediaPlayer) CurrentHWDec() string {
 	return m.p.CurrentHWDec()
 }
 
+func (m *mpvMediaPlayer) SetLoop(loop bool) error {
+	return m.p.SetLoop(loop)
+}
+
+func (m *mpvMediaPlayer) SetPropertyString(name, value string) error {
+	return m.p.SetPropertyString(name, value)
+}
+
+func (m *mpvMediaPlayer) GetPropertyString(name string) (string, error) {
+	return m.p.GetPropertyString(name)
+}
+
+func (m *mpvMediaPlayer) VideoTracks() []mediaTrack {
+	return convertMPVTracks(m.p.VideoTracks())
+}
+
 func convertMPVTracks(in []mpvplayer.Track) []mediaTrack {
 	if len(in) == 0 {
 		return nil
@@ -313,13 +343,17 @@ func convertMPVTracks(in []mpvplayer.Track) []mediaTrack {
 	out := make([]mediaTrack, len(in))
 	for i, tr := range in {
 		out[i] = mediaTrack{
-			ID:       tr.ID,
-			Title:    tr.Title,
-			Lang:     tr.Lang,
-			Codec:    tr.Codec,
-			Channels: tr.Channels,
-			Selected: tr.Selected,
-			External: tr.External,
+			ID:         tr.ID,
+			Title:      tr.Title,
+			Lang:       tr.Lang,
+			Codec:      tr.Codec,
+			Width:      tr.Width,
+			Height:     tr.Height,
+			FPS:        tr.FPS,
+			Channels:   tr.Channels,
+			SampleRate: tr.SampleRate,
+			Selected:   tr.Selected,
+			External:   tr.External,
 		}
 	}
 	return out

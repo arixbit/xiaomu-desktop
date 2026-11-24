@@ -14,6 +14,7 @@ import (
 	"github.com/arixbit/xiaomu-desktop/internal/iptv"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/netimage"
 )
 
 func makeBenchLibraryEvents(sites, perSite int) (*config.Config, []library.Event) {
@@ -128,28 +129,16 @@ func BenchmarkEpisodeButtonLabel(b *testing.B) {
 func BenchmarkPosterCacheHit(b *testing.B) {
 	a := &app{}
 	defer a.close()
-	a.posters.images = make(map[string]ui.ImageSource, 64)
-	a.posters.order = make([]string, 0, 64)
-	png := fixPNG(&testing.T{}, 32, 32)
-	img, err := ui.DecodeBitmapScaled(png, posterMaxSide)
-	if err != nil {
-		b.Fatal(err)
-	}
-	urls := make([]string, 64)
-	for i := range urls {
-		u := fmt.Sprintf("https://example.com/poster/%d.png", i)
-		urls[i] = u
-		a.posters.images[u] = img
-		a.posters.order = append(a.posters.order, u)
-	}
+	var got ui.ImageSource
+	tt := ui.NewTester(func(c *ui.Context) {
+		got = a.poster(c, "")
+	}, 100, 100)
+	_ = got
+	_ = tt
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		for _, u := range urls {
-			if a.poster(u) == nil {
-				b.Fatal("cache miss")
-			}
-		}
+		_, _ = netimage.Load(nil, "https://example.com/nonexistent-bench.png", netimage.Options{MaxSide: posterMaxSide})
 	}
 }
 

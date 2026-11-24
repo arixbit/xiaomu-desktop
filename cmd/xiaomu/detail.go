@@ -692,7 +692,7 @@ func (a *app) detailHeader(c *ui.Context, t *titlePage) {
 		}
 		posterBox := ui.Box(c).Size(170, 240).Radius(16).Clip().Background(p.cardPlaceholder)
 		posterBox.Children(func() {
-			applyPosterImage(c, posterBox, a.poster(pic))
+			applyPosterImage(c, posterBox, a.poster(c, pic))
 		})
 		ui.Column(c).Grow(1).MinWidth(0).Gap(10).Children(func() {
 			ui.Text(c, t.name).FontSize(27).Bold()

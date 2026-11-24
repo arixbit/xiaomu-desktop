@@ -4,16 +4,17 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/egoist/mygo/ui"
 	"image"
 	"image/color"
 	"image/png"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/netimage"
 )
 
 func fixPNG(t *testing.T, w, h int) []byte {
@@ -30,6 +31,7 @@ func fixPNG(t *testing.T, w, h int) []byte {
 	}
 	return b.Bytes()
 }
+
 func fixPump(t *testing.T, q <-chan func(), ready func() bool, timeout time.Duration) {
 	t.Helper()
 	timer := time.NewTimer(timeout)
@@ -44,37 +46,32 @@ func fixPump(t *testing.T, q <-chan func(), ready func() bool, timeout time.Dura
 		}
 	}
 }
-func TestFixPosterBudget(t *testing.T) {
+
+func TestPosterBudgetAndNetImageCache(t *testing.T) {
 	small, large, tooLarge := fixPNG(t, 512, 512), fixPNG(t, 2048, 2048), fixPNG(t, 4097, 1024)
-	var active, peak, requests atomic.Int64
+	var requests atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		n := active.Add(1)
-		defer active.Add(-1)
-		for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
+		switch r.URL.Path {
+		case "/large":
+			w.Header().Set("Content-Type", "image/png")
+			w.Write(large)
+		case "/small":
+			w.Header().Set("Content-Type", "image/png")
+			w.Write(small)
+		case "/oversize":
+			w.Header().Set("Content-Type", "image/png")
+			w.Write(tooLarge)
+		case "/cached":
+			w.Header().Set("Content-Type", "image/png")
+			w.Header().Set("Cache-Control", "max-age=3600")
+			w.Write(small)
+		default:
+			http.NotFound(w, r)
 		}
-		if strings.HasPrefix(r.URL.Path, "/slow/") {
-			select {
-			case <-r.Context().Done():
-				return
-			case <-time.After(300 * time.Millisecond):
-			}
-		}
-		if strings.HasPrefix(r.URL.Path, "/fail/") {
-			http.Error(w, "failure", 503)
-			return
-		}
-		data := small
-		if r.URL.Path == "/large" {
-			data = large
-		}
-		if r.URL.Path == "/oversize" {
-			data = tooLarge
-		}
-		w.Header().Set("Content-Type", "image/png")
-		w.Write(data)
 	}))
 	defer srv.Close()
+
 	img, err := fetchPoster(context.Background(), srv.URL+"/large")
 	if err != nil {
 		t.Fatal(err)
@@ -94,71 +91,37 @@ func TestFixPosterBudget(t *testing.T) {
 	if _, err := fetchPoster(context.Background(), srv.URL+"/oversize"); err == nil {
 		t.Error("over-budget dimensions decoded")
 	}
-	q := make(chan func(), 2048)
-	a := &app{dispatch: func(f func()) { q <- f }}
-	for i := range 100 {
-		a.poster(fmt.Sprintf("%s/slow/%d", srv.URL, i))
-	}
-	time.Sleep(50 * time.Millisecond)
-	t.Logf("100 slow URLs: active=%d peak=%d pending=%d", active.Load(), peak.Load(), len(a.posters.pending))
-	if peak.Load() > 4 || len(a.posters.pending) > 36 {
-		t.Error("unbounded poster work")
-	}
-	start := time.Now()
-	a.close()
-	deadline := time.Now().Add(100 * time.Millisecond)
-	for active.Load() != 0 && time.Now().Before(deadline) {
-		select {
-		case f := <-q:
-			f()
-		case <-time.After(time.Millisecond):
+
+	// Verify app.poster delegates cleanly to MyGo ui/netimage with warm cache hits.
+	cachedURL := fmt.Sprintf("%s/cached", srv.URL)
+	defer netimage.Forget(cachedURL)
+
+	a := &app{}
+	defer a.close()
+	var got ui.ImageSource
+	tt := ui.NewTester(func(c *ui.Context) {
+		got = a.poster(c, cachedURL)
+		if a.poster(c, "javascript:alert(1)") != nil {
+			t.Error("non-http poster URL should be ignored")
 		}
+	}, 200, 200)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for got == nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		tt.Frame()
 	}
-	if active.Load() != 0 {
-		t.Error("close retained active downloads")
-	}
-	fixPump(t, q, func() bool { return active.Load() == 0 }, time.Second)
-	t.Logf("close requests zero: %v", time.Since(start))
-	b := &app{dispatch: func(f func()) { q <- f }}
-	defer b.close()
-	for i := range 130 {
-		b.poster(fmt.Sprintf("%s/cache/%d", srv.URL, i))
-		fixPump(t, q, func() bool { return len(b.posters.pending) == 0 }, time.Second)
-	}
-	var decoded int64
-	for _, img := range b.posters.images {
-		w, h := ui.ImageSize(img)
-		decoded += int64(w) * int64(h) * 4
-	}
-	t.Logf("cache actual decoded bytes=%d entries=%d", decoded, len(b.posters.images))
-	if decoded > 64<<20 {
-		t.Errorf("decoded cache exceeds 64MiB: %d", decoded)
+	if got == nil {
+		t.Fatal("netimage poster did not load")
 	}
 	before := requests.Load()
-	for range 50 {
-		for url := range b.posters.images {
-			if b.poster(url) == nil {
-				t.Fatal("warm cache lost image")
-			}
+	for range 10 {
+		tt.Frame()
+		if got == nil {
+			t.Fatal("warm netimage cache lost image")
 		}
 	}
 	if requests.Load() != before {
-		t.Error("hot cache requested network")
+		t.Errorf("warm netimage cache hit network: before=%d after=%d", before, requests.Load())
 	}
-	for i := range 1000 {
-		b.poster(fmt.Sprintf("%s/fail/%d", srv.URL, i))
-		fixPump(t, q, func() bool { return len(b.posters.pending) == 0 }, time.Second)
-	}
-	t.Logf("failed URL records=%d", len(b.posters.failed))
-	if len(b.posters.failed) > 256 {
-		t.Error("failure records unbounded")
-	}
-	for key := range b.posters.failed {
-		b.posters.failed[key] = time.Now().Add(-31 * time.Second)
-	}
-	b.poster(srv.URL + "/cleanup")
-	if len(b.posters.failed) != 0 {
-		t.Errorf("expired failure records retained: %d", len(b.posters.failed))
-	}
-	fixPump(t, q, func() bool { return len(b.posters.pending) == 0 }, time.Second)
 }

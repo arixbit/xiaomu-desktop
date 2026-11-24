@@ -66,6 +66,7 @@ func (a *app) playerScreen(c *ui.Context) {
 	}
 	a.trackPlayback(c, p)
 	a.checkPlayback(c, p)
+	a.checkSleepTimer(c, p)
 	a.advanceEpisode(p, c.Now())
 	if !a.episodeEnd.since.IsZero() {
 		c.After(episodeEndTolerance)
@@ -95,26 +96,38 @@ func (a *app) playerScreen(c *ui.Context) {
 			screen.DragWindow().Label("拖动窗口（播放页空白）")
 		}
 		showControls := a.playerOverlaysVisible(c, screen)
-		showPanel := hasEpisodes && a.panelOpen && (!compact || a.panelTouched) && showControls
-		if !showControls {
+		if a.playerExtra.miniMode {
+			showControls = screen.Hovered() || !p.Playing() || a.playerOverlay.keepVisible
+		}
+		showPanel := !a.playerExtra.miniMode && hasEpisodes && a.panelOpen && (!compact || a.panelTouched) && showControls
+		if !showControls && !a.playerExtra.miniMode {
 			screen.Cursor(ui.CursorNone)
 		}
 		screen.Children(func() {
 			ui.Row(c).Fill().Children(func() {
 				ui.Box(c).Grow(1).FillHeight().Clip().Children(func() {
-					p.View(c).Key(p).Fill().Fit(ui.Contain).Label("视频画面").Focusable().AutoFocus().Bind(&a.playerFocus).
+					p.View(c).Key(p).Fill().Fit(a.playerVideoFit()).Label("视频画面").Focusable().AutoFocus().Bind(&a.playerFocus).
 						HitTest(func(x, y float32, r ui.Rect) bool {
+							if a.playerExtra.miniMode || a.playerExtra.aspect == aspectFill {
+								return true
+							}
 							w, h := p.Size()
 							return a.fullScreen || playerPictureRect(r, w, h).Contains(x, y)
 						}).HandleInput(func(ev ui.InputEvent) bool { return a.handlePlayerPointer(p, ev) })
 					a.danmakuOverlay(c, p, showControls)
 					a.playerState(c, p)
+					a.playbackStatsOverlay(c, p)
+					a.rightHoldBoostPill(c)
 					a.playerOSDPill(c)
 					a.skipUndoPill(c, p)
 					a.upNextPill(c, p, showControls)
 					if showControls {
-						a.playerControls(c, p, hasEpisodes, compact)
-						a.playerHeader(c, hasEpisodes, compact)
+						if a.playerExtra.miniMode {
+							a.playerMiniControls(c, p)
+						} else {
+							a.playerControls(c, p, hasEpisodes, compact)
+							a.playerHeader(c, hasEpisodes, compact)
+						}
 					}
 				})
 				if showPanel && !overlayPanel {
@@ -134,6 +147,7 @@ func (a *app) playerScreen(c *ui.Context) {
 			}
 		})
 		a.danmakuDialog(c)
+		a.subtitleDialog(c, p)
 		a.panAuthPromptDialog(c)
 	})
 }
@@ -175,6 +189,24 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 		}
 		title.Children(func() {
 			ui.Text(c, name).SingleLine().TextColor(playerText).TextShadow(0, 1, 4, playerInk).ContentTransition(ctReplace)
+			if badge := a.sleepTimerBadge(c.Now()); badge != "" {
+				ui.Text(c, " · "+badge).FontSize(12).SingleLine().TextColor(ui.RGB(255, 198, 130)).ContentTransition(ctNumeric)
+			}
+			if a.playerExtra.loop {
+				ui.Text(c, " · 循环").FontSize(12).SingleLine().TextColor(ui.RGB(142, 230, 178))
+			}
+		})
+		ui.Row(c).Padding(5).Gap(4).Radius(18).Material(glass.Glass{Style: glass.Regular}).Children(func() {
+			pinLabel := "置顶"
+			if a.playerExtra.pinned {
+				pinLabel = "已置顶"
+			}
+			if playerGlassButton(c, pinLabel).Padding(5, 10).Label("窗口置顶").Tooltip("切换窗口置顶 (P)").Clicked() {
+				a.toggleAlwaysOnTop()
+			}
+			if playerGlassButton(c, "小窗").Padding(5, 10).Label("迷你小窗").Tooltip("置顶迷你小窗 (T)").Clicked() {
+				a.toggleMiniMode()
+			}
 		})
 		if hasEpisodes {
 			panelLabel, closeLabel := "换源与选集", "收起选集"
@@ -355,6 +387,7 @@ func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact 
 				a.audioTrackControls(c, p)
 				a.subtitleTrackControls(c, p)
 				a.danmakuButton(c)
+				a.morePlayerControls(c, p)
 				rate := p.Rate()
 				if rate <= 0 {
 					rate = 1
@@ -588,6 +621,7 @@ func (a *app) trackPlayback(c *ui.Context, p mediaPlayer) {
 	if !p.Ready() || p.Err() != nil || a.playFailure != nil || a.autoNextPending {
 		return
 	}
+	a.maybeAutoSelectChineseSubtitle(p)
 	a.applyOpeningSkip(p)
 	if a.resumeAt > 0 {
 		if !a.resumeIssued {
@@ -611,6 +645,26 @@ func (a *app) trackPlayback(c *ui.Context, p mediaPlayer) {
 }
 
 func (a *app) advanceEpisode(p mediaPlayer, now time.Time) {
+	if a.playerExtra.loop {
+		a.episodeEnd = playbackEnd{}
+		if _, isAdv := p.(advancedMediaPlayer); !isAdv && p.Ended() {
+			p.Seek(0)
+			p.Play()
+		}
+		return
+	}
+	if a.playerExtra.sleepMode == sleepAfterEpisode {
+		ended := a.episodeEnd.check(now, p.Ready() && a.resumeAt == 0, p.Buffering(), p.Playing(), p.Position(), p.Duration())
+		if p.Ended() || a.skipEndingReady(p) || ended {
+			a.episodeEnd = playbackEnd{}
+			a.clearSleepTimer()
+			p.Pause()
+			a.syncNowPlayingState()
+			a.setNotice("本集已播完，定时关闭已暂停播放")
+			a.showPlayerOSD("定时已到 · 已暂停")
+		}
+		return
+	}
 	if !a.autoNext || a.autoNextPending || a.autoNextCanceled || a.running(jobPlay) || a.playFailure != nil || p.Err() != nil {
 		a.episodeEnd = playbackEnd{}
 		return
@@ -680,6 +734,7 @@ func (a *app) currentEpisode() (sourceIndex, episodeIndex int, ok bool) {
 }
 
 func (a *app) leavePlayer() {
+	a.leavePlayerExtra()
 	a.cancelJob(jobPlay)
 	a.clearPanelChoice()
 	a.flushHistory()
@@ -853,8 +908,23 @@ func (a *app) subtitleTrackControls(c *ui.Context, p mediaPlayer) {
 			}
 		}
 		m.Separator()
+		if m.Item("字幕提前 0.5s ([)").ID("sub-delay-minus").Chosen() {
+			a.adjustSubtitleDelay(p, -500*time.Millisecond)
+		}
+		if m.Item("字幕推迟 0.5s (])").ID("sub-delay-plus").Chosen() {
+			a.adjustSubtitleDelay(p, 500*time.Millisecond)
+		}
+		if a.playerExtra.subDelay != 0 {
+			if m.Item("重置偏移 (" + formatSubtitleDelay(a.playerExtra.subDelay) + ")").ID("sub-delay-reset").Chosen() {
+				a.resetSubtitleDelay(p)
+			}
+		}
+		m.Separator()
 		if m.Item("加载外挂字幕…").ID("sub-load").Chosen() {
 			a.openSubtitleFileDialog()
+		}
+		if m.Item("字幕样式与在线匹配…").ID("sub-settings").Chosen() {
+			a.openSubtitleDialog()
 		}
 	}).Label("切换字幕")
 }

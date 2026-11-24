@@ -687,7 +687,7 @@ func (a *app) historyRow(c *ui.Context, i int, e historyEntry) {
 		mainArea.Children(func() {
 			posterBox := ui.Box(c).Size(60, 90).Radius(10).Clip().Background(p.cardPlaceholder)
 			posterBox.Children(func() {
-				applyPosterImage(c, posterBox, a.poster(e.Pic))
+				applyPosterImage(c, posterBox, a.poster(c, e.Pic))
 			})
 			ui.Column(c).Grow(1).MinWidth(0).Gap(5).Children(func() {
 				ui.Text(c, e.Name).Bold().SingleLine()

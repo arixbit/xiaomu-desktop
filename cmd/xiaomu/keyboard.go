@@ -52,6 +52,9 @@ func (a *app) handleKeyboard(c *ui.Context) {
 	if p == nil {
 		return
 	}
+	if a.playerExtra.rightHold.down && !c.KeyDown(ui.KeyRight) {
+		a.handleRightKeyHold(c, p, false, false)
+	}
 	if c.Shortcut(0, ui.KeySpace) {
 		if !c.ShortcutRepeated() {
 			togglePlayback(p)
@@ -81,6 +84,40 @@ func (a *app) handleKeyboard(c *ui.Context) {
 		a.togglePlayerFullScreen()
 		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 	}
+	if c.Shortcut(0, ui.KeyP) && !c.ShortcutRepeated() {
+		a.toggleAlwaysOnTop()
+		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
+	}
+	if c.Shortcut(0, ui.KeyT) && !c.ShortcutRepeated() {
+		a.toggleMiniMode()
+		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
+	}
+	if c.Shortcut(0, ui.KeyI) && !c.ShortcutRepeated() {
+		a.toggleStatsOverlay()
+		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
+	}
+	if c.Shortcut(0, ui.KeyS) && !c.ShortcutRepeated() {
+		a.capturePlayerScreenshot()
+		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
+	}
+	if c.Shortcut(0, ui.KeyR) && !c.ShortcutRepeated() {
+		if _, ok := p.(advancedMediaPlayer); ok {
+			a.rotateVideo(p)
+			a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
+		}
+	}
+	if !a.playingLive && c.Shortcut(0, ui.KeyL) && !c.ShortcutRepeated() {
+		a.toggleLoop(p)
+		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
+	}
+	if !a.playingLive && c.Shortcut(0, ui.KeyBracketLeft) {
+		a.adjustSubtitleDelay(p, -500*time.Millisecond)
+		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
+	}
+	if !a.playingLive && c.Shortcut(0, ui.KeyBracketRight) {
+		a.adjustSubtitleDelay(p, 500*time.Millisecond)
+		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
+	}
 	if c.Shortcut(0, ui.KeyUp) {
 		a.adjustVolume(p, 0.05)
 		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
@@ -91,23 +128,16 @@ func (a *app) handleKeyboard(c *ui.Context) {
 	if a.playingLive || p.Duration() <= 0 {
 		return
 	}
-	var step time.Duration
-	switch {
-	case c.Shortcut(0, ui.KeyLeft):
-		step = -10 * time.Second
-	case c.Shortcut(0, ui.KeyRight):
-		step = 10 * time.Second
-	default:
+	if c.Shortcut(0, ui.KeyLeft) {
+		p.Seek(min(max(p.Position()-10*time.Second, 0), p.Duration()))
+		a.syncNowPlayingState()
+		a.showPlayerOSD("快退 10 秒")
+		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 		return
 	}
-	p.Seek(min(max(p.Position()+step, 0), p.Duration()))
-	a.syncNowPlayingState()
-	if step > 0 {
-		a.showPlayerOSD("快进 10 秒")
-	} else {
-		a.showPlayerOSD("快退 10 秒")
+	if pressed := c.Shortcut(0, ui.KeyRight); pressed || a.playerExtra.rightHold.down {
+		a.handleRightKeyHold(c, p, pressed, pressed && c.ShortcutRepeated())
 	}
-	a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 }
 
 func (a *app) toggleMute(p mediaPlayer) {
