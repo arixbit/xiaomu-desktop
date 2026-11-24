@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -80,8 +81,9 @@ func (a *app) playerScreen(c *ui.Context) {
 	width, _ := c.Size()
 	compact := width < 900
 	overlayPanel := compact || a.fullScreen
-	// The panel holds a title's episodes and sources, or a live list's channels.
-	hasEpisodes := a.hasEpisodes() || (a.playingLive && len(a.live.channels) > 1)
+	// The panel holds a title's episodes and sources, a live list's channels,
+	// or sibling video files in the same local directory.
+	hasEpisodes := a.hasEpisodes() || (a.playingLive && len(a.live.channels) > 1) || a.hasLocalPlaylist()
 	ui.Themed(c, ui.DarkTheme()).Fill().Background(playerInk).Children(func() {
 		screen := ui.Box(c).Fill().Background(playerInk).ObserveInput(func(ev ui.InputEvent) {
 			a.playerOverlay.hideAt = ev.Time.Add(playerOverlayIdle)
@@ -178,6 +180,8 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 			panelLabel, closeLabel := "换源与选集", "收起选集"
 			if a.playingLive {
 				panelLabel, closeLabel = "频道列表", "收起频道"
+			} else if a.hasLocalPlaylist() {
+				panelLabel, closeLabel = "目录列表", "收起列表"
 			}
 			if a.panelOpen && (!compact || a.panelTouched) {
 				panelLabel = closeLabel
@@ -288,10 +292,14 @@ func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact 
 					a.livePlayerControls(c)
 				}
 				multiEp := a.hasMultipleEpisodes()
+				localMulti := a.hasLocalPlaylist()
 				source, episode, current := a.currentEpisode()
 				if multiEp && playerGlassButton(c, "上一集").
 					Disabled(!current || episode == 0).Clicked() {
 					a.playEpisode(a.title.detail.Sources[source].Name, a.title.detail.Sources[source].Episodes[episode-1])
+				} else if localMulti && playerGlassButton(c, "上一集").
+					Disabled(a.localPlaylistIdx <= 0).Clicked() {
+					a.playLocalPlaylistIndex(a.localPlaylistIdx - 1)
 				}
 				playLabel := "暂停"
 				if !p.Playing() {
@@ -308,6 +316,9 @@ func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact 
 				if multiEp && playerGlassButton(c, "下一集").
 					Disabled(!current || episode+1 >= len(a.title.detail.Sources[source].Episodes)).Clicked() {
 					a.playEpisode(a.title.detail.Sources[source].Name, a.title.detail.Sources[source].Episodes[episode+1])
+				} else if localMulti && playerGlassButton(c, "下一集").
+					Disabled(a.localPlaylistIdx+1 >= len(a.localPlaylist)).Clicked() {
+					a.playLocalPlaylistIndex(a.localPlaylistIdx + 1)
 				}
 				volLabel := "音量"
 				if a.muted {
@@ -393,6 +404,10 @@ func (a *app) playerPanel(c *ui.Context, key string) ui.Element {
 	panel.Children(func() {
 		if a.playingLive {
 			a.panelChannels(c)
+			return
+		}
+		if a.hasLocalPlaylist() {
+			a.panelLocalPlaylist(c)
 			return
 		}
 		if !a.hasEpisodes() { // the header left the player earlier in this frame
@@ -520,6 +535,27 @@ func (a *app) panelChannels(c *ui.Context) {
 	}).FillWidth().Grow(1).MinHeight(0).Gap(6)
 }
 
+// panelLocalPlaylist lists sibling videos in the same directory so a viewer
+// watching a local season can jump between files or toggle auto-next.
+func (a *app) panelLocalPlaylist(c *ui.Context) {
+	ui.Text(c, "同目录视频").FontSize(18).Bold()
+	ui.Scroll(c).FillWidth().Grow(1).Gap(6).Children(func() {
+		for i, path := range a.localPlaylist {
+			name := filepath.Base(path)
+			current := i == a.localPlaylistIdx
+			if panelButton(c.Key(fmt.Sprintf("panel-local-%d", i)), name, current).Label("播放 "+name).Clicked() && !current {
+				a.playLocalPlaylistIndex(i)
+			}
+		}
+	})
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "播完自动下一集").Grow(1)
+		if ui.Switch(c, &a.autoNext).Label("自动下一集").Changed() {
+			a.savePreferences()
+		}
+	})
+}
+
 // playerFailure offers the ways out of an episode that does not play.
 func (a *app) playerFailure(c *ui.Context, err error) {
 	heading := "这条线路播不了"
@@ -575,7 +611,26 @@ func (a *app) trackPlayback(c *ui.Context, p mediaPlayer) {
 }
 
 func (a *app) advanceEpisode(p mediaPlayer, now time.Time) {
-	if !a.hasEpisodes() || !a.autoNext || a.autoNextPending || a.autoNextCanceled || a.running(jobPlay) || a.panelChoice != nil && a.panelOpen || a.playFailure != nil || p.Err() != nil {
+	if !a.autoNext || a.autoNextPending || a.autoNextCanceled || a.running(jobPlay) || a.playFailure != nil || p.Err() != nil {
+		a.episodeEnd = playbackEnd{}
+		return
+	}
+	if a.playingFile {
+		if _, ok := a.nextLocalFile(); !ok {
+			a.episodeEnd = playbackEnd{}
+			return
+		}
+		ended := a.episodeEnd.check(now, p.Ready() && a.resumeAt == 0, p.Buffering(), p.Playing(), p.Position(), p.Duration())
+		if !p.Ended() && !ended {
+			return
+		}
+		a.episodeEnd = playbackEnd{}
+		a.recordLocalCompletion(p)
+		a.autoNextPending = true
+		a.playLocalPlaylistIndex(a.localPlaylistIdx + 1)
+		return
+	}
+	if !a.hasEpisodes() || a.panelChoice != nil && a.panelOpen {
 		a.episodeEnd = playbackEnd{}
 		return
 	}
@@ -637,7 +692,10 @@ func (a *app) leavePlayer() {
 	a.syncNowPlaying()
 	a.playingLive, a.playingDirect = false, false
 	a.playingFile = false
+	a.playingFilePath = ""
 	a.playingName = ""
+	a.localPlaylist = nil
+	a.localPlaylistIdx = -1
 	a.playerOverlay = playerOverlayState{}
 	a.playerPointer = playerPointerState{}
 	a.playbackWait = playbackWait{}

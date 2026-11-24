@@ -1,7 +1,10 @@
 /build/
 /dist/
 /.mygo/
+/.idea/
+/cmd/xiaomu/xiaomu
 mygo_windows_*.syso
 *.exe
+*.apk
 .DS_Store
 mygo-update.key

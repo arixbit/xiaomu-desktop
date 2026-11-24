@@ -90,6 +90,13 @@ func (a *app) currentNowPlaying() mygo.NowPlayingInfo {
 		if a.live.playingChannel > 0 {
 			commands |= mygo.MediaPrevious
 		}
+	} else if a.hasLocalPlaylist() {
+		if a.localPlaylistIdx+1 < len(a.localPlaylist) {
+			commands |= mygo.MediaNext
+		}
+		if a.localPlaylistIdx > 0 {
+			commands |= mygo.MediaPrevious
+		}
 	}
 	return mygo.NowPlayingInfo{
 		Title:    a.nowPlayingTitle(),
@@ -214,6 +221,12 @@ func (a *app) playNextMedia() {
 		}
 		return
 	}
+	if a.playingFile {
+		if _, ok := a.nextLocalFile(); ok {
+			a.playLocalPlaylistIndex(a.localPlaylistIdx + 1)
+		}
+		return
+	}
 	if line, episode, ok := a.nextEpisode(); ok {
 		a.playEpisode(line, episode)
 	}
@@ -223,6 +236,12 @@ func (a *app) playPreviousMedia() {
 	if a.playingLive {
 		if prev := a.live.playingChannel - 1; prev >= 0 {
 			a.playLiveChannel(prev, 0)
+		}
+		return
+	}
+	if a.playingFile {
+		if _, ok := a.prevLocalFile(); ok {
+			a.playLocalPlaylistIndex(a.localPlaylistIdx - 1)
 		}
 		return
 	}

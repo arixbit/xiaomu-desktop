@@ -88,10 +88,12 @@ func (a *app) markSiteFailed(key string) {
 	if a.siteHealth.failed == nil {
 		a.siteHealth.failed = map[string]time.Time{}
 	}
-	if _, already := a.siteHealth.failed[key]; already {
-		return
-	}
-	if len(a.siteHealth.failed) >= siteHealthStoreLimit {
+	now := time.Now()
+	if at, already := a.siteHealth.failed[key]; already {
+		if at.IsZero() || now.Sub(at) < siteHealthTTL {
+			return
+		}
+	} else if len(a.siteHealth.failed) >= siteHealthStoreLimit {
 		oldest, at := "", time.Time{}
 		for k, v := range a.siteHealth.failed {
 			if at.IsZero() || v.Before(at) {
@@ -100,7 +102,7 @@ func (a *app) markSiteFailed(key string) {
 		}
 		delete(a.siteHealth.failed, oldest)
 	}
-	a.siteHealth.failed[key] = time.Now()
+	a.siteHealth.failed[key] = now
 	a.scheduleSiteHealthSave()
 }
 

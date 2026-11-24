@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"github.com/arixbit/xiaomu-desktop/internal/iptv"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	mpvplayer "github.com/arixbit/mygo-player"
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
+	"github.com/arixbit/xiaomu-desktop/internal/iptv"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -221,5 +222,66 @@ func TestLiveChannelListsVirtualizeLargePlaylists(t *testing.T) {
 	}
 	if a.live.playingChannel != 1 {
 		t.Fatalf("clicking virtualized panel channel switched to %d", a.live.playingChannel)
+	}
+}
+
+func TestLiveSupportsRTSPAndRTMPWithMPVHeaders(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		url  string
+	}{
+		{"rtsp", "rtsp://example.com:554/live/ch1"},
+		{"rtmp", "rtmp://example.com/live/ch2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotTarget string
+			var gotOpts mpvplayer.OpenOptions
+			a := &app{
+				openMPV: func(target string, opts mpvplayer.OpenOptions) (mediaPlayer, error) {
+					gotTarget, gotOpts = target, opts
+					vp, err := ui.NewVideoPlayer(&stillVideo{})
+					if err != nil {
+						return nil, err
+					}
+					return wrapSystemPlayer(vp), nil
+				},
+			}
+			t.Cleanup(a.close)
+			a.live.channels = []iptv.Channel{{
+				Name: "协议频道",
+				Streams: []iptv.Stream{{
+					URL: tc.url,
+					Headers: map[string]string{
+						"User-Agent": "LivePlayer/1.0",
+						"Referer":    "https://example.com/live",
+						"X-Token":    "abc123",
+					},
+				}},
+			}}
+			a.playLiveChannel(0, 0)
+			if a.player == nil || !a.playingLive {
+				t.Fatalf("%s live channel did not start: player=%v live=%v status=%q", tc.name, a.player != nil, a.playingLive, a.status)
+			}
+			if gotTarget != tc.url || gotOpts.UserAgent != "LivePlayer/1.0" || gotOpts.Referrer != "https://example.com/live" || gotOpts.Headers["X-Token"] != "abc123" {
+				t.Fatalf("openMPV(%q, %+v) did not preserve stream target or headers", gotTarget, gotOpts)
+			}
+		})
+	}
+
+	// Unsupported protocols (e.g. udp://) are still rejected cleanly.
+	a := &app{
+		openMPV: func(string, mpvplayer.OpenOptions) (mediaPlayer, error) {
+			t.Fatal("unsupported udp:// stream should not invoke openMPV")
+			return nil, nil
+		},
+	}
+	t.Cleanup(a.close)
+	a.live.channels = []iptv.Channel{{
+		Name:    "组播频道",
+		Streams: []iptv.Stream{{URL: "udp://239.0.0.1:1234"}},
+	}}
+	a.playLiveChannel(0, 0)
+	if a.player != nil || a.status == "" {
+		t.Fatalf("unsupported protocol should fail with clear status: player=%v status=%q", a.player != nil, a.status)
 	}
 }

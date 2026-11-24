@@ -374,10 +374,13 @@ func (a *app) startLiveChannel(index, streamIndex int) {
 		stream := channel.Streams[streamIndex]
 		a.live.attempts++
 		a.live.playingChannel, a.live.playingStream = index, streamIndex
-		u, err := url.Parse(stream.URL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-			a.status = "该频道使用非 HTTP 直播协议，桌面端暂不支持直接播放"
-		} else {
+		u, err := url.Parse(strings.TrimSpace(stream.URL))
+		scheme := ""
+		if err == nil {
+			scheme = strings.ToLower(u.Scheme)
+		}
+		switch {
+		case err == nil && u.Host != "" && (scheme == "http" || scheme == "https"):
 			a.live.started = time.Now()
 			if a.playURL(stream.URL, stream.Headers) {
 				a.playingLive = true
@@ -386,6 +389,22 @@ func (a *app) startLiveChannel(index, streamIndex int) {
 				}
 				a.syncNowPlaying()
 				return
+			}
+		case err == nil && u.Host != "" && (scheme == "rtsp" || scheme == "rtmp") && (mpvBackendSupported() || a.openMPV != nil):
+			a.live.started = time.Now()
+			if a.playDirectMPVURL(stream.URL, stream.Headers) {
+				a.playingLive = true
+				if a.player != nil {
+					a.player.SetRate(1)
+				}
+				a.syncNowPlaying()
+				return
+			}
+		default:
+			if mpvBackendSupported() {
+				a.status = "该频道使用暂不支持的直播协议（当前支持 HTTP/HTTPS、RTSP、RTMP）"
+			} else {
+				a.status = "该频道使用非 HTTP 直播协议，桌面端暂不支持直接播放"
 			}
 		}
 		streamIndex = (streamIndex + 1) % len(channel.Streams)

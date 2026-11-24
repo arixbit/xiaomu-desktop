@@ -11,7 +11,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo"
 )
@@ -53,7 +55,7 @@ var subtitleFileExts = map[string]bool{
 
 func playableFileExtensions() []string {
 	if mpvBackendSupported() {
-		return []string{"mp4", "mkv", "mov", "m4v", "m3u8", "webm", "flv", "ts", "m2ts", "avi", "wmv", "mpg", "mpeg", "rmvb"}
+		return []string{"mp4", "mkv", "mov", "m4v", "m3u8", "webm", "flv", "ts", "m2ts", "avi", "wmv", "mpg", "mpeg", "rmvb", "3gp", "ogv"}
 	}
 	return []string{"mp4", "mov", "m4v", "m3u8"}
 }
@@ -185,6 +187,95 @@ func (a *app) playDirectURL(raw string, headers map[string]string) bool {
 	return true
 }
 
+// discoverSiblingVideos scans the opened video's directory for playable video
+// files and returns them in natural order along with the current file's index.
+func discoverSiblingVideos(videoPath string) (files []string, current int) {
+	clean := filepath.Clean(videoPath)
+	dir := filepath.Dir(clean)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, -1
+	}
+	var names []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") || !isPlayableFile(name) {
+			continue
+		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return nil, -1
+	}
+	sort.Slice(names, func(i, j int) bool {
+		return naturalLess(names[i], names[j])
+	})
+	files = make([]string, len(names))
+	current = -1
+	for i, name := range names {
+		full := filepath.Join(dir, name)
+		files[i] = full
+		if full == clean {
+			current = i
+		}
+	}
+	return files, current
+}
+
+// naturalLess orders filenames with embedded numbers numerically (e.g. EP2 < EP10).
+func naturalLess(a, b string) bool {
+	ia, ib := 0, 0
+	for ia < len(a) && ib < len(b) {
+		ca, cb := a[ia], b[ib]
+		da, db := ca >= '0' && ca <= '9', cb >= '0' && cb <= '9'
+		if da && db {
+			za, zb := ia, ib
+			for ia < len(a) && a[ia] == '0' {
+				ia++
+			}
+			for ib < len(b) && b[ib] == '0' {
+				ib++
+			}
+			sa, sb := ia, ib
+			for ia < len(a) && a[ia] >= '0' && a[ia] <= '9' {
+				ia++
+			}
+			for ib < len(b) && b[ib] >= '0' && b[ib] <= '9' {
+				ib++
+			}
+			la, lb := ia-sa, ib-sb
+			if la != lb {
+				return la < lb
+			}
+			if a[sa:ia] != b[sb:ib] {
+				return a[sa:ia] < b[sb:ib]
+			}
+			if (sa - za) != (sb - zb) {
+				return (sa - za) < (sb - zb)
+			}
+			continue
+		}
+		if ca >= 'A' && ca <= 'Z' {
+			ca += 'a' - 'A'
+		}
+		if cb >= 'A' && cb <= 'Z' {
+			cb += 'a' - 'A'
+		}
+		if ca != cb {
+			return ca < cb
+		}
+		ia++
+		ib++
+	}
+	if ia != len(a) || ib != len(b) {
+		return ia == len(a)
+	}
+	return a < b
+}
+
 // openLocalFile plays a video file from disk, without the HTTP proxy:
 // no headers need injecting for a local file. It is a no-op (and reports
 // false) for anything that is not a playable video extension.
@@ -193,6 +284,10 @@ func (a *app) openLocalFile(path string) bool {
 }
 
 func (a *app) openLocalFileWithSubtitles(path string, subtitles []string) bool {
+	return a.openLocalFileAt(path, subtitles, a.localResumePosition(path), false)
+}
+
+func (a *app) openLocalFileAt(path string, subtitles []string, at time.Duration, keepPanel bool) bool {
 	if !isPlayableFile(path) {
 		if mpvBackendSupported() {
 			a.status = "小幕不支持打开该文件格式，请选择常见视频文件（如 mp4、mkv、mov、ts、flv 等）"
@@ -201,33 +296,67 @@ func (a *app) openLocalFileWithSubtitles(path string, subtitles []string) bool {
 		}
 		return false
 	}
+	open, touched := a.panelOpen, a.panelTouched
 	a.prepareExternalPlayback()
 	a.closeCurrentPlayer()
+	clean := filepath.Clean(path)
 	if len(subtitles) == 0 {
-		subtitles = discoverSiblingSubtitles(path)
+		subtitles = discoverSiblingSubtitles(clean)
 	}
-	p, err := a.openMediaFile(path, subtitles)
+	p, err := a.openMediaFile(clean, subtitles)
 	if err != nil {
 		a.status = "打开文件失败：" + err.Error()
 		a.syncNowPlaying()
 		return false
 	}
 	a.adoptPlayer(p)
-	a.playingName = filepath.Base(path)
+	if keepPanel {
+		a.panelOpen, a.panelTouched = open, touched
+	}
+	a.playingName = filepath.Base(clean)
+	a.playingFilePath = clean
 	a.playingSource, a.playingEpisode = "", ""
 	a.playingLive, a.playingDirect = false, true
 	a.playingFile = true
+	a.localPlaylist, a.localPlaylistIdx = discoverSiblingVideos(clean)
+	a.resumeAt = at
 	a.status = "正在播放"
+	a.revealContinueWatchingKey(localHistoryKey(clean))
 	// The player view shows whenever a.player is set; the page stack is
 	// untouched, so leaving the player returns to where the user was.
 	if a.addRecent != nil {
 		// Best effort: the file plays even if the recent-documents
 		// record fails.
-		_ = a.addRecent(path)
+		_ = a.addRecent(clean)
 	}
 	a.syncNowPlaying()
 	a.startDanmaku()
 	return true
+}
+
+func (a *app) hasLocalPlaylist() bool {
+	return a.playingFile && len(a.localPlaylist) > 1 && a.localPlaylistIdx >= 0 && a.localPlaylistIdx < len(a.localPlaylist)
+}
+
+func (a *app) nextLocalFile() (string, bool) {
+	if !a.hasLocalPlaylist() || a.localPlaylistIdx+1 >= len(a.localPlaylist) {
+		return "", false
+	}
+	return a.localPlaylist[a.localPlaylistIdx+1], true
+}
+
+func (a *app) prevLocalFile() (string, bool) {
+	if !a.hasLocalPlaylist() || a.localPlaylistIdx <= 0 {
+		return "", false
+	}
+	return a.localPlaylist[a.localPlaylistIdx-1], true
+}
+
+func (a *app) playLocalPlaylistIndex(idx int) bool {
+	if !a.playingFile || idx < 0 || idx >= len(a.localPlaylist) {
+		return false
+	}
+	return a.openLocalFileAt(a.localPlaylist[idx], nil, 0, true)
 }
 
 // handleDroppedFiles opens the first playable video from dropped or selected

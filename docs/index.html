@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>小幕 Xiaomu — 一个入口，聚合你的所有片源</title>
-<meta name="description" content="小幕是一款 macOS 原生多源影视播放器：导入自己的配置，豆瓣热门、跨站搜索、继续观看、追剧都有了。免费开源，macOS 13+ 就能装。">
+<title>小幕 Xiaomu — 全格式原生多源影视播放器</title>
+<meta name="description" content="小幕是一款面向 macOS 与 Windows x64 的原生多源影视播放器：内置 libmpv 全格式硬解、弹幕、聚合网盘/AList、本地视频续播连播、IPTV 直播、豆瓣热播与跨站搜索。免费开源。">
 <link rel="icon" href="assets/icon.svg">
 <link rel="stylesheet" href="assets/style.css">
 </head>
@@ -19,7 +19,7 @@
     <nav>
       <a href="#features">功能</a>
       <a href="#screens">界面</a>
-      <a href="#install">安装</a>
+      <a href="#install">下载与安装</a>
       <a href="https://github.com/arixbit/xiaomu-desktop" target="_blank" rel="noopener">GitHub</a>
     </nav>
   </div>
@@ -32,12 +32,13 @@
       <img class="hero-icon" src="assets/icon.svg" alt="小幕图标" width="96" height="96">
       <h1>小幕 <span class="latin">Xiaomu</span></h1>
       <p class="tagline">一个入口，聚合你的所有片源。</p>
-      <p class="lede">macOS 原生桌面影视播放器。导入自己的 TVBox 配置或直播列表，豆瓣热门、跨站搜索、继续观看、追剧都有了。</p>
+      <p class="lede">原生桌面全格式多源影视播放器。导入自己的 TVBox 配置、网盘/AList、IPTV 直播，或直接打开本地视频，弹幕、多音轨字幕、续播与追剧一步到位。</p>
       <div class="cta">
-        <a class="btn btn-primary" href="https://github.com/arixbit/xiaomu-desktop/releases/latest">免费下载</a>
-        <a class="btn btn-ghost" href="https://github.com/arixbit/xiaomu-desktop">在 GitHub 上查看</a>
+        <a class="btn btn-primary" href="#install">免费下载（macOS / Windows）</a>
+        <a class="btn btn-ghost" href="https://github.com/arixbit/xiaomu-desktop/releases/latest">GitHub Releases</a>
+        <a class="btn btn-ghost" href="https://github.com/arixbit/xiaomu-desktop">查看源码</a>
       </div>
-      <p class="meta">macOS 13+ · Apple Silicon / Intel · 免费开源</p>
+      <p class="meta">macOS 13+（Apple Silicon / Intel）· Windows 10/11（x64）· 免费开源</p>
       <figure class="hero-shot">
         <img src="screenshots/home.webp" alt="小幕首页，展示继续观看、追剧和热播榜单" width="1440" height="998">
       </figure>
@@ -48,43 +49,43 @@
   <section id="features" class="section">
     <div class="wrap">
       <h2>功能</h2>
-      <p class="section-intro">看片要的东西都在这儿，不用在各个 App 之间来回切。</p>
+      <p class="section-intro">原生界面与全格式硬解播放结合，看片、追剧、刷弹幕与看本地剧集不用来回切换。</p>
       <div class="grid">
         <article class="card">
-          <h3>豆瓣热门推荐</h3>
-          <p>首页有热播电影、热播剧集和最近更新榜单。点海报直接在你自己的片库里搜，榜单只提供片名、海报和评分，不提供播放地址。</p>
+          <h3>全格式原生硬解</h3>
+          <p>集成 <code>mygo-player</code>（<code>libmpv</code>，零 cgo），原生直解 MKV、MP4、MOV、WebM、FLV、TS、AVI 等常见容器；macOS 走 VideoToolbox + Metal 零拷贝，Windows x64 走 D3D11VA，支持多音轨热切换与内外挂字幕。</p>
         </article>
         <article class="card">
-          <h3>跨站搜索</h3>
-          <p>按 ⌘K 输入片名，一次搜遍所有已导入的片源。同名影片合并成一项，并标出来源数。</p>
+          <h3>原生弹幕播放</h3>
+          <p>按 <code>D</code> 键一键开关弹幕，内置开源公共弹幕服务开箱即用，也支持手动搜剧选集；60fps 四向描边、进度条高能密度曲线、时间偏移与关键词/类型屏蔽全齐备。</p>
         </article>
         <article class="card">
-          <h3>继续观看</h3>
-          <p>首页最上方显示最近 6 部的海报、分集和进度，点一下就从上次的地方接着看。</p>
+          <h3>聚合网盘与 AList</h3>
+          <p>原生支持配置内的 AList、网盘站与直接粘贴分享链接，支持夸克、UC、阿里云盘与百度网盘官方网页登录，直接拉取原画直链并自动清理临时转存。</p>
         </article>
         <article class="card">
-          <h3>追剧</h3>
-          <p>收藏的剧显示观看进度、最新分集和新集标记。刷新发现新集时发一条系统通知，点通知直接打开那部剧。</p>
+          <h3>本地视频续播与连播</h3>
+          <p>不导入任何片源也能直接双击、拖入或 <code>⌘O</code> / <code>Ctrl+O</code> 播放本地视频；自动加载同名字幕、匹配弹幕、进入首页「继续观看」续播，并按自然序号同目录自动连播。</p>
         </article>
         <article class="card">
-          <h3>断点续播</h3>
-          <p>播放中切换来源或线路也不丢进度。解析失败或地址过期时可以重试，保留原来的分集和续播位置。</p>
+          <h3>豆瓣热播与跨站搜索</h3>
+          <p>首页提供热播电影、热播剧集和最近更新，点海报直接搜你自己的片库；按 <code>⌘K</code> / <code>Ctrl+K</code> 跨站搜索，同名影片合并显示来源数，失效站点自动过滤。</p>
         </article>
         <article class="card">
-          <h3>播放偏好记忆</h3>
-          <p>音量、点播倍速、自动下一集按本机保存，重启和切集后恢复。每部剧还能单独设置片头、片尾跳过秒数。</p>
+          <h3>继续观看与追剧提醒</h3>
+          <p>首页顶部展示最近 6 部的海报、分集和进度，点击直接断点续播；收藏剧集自动检查新集并发系统通知，每部剧可单独设定片头片尾跳过秒数。</p>
         </article>
         <article class="card">
-          <h3>片源测速</h3>
-          <p>来源按实际请求耗时排序，快的排在前面。片源页可以手动重新测速，播放页实时显示下载速度。</p>
+          <h3>IPTV 直播</h3>
+          <p>支持 M3U/M3U8、TXT 频道表与 TVBox 附带直播，虚拟化承载上千频道、分组筛选与备用线路自动切换；<code>libmpv</code> 后端支持 HLS、HTTP-FLV、RTSP 与 RTMP。</p>
         </article>
         <article class="card">
-          <h3>系统集成</h3>
-          <p>双击本地 mp4、mov、m4v、m3u8 文件用小幕打开；<code>xiaomu://</code> 链接可以直接播放或搜索；播放时控制中心显示片名和分集，媒体键能暂停、切集。</p>
+          <h3>系统原生集成</h3>
+          <p>支持全格式视频文件关联双击打开与 <code>xiaomu://</code> 链接播放或搜索；控制中心显示正在播放信息，支持媒体键暂停、切集与切频道，播放期间自动防熄屏。</p>
         </article>
         <article class="card">
-          <h3>应用内更新</h3>
-          <p>侧边栏“检查更新”就能升级，更新包经过签名校验，历史和追剧数据都会保留。</p>
+          <h3>应用内签名更新</h3>
+          <p>后台自动检查新版本，侧边栏一键查看更新说明并安装；更新包经 Ed25519 签名校验，历史记录、追剧与偏好设置完整保留。</p>
         </article>
       </div>
     </div>
@@ -101,6 +102,10 @@
           <figcaption>首页：继续观看、追剧和热播榜单</figcaption>
         </figure>
         <figure>
+          <img src="screenshots/danmaku.webp" alt="弹幕播放，展示滚动弹幕、进度条高能密度曲线与播放控制栏" width="1440" height="998" loading="lazy">
+          <figcaption>弹幕播放：滚动弹幕、高能密度曲线与原生玻璃控件</figcaption>
+        </figure>
+        <figure>
           <img src="screenshots/search.webp" alt="跨站搜索结果，影片卡片显示来源数量" width="1440" height="998" loading="lazy">
           <figcaption>跨站搜索：同名影片合并，标出来源数</figcaption>
         </figure>
@@ -110,11 +115,7 @@
         </figure>
         <figure>
           <img src="screenshots/player.webp" alt="播放器，右侧显示来源、线路和选集" width="1440" height="813" loading="lazy">
-          <figcaption>播放页：线路与选集面板</figcaption>
-        </figure>
-        <figure>
-          <img src="screenshots/player-wide.webp" alt="收起选集面板后的播放界面" width="1440" height="998" loading="lazy">
-          <figcaption>播放页：收起选集面板的大画面</figcaption>
+          <figcaption>播放页：换源、线路与选集面板</figcaption>
         </figure>
         <figure>
           <img src="screenshots/history.webp" alt="本机播放历史和续播进度" width="1440" height="998" loading="lazy">
@@ -127,26 +128,42 @@
   <!-- Install -->
   <section id="install" class="section">
     <div class="wrap">
-      <h2>安装</h2>
-      <p class="section-intro">三步装好。要求 macOS 13 及以上，Universal 安装包同时支持 Apple Silicon 和 Intel。</p>
-      <ol class="steps">
-        <li>
-          <h3>下载</h3>
-          <p>从 <a href="https://github.com/arixbit/xiaomu-desktop/releases/latest">GitHub Releases</a> 下载 <code>.dmg</code> 或 ZIP 安装包，附有 <code>SHA256SUMS</code> 校验文件。</p>
-        </li>
-        <li>
-          <h3>安装</h3>
-          <p>打开 <code>.dmg</code>，把 <code>Xiaomu.app</code> 拖到“应用程序”。用 ZIP 的话，解压后把 App 移过去就行。</p>
-        </li>
-        <li>
-          <h3>首次打开</h3>
-          <p>小幕使用本地签名，尚无 Apple Developer ID 签名及公证。首次打开如被系统拦截，请在确认下载来源后，到“系统设置 → 隐私与安全性”选择“仍要打开”。也可以在终端执行：</p>
-          <pre><code>xattr -d com.apple.quarantine /Applications/Xiaomu.app</code></pre>
-          <p>这会跳过 Gatekeeper 的首次检查，只在你信任下载来源时使用。</p>
-        </li>
-      </ol>
-      <p>Windows 10/11（x64）可在 <a href="https://github.com/arixbit/xiaomu-desktop/releases/latest">GitHub Releases</a> 下载 v0.9.5 安装包。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。</p>
-      <p class="start">装好后，在首页粘贴自己的配置地址并导入 → 搜索片名 → 打开影片选集播放。</p>
+      <h2>下载与安装</h2>
+      <p class="section-intro">选择你的桌面平台下载最新版，均附带 <code>SHA256SUMS</code> 校验文件与全格式 <code>libmpv</code> 播放组件。</p>
+      <div class="install-grid">
+        <div class="platform-card">
+          <h3>macOS（13+ Universal）</h3>
+          <p class="platform-meta">同时支持 Apple Silicon（M 系列）与 Intel，内置通用 <code>libmpv.dylib</code>。</p>
+          <p><a class="btn btn-primary btn-sm" href="https://github.com/arixbit/xiaomu-desktop/releases/latest">下载 macOS DMG / ZIP</a></p>
+          <ol class="steps">
+            <li>
+              <h4>安装应用</h4>
+              <p>打开 <code>.dmg</code> 将 <code>Xiaomu.app</code> 拖到“应用程序”，或解压 <code>-macos-universal.zip</code> 后移入“应用程序”。</p>
+            </li>
+            <li>
+              <h4>首次打开</h4>
+              <p>本版使用本地签名，尚无 Apple Developer ID 签名及公证。如被 Gatekeeper 拦截，确认下载来源后可在“系统设置 → 隐私与安全性”选择“仍要打开”，或在终端执行：</p>
+              <pre><code>xattr -d com.apple.quarantine /Applications/Xiaomu.app</code></pre>
+            </li>
+          </ol>
+        </div>
+        <div class="platform-card">
+          <h3>Windows（10 / 11 x64）</h3>
+          <p class="platform-meta">x64 原生安装器，内置 <code>mpv-2.dll</code>，安装到当前用户目录无需管理员权限。</p>
+          <p><a class="btn btn-primary btn-sm" href="https://github.com/arixbit/xiaomu-desktop/releases/latest">下载 Windows x64 安装包</a></p>
+          <ol class="steps">
+            <li>
+              <h4>运行安装器</h4>
+              <p>在 GitHub Releases 下载 <code>xiaomu-setup-*-amd64.exe</code>，双击按提示完成安装，自动注册视频文件关联与 <code>xiaomu://</code> 协议。</p>
+            </li>
+            <li>
+              <h4>首次打开</h4>
+              <p>安装包未做 Authenticode 签名，首次运行时 Windows SmartScreen 可能提示未知发布者，确认来自官方 Releases 后选择“仍要运行”即可。</p>
+            </li>
+          </ol>
+        </div>
+      </div>
+      <p class="start">装好后，可直接双击或拖入本地视频观看，或在首页粘贴自己的配置地址并导入 → 搜索片名 → 选集播放。</p>
     </div>
   </section>
 
@@ -157,7 +174,7 @@
       <ul class="notes">
         <li><strong>小幕不内置片源或默认配置。</strong>片源和直播列表由使用者自己提供，小幕只是播放器，不提供、不收录、不分发任何影视内容。</li>
         <li>开源协议为 <a href="https://github.com/arixbit/xiaomu-desktop/blob/main/LICENSE">CC BY-NC-SA 4.0</a>（署名—非商业性使用—相同方式共享）。</li>
-        <li>用 MyGo 构建，界面和播放器均为 macOS 原生。遇到问题或有建议，欢迎到 <a href="https://github.com/arixbit/xiaomu-desktop/issues">GitHub Issues</a> 反馈。</li>
+        <li>基于 <a href="https://github.com/egoist/mygo">MyGo</a> 与 <a href="https://github.com/arixbit/mygo-player">mygo-player</a>（<code>libmpv</code> LGPL-2.1+）构建，界面与播放均为原生桌面体验。遇到问题或有建议，欢迎到 <a href="https://github.com/arixbit/xiaomu-desktop/issues">GitHub Issues</a> 反馈。</li>
       </ul>
     </div>
   </section>

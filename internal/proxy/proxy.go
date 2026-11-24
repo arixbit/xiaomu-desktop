@@ -220,10 +220,35 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	copyMediaHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
+	flusher, canFlush := w.(http.Flusher)
+	liveStream := resp.Header.Get("Content-Length") == ""
 	if n > 0 {
 		_, _ = w.Write(buf[:n])
+		if liveStream && canFlush {
+			flusher.Flush()
+		}
+	}
+	if liveStream && canFlush {
+		copyFlushing(w, resp.Body, flusher)
+		return
 	}
 	_, _ = io.Copy(w, resp.Body)
+}
+
+func copyFlushing(dst io.Writer, src io.Reader, flusher http.Flusher) {
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return
+			}
+			flusher.Flush()
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 func (p *Proxy) writePlaylist(w http.ResponseWriter, resp *http.Response, playlistURL string, ctx context.Context) {

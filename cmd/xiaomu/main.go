@@ -114,7 +114,10 @@ type app struct {
 	// playingFile is set for a local file opened from the file manager; playingName
 	// is that file's name, shown in the header and Now Playing.
 	playingFile       bool
+	playingFilePath   string
 	playingName       string
+	localPlaylist     []string
+	localPlaylistIdx  int
 	playingSource     string
 	playingEpisode    string
 	playingSourceIdx  int
@@ -211,7 +214,10 @@ func (a *app) adoptPlayer(p mediaPlayer) {
 	}
 	a.episodeEnd = playbackEnd{}
 	a.playingFile = false
+	a.playingFilePath = ""
 	a.playingName = ""
+	a.localPlaylist = nil
+	a.localPlaylistIdx = -1
 	a.playingSource, a.playingEpisode = "", ""
 	a.playingStreams, a.playingStreamIdx = nil, 0
 }
@@ -300,6 +306,63 @@ func (a *app) openMediaFile(path string, subtitles []string) (mediaPlayer, error
 		return a.openMPV(path, opts)
 	}
 	return openMediaWithFallback(path, opts, video.Open)
+}
+
+func mpvOpenOptionsForHeaders(headers map[string]string) mpvplayer.OpenOptions {
+	var opts mpvplayer.OpenOptions
+	if len(headers) == 0 {
+		return opts
+	}
+	extra := make(map[string]string, len(headers))
+	for k, v := range headers {
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if k == "" || v == "" {
+			continue
+		}
+		switch {
+		case strings.EqualFold(k, "User-Agent"):
+			opts.UserAgent = v
+		case strings.EqualFold(k, "Referer"), strings.EqualFold(k, "Referrer"):
+			opts.Referrer = v
+		default:
+			extra[k] = v
+		}
+	}
+	if len(extra) > 0 {
+		opts.Headers = extra
+	}
+	return opts
+}
+
+// playDirectMPVURL opens non-HTTP streaming protocols (such as RTSP/RTMP)
+// directly with mygo-player (libmpv) and passes per-stream headers natively.
+func (a *app) playDirectMPVURL(raw string, headers map[string]string) bool {
+	raw = strings.TrimSpace(raw)
+	if a.proxy != nil && a.proxySession != "" {
+		a.proxy.RemoveSession(a.proxySession)
+		a.proxySession = ""
+	}
+	a.closeCurrentPlayer()
+	opts := mpvOpenOptionsForHeaders(headers)
+	var (
+		player mediaPlayer
+		err    error
+	)
+	if a.openMPV != nil {
+		player, err = a.openMPV(raw, opts)
+	} else {
+		player, err = openMPVPlayer(raw, opts)
+	}
+	if err != nil {
+		a.status = "无法打开: " + err.Error()
+		a.syncNowPlaying()
+		return false
+	}
+	a.adoptPlayer(player)
+	a.playingLive, a.playingDirect = false, false
+	a.status = "正在播放"
+	return true
 }
 
 // playURL opens HTTP media through the proxy. The caller publishes Now
