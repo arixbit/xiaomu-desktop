@@ -434,6 +434,16 @@ func entryKey(entry library.Entry) string {
 	return entry.Key()
 }
 
+// localFileCheckTTL bounds how often a local history entry stats its file.
+// Rows and continue-watching cards ask every frame, and a file on a
+// disconnected drive or network volume can make each stat slow.
+const localFileCheckTTL = 5 * time.Second
+
+type localFileCheck struct {
+	ok bool
+	at time.Time
+}
+
 // historyAvailable reports whether the entry's source or local file is still available.
 func (a *app) historyAvailable(e historyEntry) bool {
 	if e.isNAS() {
@@ -443,8 +453,17 @@ func (a *app) historyAvailable(e historyEntry) bool {
 		if e.VideoID == "" {
 			return false
 		}
+		now := time.Now()
+		if c, ok := a.localFileChecks[e.VideoID]; ok && now.Sub(c.at) < localFileCheckTTL {
+			return c.ok
+		}
 		info, err := os.Stat(e.VideoID)
-		return err == nil && !info.IsDir()
+		ok := err == nil && !info.IsDir()
+		if a.localFileChecks == nil {
+			a.localFileChecks = map[string]localFileCheck{}
+		}
+		a.localFileChecks[e.VideoID] = localFileCheck{ok: ok, at: now}
+		return ok
 	}
 	return a.configAvailable(e.ConfigURL)
 }
@@ -500,6 +519,8 @@ func (a *app) resume(e historyEntry) {
 		return
 	}
 	if e.isLocal() {
+		// A click checks the disk now, not the row's cached answer.
+		delete(a.localFileChecks, e.VideoID)
 		if !a.historyAvailable(e) {
 			a.status = "本地文件不存在或已移动"
 			return
