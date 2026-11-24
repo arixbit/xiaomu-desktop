@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 	"math"
+	"path/filepath"
 	"time"
 
-	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 )
@@ -225,26 +225,45 @@ func (a *app) skipUndoPill(c *ui.Context, p mediaPlayer) {
 	})
 }
 
-// upNextTarget returns the next episode and remaining seconds until auto-next
-// when the viewer is actively playing into the final seconds of an episode.
-func (a *app) upNextTarget(p mediaPlayer) (lineName string, next catalog.Episode, remaining time.Duration, ok bool) {
-	if !a.hasEpisodes() || !a.autoNext || a.autoNextPending || a.autoNextCanceled ||
+// upNextTarget returns the next episode (or local sibling file) and remaining
+// seconds until auto-next when the viewer is actively playing into the final
+// seconds of a video.
+func (a *app) upNextTarget(p mediaPlayer) (nextName string, playNext func(), remaining time.Duration, ok bool) {
+	if !a.autoNext || a.autoNextPending || a.autoNextCanceled ||
 		a.running(jobPlay) || a.playFailure != nil || a.resumeAt != 0 ||
-		(a.panelChoice != nil && a.panelOpen) ||
 		p == nil || !p.Ready() || !p.Playing() || p.Buffering() || p.Err() != nil {
-		return "", catalog.Episode{}, 0, false
+		return "", nil, 0, false
 	}
 	dur := p.Duration()
 	if dur <= 15*time.Second {
-		return "", catalog.Episode{}, 0, false
+		return "", nil, 0, false
+	}
+	if a.playingFile {
+		nextPath, hasNext := a.nextLocalFile()
+		if !hasNext {
+			return "", nil, 0, false
+		}
+		rem := dur - p.Position()
+		if rem <= 0 || rem > upNextWindow {
+			return "", nil, 0, false
+		}
+		nextIdx := a.localPlaylistIdx + 1
+		return filepath.Base(nextPath), func() {
+			a.recordLocalCompletion(p)
+			a.autoNextPending = true
+			a.playLocalPlaylistIndex(nextIdx)
+		}, rem, true
+	}
+	if !a.hasEpisodes() || (a.panelChoice != nil && a.panelOpen) {
+		return "", nil, 0, false
 	}
 	src, ep, found := a.currentEpisode()
 	if !found {
-		return "", catalog.Episode{}, 0, false
+		return "", nil, 0, false
 	}
 	episodes := a.title.detail.Sources[src].Episodes
 	if ep+1 >= len(episodes) {
-		return "", catalog.Episode{}, 0, false
+		return "", nil, 0, false
 	}
 	endTarget := dur
 	if rule := a.seriesSkips.get(a.title.name); rule.fits(dur) && rule.Ending > 0 {
@@ -252,13 +271,18 @@ func (a *app) upNextTarget(p mediaPlayer) (lineName string, next catalog.Episode
 	}
 	rem := endTarget - p.Position()
 	if rem <= 0 || rem > upNextWindow {
-		return "", catalog.Episode{}, 0, false
+		return "", nil, 0, false
 	}
-	return a.title.detail.Sources[src].Name, episodes[ep+1], rem, true
+	lineName, nextEp := a.title.detail.Sources[src].Name, episodes[ep+1]
+	return nextEp.Name, func() {
+		a.recordEpisodeCompletion(p)
+		a.autoNextPending = true
+		a.playEpisode(lineName, nextEp)
+	}, rem, true
 }
 
 func (a *app) upNextPill(c *ui.Context, p mediaPlayer, showControls bool) {
-	lineName, next, rem, ok := a.upNextTarget(p)
+	nextName, playNext, rem, ok := a.upNextTarget(p)
 	if !ok {
 		return
 	}
@@ -271,14 +295,12 @@ func (a *app) upNextPill(c *ui.Context, p mediaPlayer, showControls bool) {
 	ui.Row(c.Key("up-next-pill")).Absolute().Right(24).Bottom(bottom).Padding(10, 14).Gap(10).Radius(18).
 		Material(glass.Glass{Style: glass.Regular, Tint: ui.RGBA(12, 16, 28, 0.84)}).
 		TextColor(playerText).AlignItems(ui.Center).Transition(transToast).Children(func() {
-		ui.Text(c, fmt.Sprintf("%d 秒后播放 %s", secs, next.Name)).FontSize(13).SingleLine().ContentTransition(ctNumeric)
+		ui.Text(c, fmt.Sprintf("%d 秒后播放 %s", secs, nextName)).FontSize(13).SingleLine().ContentTransition(ctNumeric)
 		playBtn := ui.Button(c, "立即播放").Radius(12).Padding(5, 11).
 			Material(glass.Glass{Tint: ui.RGBA(255, 90, 64, 0.92), Interactive: true}).TextColor(ui.Hex("#1a0f0c"))
 		applyPressPose(playBtn)
 		if playBtn.Clicked() {
-			a.recordEpisodeCompletion(p)
-			a.autoNextPending = true
-			a.playEpisode(lineName, next)
+			playNext()
 		}
 		cancelBtn := ui.Button(c, "暂不连播").Label("取消自动连播").Radius(12).Padding(5, 10).
 			Material(glass.Glass{Style: glass.Clear, Interactive: true}).TextColor(playerText)

@@ -44,11 +44,13 @@ type historyEntry struct {
 }
 
 // historyKindNAS marks an entry recorded from a NAS file; historyKindSite
-// marks one recorded from a library site. Kind is the only type check:
-// a site whose key happens to be "nas" must never be mistaken for one.
+// marks one recorded from a library site; historyKindLocal marks one recorded
+// from a local file on disk. Kind is the only type check: a site whose key
+// happens to be "nas" or "local" must never be mistaken for one.
 const (
-	historyKindNAS  = "nas"
-	historyKindSite = "site"
+	historyKindNAS   = "nas"
+	historyKindSite  = "site"
+	historyKindLocal = "local"
 )
 
 // isNAS reports whether the entry is a legacy NAS record from an older release.
@@ -58,15 +60,40 @@ func (e historyEntry) isNAS() bool {
 	switch e.Kind {
 	case historyKindNAS:
 		return true
-	case historyKindSite:
+	case historyKindSite, historyKindLocal:
 		return false
 	default:
 		return strings.HasPrefix(e.ConfigURL, "smb://")
 	}
 }
 
-// dedupKey identifies a site title by normalized name.
+func (e historyEntry) isLocal() bool {
+	return e.Kind == historyKindLocal
+}
+
+func localHistoryKey(path string) string {
+	clean := filepath.Clean(path)
+	if clean == "" || clean == "." {
+		return ""
+	}
+	return "local:" + clean
+}
+
+func localHistoryOrigin(path string) string {
+	dir := filepath.Base(filepath.Dir(filepath.Clean(path)))
+	if dir == "" || dir == "." || dir == string(filepath.Separator) {
+		return "本地视频"
+	}
+	return "本地 · " + dir
+}
+
+// dedupKey identifies a site title by normalized name, or a local file by its
+// cleaned path so distinct local files never collide with each other or with
+// online titles.
 func (e historyEntry) dedupKey() string {
+	if e.isLocal() && e.VideoID != "" {
+		return localHistoryKey(e.VideoID)
+	}
 	return titleKey(e.Name)
 }
 
@@ -76,6 +103,16 @@ func (e historyEntry) finished() bool {
 
 // progress is the row's second line: the episode and how far it was watched.
 func (e historyEntry) progress() string {
+	if e.isLocal() && e.Episode == "" {
+		if e.finished() {
+			return "已看完"
+		}
+		at := playerClock(time.Duration(e.Position * float64(time.Second)))
+		if e.Duration <= 0 {
+			return "看到 " + at
+		}
+		return fmt.Sprintf("看到 %s / %s", at, playerClock(time.Duration(e.Duration*float64(time.Second))))
+	}
 	episode := e.Episode
 	if episode == "" {
 		episode = "正片"
@@ -126,7 +163,7 @@ func (h *historyStore) findByTitle(name string) (historyEntry, bool) {
 	}
 	if idx, ok := h.byTitle[key]; ok && idx < len(h.entries) {
 		e := h.entries[idx]
-		if !e.isNAS() && titleKey(e.Name) == key {
+		if !e.isNAS() && !e.isLocal() && titleKey(e.Name) == key {
 			return e, true
 		}
 		h.rebuildTitleIndex()
@@ -137,10 +174,23 @@ func (h *historyStore) findByTitle(name string) (historyEntry, bool) {
 	return historyEntry{}, false
 }
 
+func (h *historyStore) findLocalByPath(path string) (historyEntry, bool) {
+	key := localHistoryKey(path)
+	if key == "" {
+		return historyEntry{}, false
+	}
+	for _, e := range h.entries {
+		if e.isLocal() && e.dedupKey() == key {
+			return e, true
+		}
+	}
+	return historyEntry{}, false
+}
+
 func (h *historyStore) rebuildTitleIndex() {
 	idx := make(map[string]int, len(h.entries))
 	for i, e := range h.entries {
-		if e.isNAS() {
+		if e.isNAS() || e.isLocal() {
 			continue
 		}
 		k := titleKey(e.Name)
@@ -295,36 +345,79 @@ func (a *app) flushHistory() {
 	a.history.saved = a.history.noted
 }
 
-// recordHistory notes once a second where the episode on show is, and writes
-// it to disk now and then; leaving the player writes it too.
+func (a *app) localResumePosition(path string) time.Duration {
+	e, ok := a.history.findLocalByPath(path)
+	if !ok || e.finished() || e.Position <= 0 {
+		return 0
+	}
+	return time.Duration(e.Position * float64(time.Second))
+}
+
+// recordHistory notes once a second where the episode or local file on show
+// is, and writes it to disk now and then; leaving the player writes it too.
 func (a *app) recordHistory(p mediaPlayer, now time.Time) {
-	t := a.title
-	if !a.hasEpisodes() || a.playingEpisode == "" || now.Sub(a.history.noted) < time.Second {
+	if now.Sub(a.history.noted) < time.Second {
 		return
 	}
 	position, duration := p.Position().Seconds(), p.Duration().Seconds()
 	if p.Ended() && duration > 0 {
 		position = duration
 	}
-	a.history.noted = now
-	a.history.note(historyEntry{
-		Name:      t.name,
-		Pic:       t.detail.Pic,
-		ConfigURL: configURL(t.item.Entry),
-		EntryKey:  entryKey(t.item.Entry),
-		SiteKey:   t.item.Entry.Site.Key,
-		Kind:      historyKindSite,
-		Origin:    t.item.Entry.Label(),
-		VideoID:   string(t.item.Video.ID),
-		Line:      a.playingSource,
-		Episode:   a.playingEpisode,
-		Position:  position,
-		Duration:  duration,
-		Updated:   now,
-	})
+	switch {
+	case a.hasEpisodes() && a.playingEpisode != "":
+		t := a.title
+		a.history.noted = now
+		a.history.note(historyEntry{
+			Name:      t.name,
+			Pic:       t.detail.Pic,
+			ConfigURL: configURL(t.item.Entry),
+			EntryKey:  entryKey(t.item.Entry),
+			SiteKey:   t.item.Entry.Site.Key,
+			Kind:      historyKindSite,
+			Origin:    t.item.Entry.Label(),
+			VideoID:   string(t.item.Video.ID),
+			Line:      a.playingSource,
+			Episode:   a.playingEpisode,
+			Position:  position,
+			Duration:  duration,
+			Updated:   now,
+		})
+	case a.playingFile && a.playingFilePath != "":
+		a.history.noted = now
+		a.history.note(historyEntry{
+			Name:     a.playingName,
+			Kind:     historyKindLocal,
+			Origin:   localHistoryOrigin(a.playingFilePath),
+			VideoID:  a.playingFilePath,
+			Position: position,
+			Duration: duration,
+			Updated:  now,
+		})
+	default:
+		return
+	}
 	if now.Sub(a.history.saved) >= historySaveGap {
 		a.flushHistory()
 	}
+}
+
+func (a *app) recordLocalCompletion(p mediaPlayer) {
+	if !a.playingFile || a.playingFilePath == "" || p == nil || p.Duration() <= 0 {
+		return
+	}
+	now := time.Now()
+	dur := p.Duration().Seconds()
+	a.history.note(historyEntry{
+		Name:     a.playingName,
+		Kind:     historyKindLocal,
+		Origin:   localHistoryOrigin(a.playingFilePath),
+		VideoID:  a.playingFilePath,
+		Position: dur,
+		Duration: dur,
+		Updated:  now,
+	})
+	a.history.noted = now
+	a.flushHistory()
 }
 
 func configURL(entry library.Entry) string {
@@ -341,10 +434,17 @@ func entryKey(entry library.Entry) string {
 	return entry.Key()
 }
 
-// historyAvailable reports whether the entry's source is still imported.
+// historyAvailable reports whether the entry's source or local file is still available.
 func (a *app) historyAvailable(e historyEntry) bool {
 	if e.isNAS() {
 		return false
+	}
+	if e.isLocal() {
+		if e.VideoID == "" {
+			return false
+		}
+		info, err := os.Stat(e.VideoID)
+		return err == nil && !info.IsDir()
 	}
 	return a.configAvailable(e.ConfigURL)
 }
@@ -397,6 +497,23 @@ func resumePoint(detail catalog.Detail, e historyEntry) (line int, episode catal
 // resume plays an entry from where it stopped, straight into the player.
 func (a *app) resume(e historyEntry) {
 	if e.isNAS() {
+		return
+	}
+	if e.isLocal() {
+		if !a.historyAvailable(e) {
+			a.status = "本地文件不存在或已移动"
+			return
+		}
+		if e.finished() {
+			if files, idx := discoverSiblingVideos(e.VideoID); idx >= 0 && idx+1 < len(files) {
+				a.openLocalFileAt(files[idx+1], nil, 0, false)
+				return
+			}
+			a.openLocalFileAt(e.VideoID, nil, 0, false)
+			return
+		}
+		at := time.Duration(e.Position * float64(time.Second))
+		a.openLocalFileAt(e.VideoID, nil, at, false)
 		return
 	}
 	preferred := a.sourceMemory.entries[titleKey(e.Name)].Preferred
@@ -580,7 +697,11 @@ func (a *app) historyRow(c *ui.Context, i int, e historyEntry) {
 				}
 				origin := e.Origin
 				if !available {
-					origin = "片源已移除"
+					if e.isLocal() {
+						origin = "文件已移除"
+					} else {
+						origin = "片源已移除"
+					}
 				}
 				ui.Text(c, origin).FontSize(12).TextColor(p.textMuted).SingleLine()
 			})
@@ -591,7 +712,7 @@ func (a *app) historyRow(c *ui.Context, i int, e historyEntry) {
 		if primaryButton(c, "继续播放").Label("继续播放 " + e.Name).Disabled(!available).Clicked() {
 			a.resume(e)
 		}
-		if !available && a.library.root != nil {
+		if !available && !e.isLocal() && a.library.root != nil {
 			if glassButton(c, "搜片库").Label("搜片库 " + e.Name).Clicked() {
 				a.openTitle(e.Name, e.Pic, nil)
 			}

@@ -3,6 +3,8 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -168,4 +170,111 @@ func TestNativeMPVPlaysMKVWithTracksAndProxiedStream(t *testing.T) {
 		t.Fatalf("proxied HEVC MKV did not advance: ready=%v size=%dx%d pos=%s bytes=%d err=%v",
 			p.Ready(), w, h, p.Position(), a.proxy.BytesServed(), p.Err())
 	})
+}
+
+// TestNativeMPVPlaysHTTPFLVLive verifies real HTTP-FLV live streaming through
+// IPTV M3U import, custom request headers, the chunked loopback proxy, and
+// mygo-player (libmpv) decoding on macOS.
+func TestNativeMPVPlaysHTTPFLVLive(t *testing.T) {
+	if os.Getenv("XIAOMU_NATIVE_MPV_TEST") == "" {
+		t.Skip("set XIAOMU_NATIVE_MPV_TEST=1 to run real macOS mygo-player HTTP-FLV verification")
+	}
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+
+	flvPath := filepath.Join(t.TempDir(), "live.flv")
+	cmd := exec.Command(ffmpegPath,
+		"-y", "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24:duration=4",
+		"-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=4",
+		"-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "24",
+		"-c:a", "aac", "-b:a", "96k",
+		"-f", "flv",
+		flvPath,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("ffmpeg flv fixture failed: %v\n%s", err, string(out))
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/channels.m3u":
+			fmt.Fprint(w, "#EXTM3U\n#EXTINF:-1 group-title=\"FLV测试\",HTTP-FLV 频道\n#EXTVLCOPT:http-user-agent=FLVFixtureUA\n#EXTVLCOPT:http-referrer=https://example.com/flv\n./live.flv\n")
+		case "/live.flv":
+			if r.Header.Get("User-Agent") != "FLVFixtureUA" || r.Header.Get("Referer") != "https://example.com/flv" {
+				t.Errorf("HTTP-FLV proxy lost headers: %v", r.Header)
+				http.Error(w, "missing headers", http.StatusForbidden)
+				return
+			}
+			f, err := os.Open(flvPath)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			defer f.Close()
+			// Stream chunked without Content-Length to mirror a live HTTP-FLV server.
+			w.Header().Set("Content-Type", "video/x-flv")
+			w.WriteHeader(http.StatusOK)
+			flusher, _ := w.(http.Flusher)
+			buf := make([]byte, 16*1024)
+			for {
+				n, readErr := f.Read(buf)
+				if n > 0 {
+					if _, werr := w.Write(buf[:n]); werr != nil {
+						return
+					}
+					if flusher != nil {
+						flusher.Flush()
+					}
+				}
+				if readErr == io.EOF {
+					return
+				}
+				if readErr != nil {
+					return
+				}
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	a := &app{preferences: playerPreferences{Rate: 1, Volume: 0}}
+	defer a.close()
+	a.loadConfig(srv.URL + "/channels.m3u")
+	if len(a.live.channels) != 1 {
+		t.Fatalf("HTTP-FLV M3U did not load channel: status=%q", a.status)
+	}
+	a.playLiveChannel(0, 0)
+	if a.player == nil || !a.playingLive {
+		t.Fatalf("HTTP-FLV live channel did not open: status=%q", a.status)
+	}
+	p := a.player
+	p.SetMuted(true)
+	mpvP, ok := p.(*mpvMediaPlayer)
+	if !ok {
+		t.Fatalf("expected *mpvMediaPlayer on darwin, got %T", p)
+	}
+
+	tt := ui.NewTester(func(c *ui.Context) { p.View(c).Size(320, 180) }, 320, 180)
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		tt.Frame()
+		if err := p.Err(); err != nil {
+			t.Fatalf("mpv HTTP-FLV error: %v", err)
+		}
+		w, h := p.Size()
+		if p.Ready() && w == 320 && h == 180 && p.Position() >= 500*time.Millisecond && mpvP.p.FramesRendered() > 0 && a.proxy.BytesServed() > 0 {
+			t.Logf("mygo-player decoded live HTTP-FLV %dx%d pos=%s bytes=%d frames=%d hwdec=%q",
+				w, h, p.Position(), a.proxy.BytesServed(), mpvP.p.FramesRendered(), mpvP.CurrentHWDec())
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	w, h := p.Size()
+	t.Fatalf("HTTP-FLV live playback did not progress: ready=%v size=%dx%d pos=%s bytes=%d frames=%d err=%v",
+		p.Ready(), w, h, p.Position(), a.proxy.BytesServed(), mpvP.p.FramesRendered(), p.Err())
 }

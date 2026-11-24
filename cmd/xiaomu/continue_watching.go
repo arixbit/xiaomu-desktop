@@ -9,7 +9,7 @@ const continueWatchingLimit = 6
 func continueWatchingEntries(history []historyEntry) []historyEntry {
 	entries := make([]historyEntry, 0, continueWatchingLimit)
 	for _, e := range history {
-		if e.isNAS() || e.HomeHidden || e.finished() || titleKey(e.Name) == "" {
+		if e.isNAS() || e.HomeHidden || e.finished() || e.dedupKey() == "" {
 			continue
 		}
 		entries = append(entries, e)
@@ -21,6 +21,9 @@ func continueWatchingEntries(history []historyEntry) []historyEntry {
 }
 
 func (a *app) setContinueWatchingHidden(key string, hidden bool) {
+	if key == "" {
+		return
+	}
 	for i := range a.history.entries {
 		entry := &a.history.entries[i]
 		if entry.dedupKey() == key && entry.HomeHidden != hidden {
@@ -35,7 +38,11 @@ func (a *app) setContinueWatchingHidden(key string, hidden bool) {
 // Starting this title again restores its home shortcut. Periodic history
 // recording alone does not undo a dismissal.
 func (a *app) revealContinueWatching(name string) {
-	a.setContinueWatchingHidden(titleKey(name), false)
+	a.revealContinueWatchingKey(titleKey(name))
+}
+
+func (a *app) revealContinueWatchingKey(key string) {
+	a.setContinueWatchingHidden(key, false)
 }
 
 func (a *app) continueWatchingStrip(c *ui.Context) {
@@ -73,7 +80,11 @@ func (a *app) continueWatchingStrip(c *ui.Context) {
 								ui.Progress(c, progress).FillWidth().Label("观看进度 " + e.Name)
 							}
 							if !available {
-								ui.Text(c, "片源已移除").FontSize(11).TextColor(p.textMuted)
+								missingLabel := "片源已移除"
+								if e.isLocal() {
+									missingLabel = "文件已移除"
+								}
+								ui.Text(c, missingLabel).FontSize(11).TextColor(p.textMuted)
 							}
 						})
 						if info.Clicked() {

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/config"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
@@ -128,5 +129,54 @@ func TestSourcesPageFiltersInvalidSitesAndAllowsRecovery(t *testing.T) {
 	}
 	if !tt.HasText("故障站点A") {
 		t.Fatalf("recovered site did not reappear on sources page: %v", tt.Texts())
+	}
+}
+
+func TestSiteHealthTTLReMarksAfterCooldown(t *testing.T) {
+	healthPath := filepath.Join(t.TempDir(), "source-health.json")
+	a := &app{}
+	defer a.close()
+	a.siteHealth.path = healthPath
+
+	key := "https://example.com/line.json\x00flaky"
+	expired := time.Now().Add(-siteHealthTTL - time.Minute)
+	a.siteHealth.failed = map[string]time.Time{key: expired}
+
+	if a.isSiteFailed(key) {
+		t.Fatal("expired site should have cooled down and recovered")
+	}
+	if snap := a.siteHealth.snapshotKeys(); snap[key] {
+		t.Fatalf("snapshotKeys included expired site: %+v", snap)
+	}
+
+	// Failing again after TTL cooldown must refresh the timestamp and re-enable filtering.
+	a.markSiteFailed(key)
+
+	if !a.isSiteFailed(key) {
+		t.Fatal("site that failed again after TTL cooldown was not re-marked failed")
+	}
+	refreshed := a.siteHealth.failed[key]
+	if !refreshed.After(expired) || time.Since(refreshed) >= time.Minute {
+		t.Fatalf("timestamp was not refreshed: old=%v new=%v", expired, refreshed)
+	}
+	if snap := a.siteHealth.snapshotKeys(); !snap[key] {
+		t.Fatalf("snapshotKeys omitted re-failed site: %+v", snap)
+	}
+	saved, err := readSiteHealth(healthPath)
+	if err != nil || !saved[key].After(expired) {
+		t.Fatalf("refreshed failure was not persisted: saved=%+v err=%v", saved, err)
+	}
+
+	// Re-marking an expired entry at capacity must overwrite in place without evicting others.
+	for i := len(a.siteHealth.failed); i < siteHealthStoreLimit; i++ {
+		a.siteHealth.failed[fmt.Sprintf("site-%d", i)] = time.Now()
+	}
+	a.siteHealth.failed[key] = expired
+	a.markSiteFailed(key)
+	if len(a.siteHealth.failed) != siteHealthStoreLimit {
+		t.Fatalf("len(failed) = %d, want %d", len(a.siteHealth.failed), siteHealthStoreLimit)
+	}
+	if !a.isSiteFailed(key) {
+		t.Fatal("expired key at capacity was not refreshed")
 	}
 }

@@ -223,7 +223,34 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if n > 0 {
 		_, _ = w.Write(buf[:n])
 	}
+	// w is a countingWriter; ResponseController reaches the server's
+	// flusher through Unwrap. A response without a length is a live
+	// stream (chunked HTTP-FLV and the like) and must reach the player
+	// chunk by chunk, not sit in the server's write buffer.
+	rc := http.NewResponseController(w)
+	if resp.Header.Get("Content-Length") == "" && rc.Flush() == nil {
+		copyFlushing(w, resp.Body, rc)
+		return
+	}
 	_, _ = io.Copy(w, resp.Body)
+}
+
+func copyFlushing(dst io.Writer, src io.Reader, rc *http.ResponseController) {
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return
+			}
+			if rc.Flush() != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 func (p *Proxy) writePlaylist(w http.ResponseWriter, resp *http.Response, playlistURL string, ctx context.Context) {
