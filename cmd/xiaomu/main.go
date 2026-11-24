@@ -506,6 +506,7 @@ func main() {
 		a.initDiscovery()
 		a.restoreHistory()
 		a.restoreFavorites()
+		a.restoreLiveState()
 		a.restoreSearchHistory()
 		a.restoreLatency()
 		a.restoreSiteHealth()

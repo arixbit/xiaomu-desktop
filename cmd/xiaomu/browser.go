@@ -46,6 +46,7 @@ const (
 	jobPlay                   // resolving an episode into media
 	jobDanmaku                // searching or loading this episode's comments
 	jobSubtitle               // searching or downloading online external subtitles
+	jobEPG                    // loading IPTV EPG program guides
 	jobPan                    // verifying cloud-drive credentials or cleaning temp files
 	jobSlots
 )

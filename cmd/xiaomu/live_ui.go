@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -15,12 +16,13 @@ import (
 )
 
 type liveFilterCache struct {
-	ptr     *iptv.Channel
-	length  int
-	group   string
-	query   string
-	indices []int
-	valid   bool
+	ptr        *iptv.Channel
+	length     int
+	group      string
+	query      string
+	favVersion uint64
+	indices    []int
+	valid      bool
 }
 
 type liveBrowser struct {
@@ -29,9 +31,22 @@ type liveBrowser struct {
 	importErr                string
 	sources                  []iptv.Source
 	cachedChannels           map[string][]iptv.Channel
+	cachedEPG                map[string]string
 	staleChannels            map[string]bool
 	selectedSource           int
 	channels                 []iptv.Channel
+	epgURL                   string
+	xmltvCache               map[string]*iptv.EPG
+	diypCache                map[string][]iptv.Program
+	diypLoading              map[string]bool
+	epgErr                   string
+	epgClient                *http.Client
+	nowFn                    func() time.Time
+	state                    liveStateStore
+	pendingResume            string
+	pendingResumeStream      int
+	panelTab                 int // 0=频道, 1=节目单
+	catchupProgram           *iptv.Program
 	groupsCache              []string
 	groupsCachePtr           *iptv.Channel
 	groupsCacheLen           int
@@ -85,12 +100,17 @@ func (l *liveBrowser) filteredChannels(withQuery bool) []int {
 		cache = &l.filteredQueryCache
 	}
 	ptr, n := channelsPtr(l.channels), len(l.channels)
-	if cache.valid && cache.ptr == ptr && cache.length == n && cache.group == l.group && cache.query == query {
+	favVer := l.state.version
+	if cache.valid && cache.ptr == ptr && cache.length == n && cache.group == l.group && cache.query == query && cache.favVersion == favVer {
 		return cache.indices
 	}
 	indices := make([]int, 0, n)
 	for i, channel := range l.channels {
-		if l.group != "" && channel.Group != l.group {
+		if l.group == liveGroupFavorites {
+			if !l.state.isFavorite(channel.Name) {
+				continue
+			}
+		} else if l.group != "" && channel.Group != l.group {
 			continue
 		}
 		if query != "" && !strings.Contains(strings.ToLower(channel.Name), query) {
@@ -98,13 +118,28 @@ func (l *liveBrowser) filteredChannels(withQuery bool) []int {
 		}
 		indices = append(indices, i)
 	}
+	// Float favorited/pinned channels to the top while preserving relative order.
+	if len(l.state.favSet) > 0 && len(indices) > 1 {
+		sort.SliceStable(indices, func(a, b int) bool {
+			ra, oka := l.state.favoriteRank(l.channels[indices[a]].Name)
+			rb, okb := l.state.favoriteRank(l.channels[indices[b]].Name)
+			if oka != okb {
+				return oka
+			}
+			if oka && okb {
+				return ra < rb
+			}
+			return false
+		})
+	}
 	*cache = liveFilterCache{
-		ptr:     ptr,
-		length:  n,
-		group:   l.group,
-		query:   query,
-		indices: indices,
-		valid:   true,
+		ptr:        ptr,
+		length:     n,
+		group:      l.group,
+		query:      query,
+		favVersion: favVer,
+		indices:    indices,
+		valid:      true,
 	}
 	return indices
 }
@@ -186,15 +221,28 @@ func (a *app) setActiveLiveChannelCache(key string, channels []iptv.Channel) {
 }
 
 func (a *app) applyLiveChannels(index int, channels []iptv.Channel) {
+	a.applyLivePlaylist(index, channels, "")
+}
+
+func (a *app) applyLivePlaylist(index int, channels []iptv.Channel, epgURL string) {
 	a.live.channels, a.live.selectedSource = channels, index
 	a.live.group, a.live.query = "", ""
 	a.live.channelList, a.live.panelChannelList = ui.ListState{}, ui.ListState{}
+	if epgURL == "" && index >= 0 && index < len(a.live.sources) {
+		epgURL = a.live.sources[index].EPG
+	}
+	a.live.epgURL = strings.TrimSpace(epgURL)
+	a.live.epgErr = ""
+	a.ensureEPGLoaded()
+	a.tryPendingLiveResume()
 }
 
 func (a *app) setLiveSources(sources []iptv.Source) {
 	a.live.sources = sources
 	a.live.channels = nil
 	a.live.selectedSource = -1
+	a.live.epgURL = ""
+	a.live.epgErr = ""
 	a.live.group, a.live.query = "", ""
 	a.live.channelList, a.live.panelChannelList = ui.ListState{}, ui.ListState{}
 }
@@ -313,7 +361,11 @@ func (a *app) loadLiveSource(index int) {
 	}
 	if !stale && len(cached) > 0 {
 		a.cancelJob(jobLive)
-		a.applyLiveChannels(index, cloneLiveChannels(cached))
+		cachedEPG := source.EPG
+		if a.live.cachedEPG != nil && a.live.cachedEPG[key] != "" {
+			cachedEPG = a.live.cachedEPG[key]
+		}
+		a.applyLivePlaylist(index, cloneLiveChannels(cached), cachedEPG)
 		return
 	}
 	expectedLiveURL := a.live.url
@@ -325,13 +377,13 @@ func (a *app) loadLiveSource(index int) {
 			if a.live.url == expectedLiveURL && a.browser.configURL == expectedConfigURL &&
 				index < len(a.live.sources) && liveSourceCacheKey(a.live.sources[index]) == key {
 				delete(a.live.staleChannels, key)
-				a.applyLiveChannels(index, fallback)
+				a.applyLivePlaylist(index, fallback, source.EPG)
 			}
 			a.status = jobError("加载频道", err)
 		}
 	}
 	a.run(jobLive, "加载频道", func(ctx context.Context) (jobResult, error) {
-		channels, err := config.LiveChannels(ctx, source, nil)
+		pl, err := config.LivePlaylist(ctx, source, nil)
 		if err != nil {
 			return jobResult{}, err
 		}
@@ -340,10 +392,16 @@ func (a *app) loadLiveSource(index int) {
 				index >= len(a.live.sources) || liveSourceCacheKey(a.live.sources[index]) != key {
 				return
 			}
-			a.applyLiveChannels(index, channels)
+			a.applyLivePlaylist(index, pl.Channels, pl.EPG)
 			if key != "" {
 				delete(a.live.staleChannels, key)
-				a.setActiveLiveChannelCache(key, channels)
+				a.setActiveLiveChannelCache(key, pl.Channels)
+				if pl.EPG != "" {
+					if a.live.cachedEPG == nil {
+						a.live.cachedEPG = map[string]string{}
+					}
+					a.live.cachedEPG[key] = pl.EPG
+				}
 				if a.persist {
 					if a.live.url != "" {
 						_ = a.saveLiveCache()
@@ -384,9 +442,12 @@ func (a *app) startLiveChannel(index, streamIndex int) {
 			a.live.started = time.Now()
 			if a.playURL(stream.URL, stream.Headers) {
 				a.playingLive = true
+				a.live.catchupProgram = nil
 				if a.player != nil {
 					a.player.SetRate(1)
 				}
+				a.recordLastLiveChannel(index, streamIndex)
+				a.ensureChannelDIYPEPG(channel)
 				a.syncNowPlaying()
 				return
 			}
@@ -394,9 +455,12 @@ func (a *app) startLiveChannel(index, streamIndex int) {
 			a.live.started = time.Now()
 			if a.playDirectMPVURL(stream.URL, stream.Headers) {
 				a.playingLive = true
+				a.live.catchupProgram = nil
 				if a.player != nil {
 					a.player.SetRate(1)
 				}
+				a.recordLastLiveChannel(index, streamIndex)
+				a.ensureChannelDIYPEPG(channel)
 				a.syncNowPlaying()
 				return
 			}
@@ -488,14 +552,25 @@ func (a *app) liveView(c *ui.Context) {
 			}
 			return
 		}
+		a.liveLastResumeBar(c)
 		groups := live.groups()
+		hasFavs := len(live.state.favorites) > 0
 		ui.Row(c).Grow(1).FillWidth().MinHeight(0).Gap(16).Children(func() {
-			if len(groups) > 0 {
+			if len(groups) > 0 || hasFavs {
 				ui.Scroll(c).Width(168).FillHeight().Gap(2).Children(func() {
 					if listRow(c, "全部频道", live.group == "").Clicked() {
 						if live.group != "" {
 							live.group = ""
 							live.channelList, live.panelChannelList = ui.ListState{}, ui.ListState{}
+						}
+					}
+					if hasFavs {
+						favLabel := fmt.Sprintf("★ 收藏 (%d)", len(live.state.favorites))
+						if listRow(c, favLabel, live.group == liveGroupFavorites).Label("收藏频道").Clicked() {
+							if live.group != liveGroupFavorites {
+								live.group = liveGroupFavorites
+								live.channelList, live.panelChannelList = ui.ListState{}, ui.ListState{}
+							}
 						}
 					}
 					for _, group := range groups {
@@ -518,8 +593,9 @@ func (a *app) liveView(c *ui.Context) {
 			list := ui.List(c, &live.channelList, len(indices), func(rowIndex int) {
 				i := indices[rowIndex]
 				channel := live.channels[i]
-				row := ui.Row(c).Key(fmt.Sprintf("live-channel-%d", i)).FillWidth().Padding(12, 16).Gap(12).
-					AlignItems(ui.Center).Cursor(ui.CursorPointer).Label("播放 " + channel.Name)
+				fav := live.state.isFavorite(channel.Name)
+				row := ui.Row(c).Key(fmt.Sprintf("live-channel-%d", i)).FillWidth().Padding(10, 14).Gap(10).
+					AlignItems(ui.Center)
 				targetBg := p.surface
 				if row.Hovered() {
 					targetBg = p.surfaceHover
@@ -533,23 +609,58 @@ func (a *app) liveView(c *ui.Context) {
 				}
 				applyPressPose(row)
 				row.Children(func() {
-					ui.Text(c, channel.Name).Bold().SingleLine()
-					meta := channel.Group
-					if len(channel.Streams) > 1 {
-						streamNote := fmt.Sprintf("%d 条线路", len(channel.Streams))
-						if meta != "" {
-							meta += " · " + streamNote
-						} else {
-							meta = streamNote
-						}
+					mainArea := ui.Row(c).Grow(1).MinWidth(0).Gap(12).AlignItems(ui.Center).
+						Cursor(ui.CursorPointer).Label("播放 " + channel.Name)
+					mainArea.Children(func() {
+						a.renderChannelLogo(c, channel, 36, p.dark)
+						ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+							ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+								ui.Text(c, channel.Name).Bold().SingleLine()
+								if fav {
+									ui.Text(c, "置顶").FontSize(10).Padding(1, 6).Radius(6).
+										Background(p.accent).TextColor(p.accentText).SingleLine()
+								}
+							})
+							meta := channel.Group
+							if len(channel.Streams) > 1 {
+								streamNote := fmt.Sprintf("%d 条线路", len(channel.Streams))
+								if meta != "" {
+									meta += " · " + streamNote
+								} else {
+									meta = streamNote
+								}
+							}
+							if cur, _ := a.channelEPGCurrent(channel); cur != nil {
+								nowPlaying := "正在播出：" + cur.Title
+								if meta != "" {
+									meta = nowPlaying + " · " + meta
+								} else {
+									meta = nowPlaying
+								}
+							}
+							if meta != "" {
+								ui.Text(c, meta).FontSize(12).TextColor(p.textMuted).SingleLine()
+							}
+						})
+					})
+					if mainArea.Clicked() {
+						a.playLiveChannel(i, 0)
 					}
-					if meta != "" {
-						ui.Text(c, meta).FontSize(12).TextColor(p.textMuted).SingleLine()
+					starText, starLabel := "☆", "收藏 "+channel.Name
+					if fav {
+						starText, starLabel = "★", "取消收藏 "+channel.Name
+					}
+					starBtn := ui.Button(c, starText).Label(starLabel).Tooltip(starLabel).Padding(6, 10).Radius(12)
+					if fav {
+						starBtn.Background(p.surfaceSelected).TextColor(p.accent)
+					} else {
+						starBtn.Background(ui.Transparent).TextColor(p.textMuted)
+					}
+					applyPressPose(starBtn)
+					if starBtn.Clicked() {
+						a.toggleLiveChannelFavorite(channel)
 					}
 				})
-				if row.Clicked() {
-					a.playLiveChannel(i, 0)
-				}
 			}).Grow(1).MinWidth(0).FillHeight().Gap(8)
 			_ = list
 		})

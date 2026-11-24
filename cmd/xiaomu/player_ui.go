@@ -82,9 +82,9 @@ func (a *app) playerScreen(c *ui.Context) {
 	width, _ := c.Size()
 	compact := width < 900
 	overlayPanel := compact || a.fullScreen
-	// The panel holds a title's episodes and sources, a live list's channels,
+	// The panel holds a title's episodes and sources, a live list's channels/EPG,
 	// or sibling video files in the same local directory.
-	hasEpisodes := a.hasEpisodes() || (a.playingLive && len(a.live.channels) > 1) || a.hasLocalPlaylist()
+	hasEpisodes := a.hasEpisodes() || (a.playingLive && (len(a.live.channels) > 1 || a.activeEPGURL() != "")) || a.hasLocalPlaylist()
 	ui.Themed(c, ui.DarkTheme()).Fill().Background(playerInk).Children(func() {
 		screen := ui.Box(c).Fill().Background(playerInk).ObserveInput(func(ev ui.InputEvent) {
 			a.playerOverlay.hideAt = ev.Time.Add(playerOverlayIdle)
@@ -165,8 +165,16 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 			name += " · " + a.playingEpisode
 		}
 	}
-	if a.playingLive && a.live.playingChannel < len(a.live.channels) {
-		name = "直播 · " + a.live.channels[a.live.playingChannel].Name
+	if a.playingLive && a.live.playingChannel >= 0 && a.live.playingChannel < len(a.live.channels) {
+		ch := a.live.channels[a.live.playingChannel]
+		if a.live.catchupProgram != nil {
+			name = "回看 · " + ch.Name + " · " + a.live.catchupProgram.Title
+		} else {
+			name = "直播 · " + ch.Name
+			if cur, _ := a.channelEPGCurrent(ch); cur != nil {
+				name += " · " + cur.Title
+			}
+		}
 	}
 	if a.playingFile {
 		name = a.playingName
@@ -291,7 +299,7 @@ func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact 
 			duration := p.Duration()
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 				switch {
-				case a.playingLive:
+				case a.playingLive && a.live.catchupProgram == nil:
 					ui.Text(c, "直播").FontSize(12).Grow(1)
 				case duration > 0:
 					ui.Text(c, playerClock(p.Position())).FontSize(12).ContentTransition(ctNumeric)
@@ -551,10 +559,20 @@ func (a *app) panelSources(c *ui.Context, candidates []library.Item) {
 	}
 }
 
-// panelChannels changes the channel without leaving the player.
+// panelChannels changes the channel or browses today's EPG schedule & catchup without leaving the player.
 func (a *app) panelChannels(c *ui.Context) {
 	live := &a.live
-	ui.Text(c, "频道").FontSize(18).Bold()
+	hasEPG := a.activeEPGURL() != ""
+	if !hasEPG {
+		live.panelTab = 0
+		ui.Text(c, "频道").FontSize(18).Bold()
+	} else {
+		ui.Segmented(c, &live.panelTab, "频道", "节目单").Label("直播面板")
+	}
+	if live.panelTab == 1 && hasEPG {
+		a.panelChannelEPG(c)
+		return
+	}
 	indices := live.filteredChannels(false)
 	live.panelChannelList.Key = func(row int) any { return indices[row] }
 	live.panelChannelList.Label = func(row int) string { return live.channels[indices[row]].Name }
@@ -562,7 +580,30 @@ func (a *app) panelChannels(c *ui.Context) {
 		i := indices[row]
 		channel := live.channels[i]
 		current := i == live.playingChannel
-		if panelButton(c.Key(fmt.Sprintf("panel-channel-%d", i)), channel.Name, current).Label("切换到 "+channel.Name).Clicked() && !current {
+		fav := live.state.isFavorite(channel.Name)
+		tint := ui.RGBA(55, 50, 92, 0.39)
+		if current {
+			tint = ui.RGBA(102, 98, 143, 0.57)
+		}
+		btn := ui.Row(c.Key(fmt.Sprintf("panel-channel-%d", i))).FillWidth().Padding(8, 10).Gap(8).
+			Radius(14).AlignItems(ui.Center).Cursor(ui.CursorPointer).
+			Material(glass.Glass{Style: glass.Clear, Tint: tint, Interactive: true}).
+			TextColor(playerText).Label("切换到 " + channel.Name)
+		applyPressPose(btn)
+		btn.Children(func() {
+			a.renderChannelLogo(c, channel, 26, true)
+			ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
+				label := channel.Name
+				if fav {
+					label = "★ " + label
+				}
+				ui.Text(c, label).FontSize(13).SingleLine()
+				if cur, _ := a.channelEPGCurrent(channel); cur != nil {
+					ui.Text(c, cur.Title).FontSize(11).TextColor(ui.RGBA(248, 249, 255, 0.70)).SingleLine()
+				}
+			})
+		})
+		if btn.Clicked() && !current {
 			a.playLiveChannel(i, 0)
 		}
 	}).FillWidth().Grow(1).MinHeight(0).Gap(6)
@@ -746,6 +787,7 @@ func (a *app) leavePlayer() {
 	a.playingStreams, a.playingStreamIdx = nil, 0
 	a.syncNowPlaying()
 	a.playingLive, a.playingDirect = false, false
+	a.live.catchupProgram = nil
 	a.playingFile = false
 	a.playingFilePath = ""
 	a.playingName = ""
@@ -954,6 +996,11 @@ func (a *app) switchPlayingStream(idx int) {
 
 func (a *app) livePlayerControls(c *ui.Context) {
 	live := &a.live
+	if live.catchupProgram != nil && live.playingChannel >= 0 && live.playingChannel < len(live.channels) {
+		if playerGlassButton(c, "返回直播").Clicked() {
+			a.playLiveChannel(live.playingChannel, live.playingStream)
+		}
+	}
 	if len(live.channels) > 1 {
 		if playerGlassButton(c, "上一频道").Disabled(live.playingChannel <= 0).Clicked() {
 			a.playLiveChannel(live.playingChannel-1, 0)
@@ -963,9 +1010,17 @@ func (a *app) livePlayerControls(c *ui.Context) {
 		}
 	}
 	if live.playingChannel >= 0 && live.playingChannel < len(live.channels) {
-		count := len(live.channels[live.playingChannel].Streams)
+		ch := live.channels[live.playingChannel]
+		count := len(ch.Streams)
 		if count > 1 && playerGlassButton(c, fmt.Sprintf("切换线路 %d/%d", live.playingStream+1, count)).Clicked() {
 			a.playLiveChannel(live.playingChannel, (live.playingStream+1)%count)
+		}
+		favLabel := "☆ 收藏"
+		if live.state.isFavorite(ch.Name) {
+			favLabel = "★ 已收藏"
+		}
+		if playerGlassButton(c, favLabel).Label("收藏当前频道").Clicked() {
+			a.toggleLiveChannelFavorite(ch)
 		}
 	}
 }
