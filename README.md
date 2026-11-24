@@ -16,7 +16,7 @@ macOS 13+ · Apple Silicon / Intel · Windows 10/11 · x64 / ARM64 · [下载最
 
 <p>
   <a href="docs/screenshots/home.webp?raw=true"><img src="docs/screenshots/home.webp" alt="首页，展示继续观看、追剧和热播榜单" width="48%"></a>
-  <a href="docs/screenshots/player.webp?raw=true"><img src="docs/screenshots/player.webp" alt="播放器，右侧显示线路和选集" width="48%"></a>
+  <a href="docs/screenshots/player.webp?raw=true"><img src="docs/screenshots/player.webp" alt="播放器，右侧显示来源、线路和选集" width="48%"></a>
 </p>
 <p>
   <a href="docs/screenshots/danmaku.webp?raw=true"><img src="docs/screenshots/danmaku.webp" alt="弹幕播放，展示滚动弹幕、进度条高能密度曲线与播放控制栏" width="96.5%"></a>
