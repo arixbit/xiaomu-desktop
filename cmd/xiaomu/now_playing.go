@@ -17,7 +17,6 @@ import (
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/ui"
 )
 
 // nowPlayingSink is the part of MyGo's Now Playing API xiaomu uses. It
@@ -30,7 +29,7 @@ type nowPlayingSink interface {
 }
 
 type nowPlayingSnapshot struct {
-	player *ui.VideoPlayer
+	player mediaPlayer
 	info   mygo.NowPlayingInfo
 	at     time.Time
 }

@@ -16,7 +16,9 @@ func CheckAuth(ctx context.Context, p Provider) (AuthStatus, error) {
 		return sharedQuarkClient(p).CheckAuth(ctx)
 	case ProviderAli:
 		return sharedAliClient().CheckAuth(ctx)
-	case ProviderBaidu, Provider115:
+	case ProviderBaidu:
+		return sharedBaiduClient().CheckAuth(ctx)
+	case Provider115:
 		if DefaultCredentials().Has(p) {
 			return AuthStatus{Provider: p, Valid: true, VIP: "已登录", Summary: p.Label() + "已登录"}, nil
 		}
@@ -37,6 +39,14 @@ func CleanupAllTemp(ctx context.Context) (int, error) {
 			firstErr = err
 		}
 	}
+	if n, err := sharedBaiduClient().CleanupTemp(ctx); err != nil {
+		total += n
+		if firstErr == nil {
+			firstErr = err
+		}
+	} else {
+		total += n
+	}
 	return total, firstErr
 }
 
@@ -47,8 +57,10 @@ func ExpandShare(ctx context.Context, ref ShareRef) ([]FileItem, error) {
 		return sharedQuarkClient(ref.Provider).ExpandShare(ctx, ref)
 	case ProviderAli:
 		return sharedAliClient().ExpandShare(ctx, ref)
+	case ProviderBaidu:
+		return sharedBaiduClient().ExpandShare(ctx, ref)
 	default:
-		return nil, fmt.Errorf("暂不支持直接解析%s分享链接（当前已内置夸克、UC、阿里云盘）", ref.Provider.Label())
+		return nil, fmt.Errorf("暂不支持直接解析%s分享链接（当前已内置夸克、UC、阿里云盘、百度网盘）", ref.Provider.Label())
 	}
 }
 
@@ -161,6 +173,8 @@ func ResolveEpisode(ctx context.Context, episodeID string) (catalog.Playback, er
 			return sharedQuarkClient(item.Provider).ResolvePlayback(ctx, item)
 		case ProviderAli:
 			return sharedAliClient().ResolvePlayback(ctx, item)
+		case ProviderBaidu:
+			return sharedBaiduClient().ResolvePlayback(ctx, item)
 		default:
 			return catalog.Playback{}, fmt.Errorf("暂不支持%s在线解析", item.Provider.Label())
 		}
@@ -181,6 +195,8 @@ func ResolveEpisode(ctx context.Context, episodeID string) (catalog.Playback, er
 			return sharedQuarkClient(ref.Provider).ResolvePlayback(ctx, files[0])
 		case ProviderAli:
 			return sharedAliClient().ResolvePlayback(ctx, files[0])
+		case ProviderBaidu:
+			return sharedBaiduClient().ResolvePlayback(ctx, files[0])
 		default:
 			return catalog.Playback{}, fmt.Errorf("暂不支持%s在线解析", ref.Provider.Label())
 		}

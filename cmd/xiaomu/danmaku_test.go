@@ -127,7 +127,7 @@ func TestDanmakuRejectsStaleJobResults(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				a.adoptPlayer(player)
+				a.adoptPlayer(wrapSystemPlayer(player))
 			case "close":
 				a.close()
 			case "close current":
@@ -493,7 +493,71 @@ func TestHasEpisodesExcludesLocalFilePlayback(t *testing.T) {
 	}
 	a.playingFile = true
 	if a.hasEpisodes() {
-		t.Fatal("local file playback should not report title episodes or danmaku")
+		t.Fatal("local file playback should not report title episodes")
+	}
+	if !a.canUseDanmaku() {
+		t.Fatal("local file playback should allow danmaku search and overlay")
+	}
+}
+
+func TestParseLocalDanmakuMeta(t *testing.T) {
+	cases := []struct {
+		file    string
+		title   string
+		year    string
+		episode int
+	}{
+		{"示例剧.S01E05.2023.2160p.WEB-DL.H265.DTS-HD.mkv", "示例剧", "2023", 5},
+		{"示例电影2.2023.4K.HDR.Remux.mkv", "示例电影2", "2023", 0},
+		{"[字幕组] 示例番剧 - 12 [1080p][简繁内封].mkv", "示例番剧", "", 12},
+		{"示例古装 第2季 第08集 4K.mp4", "示例古装 第2季", "", 8},
+		{"Sample.Movie.Two.2024.2160p.BluRay.REMUX.HEVC.TrueHD.7.1.Atmos.mkv", "Sample Movie Two", "2024", 0},
+		{"示例剧集.EP14.2023.1080p.mkv", "示例剧集", "2023", 14},
+	}
+	for _, tc := range cases {
+		title, year, ep := parseLocalDanmakuMeta(tc.file)
+		if title != tc.title || year != tc.year || ep != tc.episode {
+			t.Fatalf("parseLocalDanmakuMeta(%q) = (%q, %q, %d), want (%q, %q, %d)",
+				tc.file, title, year, ep, tc.title, tc.year, tc.episode)
+		}
+	}
+}
+
+func TestLocalFileDanmakuSearchAndToggle(t *testing.T) {
+	var calls atomic.Int32
+	server := danmakuTestServer(t, &calls)
+	a := &app{
+		preferences: defaultPlayerPreferences(),
+		openLocal: func(string) (*ui.VideoPlayer, error) {
+			return ui.NewVideoPlayer(&timedVideo{})
+		},
+	}
+	a.preferences.Danmaku.API = server.URL
+	t.Cleanup(a.close)
+
+	if !a.openLocalFile("/tmp/示例片.S01E01.2024.2160p.HEVC.mp4") {
+		t.Fatalf("openLocalFile failed: status=%q", a.status)
+	}
+	if a.danmaku.query != "示例片" || a.danmaku.episodeQuery != "1" {
+		t.Fatalf("local danmaku prefill = (%q, %q), want (%q, %q)", a.danmaku.query, a.danmaku.episodeQuery, "示例片", "1")
+	}
+
+	tt := ui.NewTester(a.view, 1120, 760)
+	if !tt.HasText("弹幕") {
+		t.Fatalf("local file playback missing danmaku button: texts=%v", tt.Texts())
+	}
+	// Press D to enable and automatically match danmaku from the cleaned filename.
+	tt.Key(0, ui.KeyD)
+	if !a.preferences.Danmaku.Enabled || len(a.danmaku.comments) != 2 || calls.Load() != 2 {
+		t.Fatalf("local file D toggle did not load danmaku: enabled=%v comments=%d calls=%d msg=%q",
+			a.preferences.Danmaku.Enabled, len(a.danmaku.comments), calls.Load(), a.danmaku.message)
+	}
+	// Opening the danmaku dialog should work cleanly with a.title == nil.
+	if err := tt.Click("弹幕"); err != nil {
+		t.Fatalf("click local danmaku button failed: %v", err)
+	}
+	if !a.danmaku.open || !tt.HasText("弹幕设置") {
+		t.Fatalf("danmaku dialog did not open for local file: open=%v texts=%v", a.danmaku.open, tt.Texts())
 	}
 }
 

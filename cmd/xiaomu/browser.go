@@ -221,6 +221,7 @@ func (a *app) close() {
 	if err := a.latency.flush(); err != nil {
 		a.status = "测速记录保存失败：" + err.Error()
 	}
+	_ = a.siteHealth.flush()
 	a.closeSite()
 	a.clearTitle()
 	a.closeCurrentPlayer()
@@ -272,6 +273,10 @@ func (a *app) applyConfig(raw string, doc *config.Config, restoring bool) {
 		}
 		return
 	}
+	if !restoring {
+		a.clearSiteHealth()
+		a.showFailedSites = false
+	}
 	a.applyLibraryConfig(raw, doc, nil, nil)
 	if a.persist {
 		if err := a.saveImportedSource(raw); err != nil {
@@ -310,6 +315,8 @@ func (a *app) removeConfig() {
 	a.cancelJob(jobSite)
 	a.closeSite()
 	a.clearTitle()
+	a.clearSiteHealth()
+	a.showFailedSites = false
 	a.resetLibrary(nil)
 	a.browser.configURL = ""
 	if a.live.url == "" {
@@ -341,6 +348,7 @@ func (a *app) openSite(entry library.Entry) {
 			first, firstErr = session.Category(ctx, string(categories[0].ID), 1)
 		}
 		return jobResult{discard: session.Close, apply: func() {
+			a.markSiteHealthy(entry.Key())
 			a.closeSite()
 			b := &a.browser
 			b.session, b.categories, b.site = session, categories, entry
@@ -356,7 +364,10 @@ func (a *app) openSite(entry library.Entry) {
 				a.status = "站点已打开，读取首个分类失败：" + firstErr.Error()
 			}
 		}}, nil
-	}, nil)
+	}, func(err error) {
+		a.markSiteFailed(entry.Key())
+		a.status = jobError("打开站点", err)
+	})
 }
 
 // closeSite releases the site opened from the sources page.

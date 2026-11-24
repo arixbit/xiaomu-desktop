@@ -51,7 +51,7 @@ func (a *app) playbackPosition() time.Duration {
 	return a.lastPosition
 }
 
-func (a *app) checkPlayback(c *ui.Context, p *ui.VideoPlayer) {
+func (a *app) checkPlayback(c *ui.Context, p mediaPlayer) {
 	if !a.hasEpisodes() || a.playFailure != nil || a.running(jobPlay) {
 		return
 	}

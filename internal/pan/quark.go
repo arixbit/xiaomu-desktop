@@ -380,19 +380,19 @@ func (c *quarkClient) ExpandShare(ctx context.Context, ref ShareRef) ([]FileItem
 	return files, nil
 }
 
-func (c *quarkClient) ensureTempDir(ctx context.Context) (string, error) {
+func (c *quarkClient) ensureTempDir(ctx context.Context) (fid string, createdNew bool, err error) {
 	creds := c.credsFn()
 	dirName := creds.EffectiveTempDir()
 	cookie, err := c.cookie()
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	cacheKey := cookie + "\x00" + dirName
 	c.mu.Lock()
 	if c.tempDirKey == cacheKey && c.tempDirFid != "" {
-		fid := c.tempDirFid
+		fid = c.tempDirFid
 		c.mu.Unlock()
-		return fid, nil
+		return fid, false, nil
 	}
 	c.mu.Unlock()
 
@@ -405,14 +405,14 @@ func (c *quarkClient) ensureTempDir(ctx context.Context) (string, error) {
 		} `json:"list"`
 	}
 	if _, err := c.doJSON(ctx, http.MethodGet, "/file/sort?pdir_fid=0&_page=1&_size=100&_sort=file_type:asc", nil, true, &root); err != nil {
-		return "", err
+		return "", false, err
 	}
 	for _, entry := range root.List {
 		if (entry.Dir || entry.FileType == 0) && entry.FileName == dirName && entry.Fid != "" {
 			c.mu.Lock()
 			c.tempDirKey, c.tempDirFid = cacheKey, entry.Fid
 			c.mu.Unlock()
-			return entry.Fid, nil
+			return entry.Fid, false, nil
 		}
 	}
 	var created struct {
@@ -425,22 +425,60 @@ func (c *quarkClient) ensureTempDir(ctx context.Context) (string, error) {
 		"dir_init_lock": false,
 	}
 	if _, err := c.doJSON(ctx, http.MethodPost, "/file", payload, true, &created); err != nil {
-		return "", fmt.Errorf("创建临时目录 %q 失败：%w", dirName, err)
+		return "", false, fmt.Errorf("创建临时目录 %q 失败：%w", dirName, err)
 	}
 	if created.Fid == "" {
-		return "", fmt.Errorf("创建临时目录 %q 未返回目录 ID", dirName)
+		return "", false, fmt.Errorf("创建临时目录 %q 未返回目录 ID", dirName)
 	}
 	c.mu.Lock()
 	c.tempDirKey, c.tempDirFid = cacheKey, created.Fid
 	c.mu.Unlock()
-	return created.Fid, nil
+	return created.Fid, true, nil
+}
+
+type quarkTempFile struct {
+	Fid      string `json:"fid"`
+	FileName string `json:"file_name"`
+	Size     int64  `json:"size"`
+}
+
+func (c *quarkClient) listTempFiles(ctx context.Context, dirFid string) ([]quarkTempFile, error) {
+	var listing struct {
+		List []quarkTempFile `json:"list"`
+	}
+	endpoint := fmt.Sprintf("/file/sort?pdir_fid=%s&_page=1&_size=100", url.QueryEscape(dirFid))
+	if _, err := c.doJSON(ctx, http.MethodGet, endpoint, nil, true, &listing); err != nil {
+		return nil, err
+	}
+	return listing.List, nil
 }
 
 func (c *quarkClient) saveShareFile(ctx context.Context, item FileItem) (string, error) {
-	tempDirFid, err := c.ensureTempDir(ctx)
+	tempDirFid, createdNew, err := c.ensureTempDir(ctx)
 	if err != nil {
 		return "", err
 	}
+	cleanedBeforeSave := false
+	if !createdNew {
+		if existing, listErr := c.listTempFiles(ctx, tempDirFid); listErr == nil && len(existing) > 0 {
+			var stale []string
+			for _, f := range existing {
+				if f.Fid == "" {
+					continue
+				}
+				if item.Name != "" && f.FileName == item.Name && (item.Size == 0 || f.Size == item.Size) {
+					return f.Fid, nil
+				}
+				stale = append(stale, f.Fid)
+			}
+			if len(stale) > 0 {
+				if c.deleteAndPurge(ctx, stale) == nil {
+					cleanedBeforeSave = true
+				}
+			}
+		}
+	}
+
 	stoken, err := c.shareToken(ctx, item.ShareID, item.Passcode)
 	if err != nil {
 		return "", err
@@ -454,29 +492,79 @@ func (c *quarkClient) saveShareFile(ctx context.Context, item FileItem) (string,
 		"pdir_fid":       "0",
 		"scene":          "link",
 	}
-	var saveResp struct {
-		TaskID string `json:"task_id"`
-		SaveAs struct {
-			SaveAsTopFids []string `json:"save_as_top_fids"`
-		} `json:"save_as"`
-	}
-	if _, err := c.doJSON(ctx, http.MethodPost, "/share/sharepage/save", payload, true, &saveResp); err != nil {
-		return "", fmt.Errorf("转存%s文件失败：%w", c.provider.Label(), err)
-	}
-	var savedFid string
-	if len(saveResp.SaveAs.SaveAsTopFids) > 0 {
-		savedFid = saveResp.SaveAs.SaveAsTopFids[0]
-	} else if saveResp.TaskID != "" {
-		savedFid, err = c.waitSaveTask(ctx, saveResp.TaskID)
-		if err != nil {
+	attemptSave := func() (string, error) {
+		var saveResp struct {
+			TaskID string `json:"task_id"`
+			SaveAs struct {
+				SaveAsTopFids []string `json:"save_as_top_fids"`
+			} `json:"save_as"`
+		}
+		if _, err := c.doJSON(ctx, http.MethodPost, "/share/sharepage/save", payload, true, &saveResp); err != nil {
 			return "", err
 		}
+		if len(saveResp.SaveAs.SaveAsTopFids) > 0 {
+			return saveResp.SaveAs.SaveAsTopFids[0], nil
+		}
+		if saveResp.TaskID != "" {
+			return c.waitSaveTask(ctx, saveResp.TaskID)
+		}
+		return "", fmt.Errorf("转存%s文件未返回新文件 ID", c.provider.Label())
+	}
+
+	savedFid, err := attemptSave()
+	if err != nil && isCapacityLimitErr(err) {
+		// Re-check and purge any remaining temp files (and give Quark quota
+		// accounting a brief moment to catch up after deletion) before failing.
+		if !cleanedBeforeSave {
+			_, _ = c.CleanupTemp(ctx)
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+		savedFid, err = attemptSave()
+	}
+	if err != nil {
+		if isCapacityLimitErr(err) {
+			return "", formatCapacityLimitErr(c.provider, item.Size)
+		}
+		return "", fmt.Errorf("转存%s文件失败：%w", c.provider.Label(), err)
 	}
 	if savedFid == "" {
 		return "", fmt.Errorf("转存%s文件未返回新文件 ID", c.provider.Label())
 	}
-	c.rememberSaved(savedFid)
 	return savedFid, nil
+}
+
+func isCapacityLimitErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "capacity limit") ||
+		strings.Contains(msg, "space not enough") ||
+		strings.Contains(msg, "容量不足") ||
+		strings.Contains(msg, "空间不足")
+}
+
+func formatCapacityLimitErr(p Provider, size int64) error {
+	sizeHint := ""
+	if size > 0 {
+		sizeHint = fmt.Sprintf("（本集约 %s）", formatByteSize(size))
+	}
+	return fmt.Errorf("%s剩余空间不足%s。请先到%s清空回收站或释放空间，也可换体积更小的版本或其他网盘线路", p.Label(), sizeHint, p.Label())
+}
+
+func formatByteSize(size int64) string {
+	const (
+		gb = 1024 * 1024 * 1024
+		mb = 1024 * 1024
+	)
+	if size >= gb {
+		return fmt.Sprintf("%.1f GB", float64(size)/float64(gb))
+	}
+	return fmt.Sprintf("%.0f MB", float64(size)/float64(mb))
 }
 
 func (c *quarkClient) waitSaveTask(ctx context.Context, taskID string) (string, error) {
@@ -486,8 +574,9 @@ func (c *quarkClient) waitSaveTask(ctx context.Context, taskID string) (string, 
 			return "", err
 		}
 		var taskResp struct {
-			Status int `json:"status"`
-			SaveAs struct {
+			Status  int    `json:"status"`
+			Message string `json:"message"`
+			SaveAs  struct {
 				SaveAsTopFids []string `json:"save_as_top_fids"`
 			} `json:"save_as"`
 		}
@@ -501,6 +590,12 @@ func (c *quarkClient) waitSaveTask(ctx context.Context, taskID string) (string, 
 			}
 			return "", fmt.Errorf("转存完成但未获取到文件 ID")
 		}
+		if taskResp.Status == 3 {
+			if msg := strings.TrimSpace(taskResp.Message); msg != "" {
+				return "", fmt.Errorf("%s返回错误：%s", c.provider.Label(), msg)
+			}
+			return "", fmt.Errorf("转存%s文件失败", c.provider.Label())
+		}
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
@@ -510,21 +605,30 @@ func (c *quarkClient) waitSaveTask(ctx context.Context, taskID string) (string, 
 	return "", fmt.Errorf("转存%s文件超时，请重试", c.provider.Label())
 }
 
-func (c *quarkClient) rememberSaved(fid string) {
-	c.mu.Lock()
-	c.recentSaved = append(c.recentSaved, fid)
-	var evict []string
-	if len(c.recentSaved) > keepTempFiles {
-		evict = append(evict, c.recentSaved[:len(c.recentSaved)-keepTempFiles]...)
-		c.recentSaved = c.recentSaved[len(c.recentSaved)-keepTempFiles:]
+func (c *quarkClient) waitTaskDone(ctx context.Context, taskID string) {
+	if taskID == "" {
+		return
 	}
-	c.mu.Unlock()
-	if len(evict) > 0 {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-			defer cancel()
-			_ = c.deleteFiles(ctx, evict)
-		}()
+	deadline := time.Now().Add(5 * time.Second)
+	for retry := 0; retry < 12 && time.Now().Before(deadline); retry++ {
+		if ctx.Err() != nil {
+			return
+		}
+		var taskResp struct {
+			Status int `json:"status"`
+		}
+		endpoint := fmt.Sprintf("/task?task_id=%s&retry_index=%d", url.QueryEscape(taskID), retry)
+		if _, err := c.doJSON(ctx, http.MethodGet, endpoint, nil, true, &taskResp); err != nil {
+			return
+		}
+		if taskResp.Status == 2 || taskResp.Status == 3 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
 }
 
@@ -537,30 +641,82 @@ func (c *quarkClient) deleteFiles(ctx context.Context, fids []string) error {
 		"filelist":     fids,
 		"exclude_fids": []string{},
 	}
-	_, err := c.doJSON(ctx, http.MethodPost, "/file/delete", payload, true, nil)
-	return err
+	var resp struct {
+		TaskID string `json:"task_id"`
+	}
+	if _, err := c.doJSON(ctx, http.MethodPost, "/file/delete", payload, true, &resp); err != nil {
+		return err
+	}
+	if resp.TaskID != "" {
+		c.waitTaskDone(ctx, resp.TaskID)
+	}
+	return nil
 }
 
-// CleanupTemp removes all files saved inside Xiaomu's temporary playback folder.
+// purgeRecycleFids permanently deletes ONLY the specified temporary file IDs
+// from the cloud drive recycle bin so quota is released immediately without
+// ever touching the user's own unrelated recycle bin items.
+func (c *quarkClient) purgeRecycleFids(ctx context.Context, fids []string) {
+	if len(fids) == 0 {
+		return
+	}
+	fidSet := make(map[string]bool, len(fids))
+	for _, f := range fids {
+		if f != "" {
+			fidSet[f] = true
+		}
+	}
+	var listResp struct {
+		List []struct {
+			Fid      string `json:"fid"`
+			RecordID string `json:"record_id"`
+		} `json:"list"`
+	}
+	if _, err := c.doJSON(ctx, http.MethodGet, "/file/recycle/list?_page=1&_size=50&_set_pdir_fid=0", nil, true, &listResp); err != nil {
+		return
+	}
+	var records []string
+	for _, entry := range listResp.List {
+		if fidSet[entry.Fid] && entry.RecordID != "" {
+			records = append(records, entry.RecordID)
+		}
+	}
+	if len(records) == 0 {
+		return
+	}
+	_, _ = c.doJSON(ctx, http.MethodPost, "/file/recycle/remove", map[string]any{
+		"select_mode": 2,
+		"record_list": records,
+	}, true, nil)
+}
+
+func (c *quarkClient) deleteAndPurge(ctx context.Context, fids []string) error {
+	if err := c.deleteFiles(ctx, fids); err != nil {
+		return err
+	}
+	c.purgeRecycleFids(ctx, fids)
+	return nil
+}
+
+// CleanupTemp removes all files saved inside Xiaomu's temporary playback folder
+// and permanently purges those deleted temp files from the recycle bin.
 func (c *quarkClient) CleanupTemp(ctx context.Context) (int, error) {
 	if !c.credsFn().Has(c.provider) {
 		return 0, nil
 	}
-	dirFid, err := c.ensureTempDir(ctx)
+	dirFid, createdNew, err := c.ensureTempDir(ctx)
 	if err != nil {
 		return 0, err
 	}
-	var listing struct {
-		List []struct {
-			Fid string `json:"fid"`
-		} `json:"list"`
+	if createdNew {
+		return 0, nil
 	}
-	endpoint := fmt.Sprintf("/file/sort?pdir_fid=%s&_page=1&_size=100", url.QueryEscape(dirFid))
-	if _, err := c.doJSON(ctx, http.MethodGet, endpoint, nil, true, &listing); err != nil {
+	entries, err := c.listTempFiles(ctx, dirFid)
+	if err != nil {
 		return 0, err
 	}
-	fids := make([]string, 0, len(listing.List))
-	for _, entry := range listing.List {
+	fids := make([]string, 0, len(entries))
+	for _, entry := range entries {
 		if entry.Fid != "" {
 			fids = append(fids, entry.Fid)
 		}
@@ -568,7 +724,7 @@ func (c *quarkClient) CleanupTemp(ctx context.Context) (int, error) {
 	if len(fids) == 0 {
 		return 0, nil
 	}
-	if err := c.deleteFiles(ctx, fids); err != nil {
+	if err := c.deleteAndPurge(ctx, fids); err != nil {
 		return 0, err
 	}
 	c.mu.Lock()
@@ -577,8 +733,9 @@ func (c *quarkClient) CleanupTemp(ctx context.Context) (int, error) {
 	return len(fids), nil
 }
 
-// ResolvePlayback saves a shared file to the temp directory and fetches both
-// transcoded HLS streams (4K/2K/1080P) and the original download direct link.
+// ResolvePlayback saves a shared file to the temp directory and fetches its
+// original direct stream (falling back to HD+ transcoded HLS only when the
+// original file is unavailable or cannot be played natively on this platform).
 func (c *quarkClient) ResolvePlayback(ctx context.Context, item FileItem) (catalog.Playback, error) {
 	savedFid, err := c.saveShareFile(ctx, item)
 	if err != nil {
@@ -601,7 +758,54 @@ func (c *quarkClient) ResolveSavedFile(ctx context.Context, fid, filename string
 
 	var streams []catalog.Stream
 
-	// 1. Fetch transcoded HLS streams (natively playable by AVPlayer / Media Foundation).
+	// 1. Always fetch the original file direct URL first: cloud-drive playback
+	// is for watching the original file (4K HDR, original audio & subtitles).
+	var dlResp []struct {
+		DownloadURL string `json:"download_url"`
+		FileName    string `json:"file_name"`
+		Size        int64  `json:"size"`
+	}
+	var dlErr error
+	var originalStream *catalog.Stream
+	if cookies, err := c.doJSON(ctx, http.MethodPost, "/file/download", map[string]any{"fids": []string{fid}}, true, &dlResp); err == nil && len(dlResp) > 0 {
+		dl := dlResp[0]
+		if dlURL := strings.TrimSpace(dl.DownloadURL); dlURL != "" {
+			if filename == "" {
+				filename = dl.FileName
+			}
+			if size == 0 {
+				size = dl.Size
+			}
+			hdr := maps.Clone(baseHeaders)
+			hdr["Cookie"] = mergeCookies(baseCookie, cookies)
+			native := IsNativePlayableFilename(filename)
+			stream := catalog.Stream{
+				Label:          "原画 " + ContainerLabel(filename),
+				Quality:        "original",
+				URL:            dlURL,
+				Headers:        hdr,
+				Filename:       filename,
+				NativePlayable: native,
+				IsOriginal:     true,
+				Size:           size,
+			}
+			originalStream = &stream
+			if native {
+				return catalog.Playback{
+					URL:      stream.URL,
+					Headers:  maps.Clone(stream.Headers),
+					Filename: stream.Filename,
+					Streams:  []catalog.Stream{stream},
+				}, nil
+			}
+		}
+	} else {
+		dlErr = err
+	}
+
+	// 2. Fallback only when the original URL failed or the current OS backend
+	// cannot play the container natively (e.g. MKV on Windows before libmpv).
+	// Never request low/normal ("流畅转码" / "标清转码").
 	var playResp struct {
 		VideoList []struct {
 			Resolution string `json:"resolution"`
@@ -614,7 +818,7 @@ func (c *quarkClient) ResolveSavedFile(ctx context.Context, fid, filename string
 	}
 	playPayload := map[string]any{
 		"fid":         fid,
-		"resolutions": "normal,low,high,super,2k,4k",
+		"resolutions": "high,super,2k,4k",
 		"supports":    "fmp4,m3u8",
 	}
 	var playErr error
@@ -627,6 +831,9 @@ func (c *quarkClient) ResolveSavedFile(ctx context.Context, fid, filename string
 				continue
 			}
 			q := strings.ToLower(strings.TrimSpace(v.Resolution))
+			if isLowTranscodeQuality(q) {
+				continue
+			}
 			streams = append(streams, catalog.Stream{
 				Label:          transcodeLabel(q, v.VideoInfo.Width, v.VideoInfo.Height),
 				Quality:        q,
@@ -643,44 +850,12 @@ func (c *quarkClient) ResolveSavedFile(ctx context.Context, fid, filename string
 	sort.SliceStable(streams, func(i, j int) bool {
 		return resolutionRank(streams[i].Quality) > resolutionRank(streams[j].Quality)
 	})
-
-	// 2. Fetch original download URL (works directly for MP4/MOV and for full-format backends).
-	var dlResp []struct {
-		DownloadURL string `json:"download_url"`
-		FileName    string `json:"file_name"`
-		Size        int64  `json:"size"`
-	}
-	var dlErr error
-	if cookies, err := c.doJSON(ctx, http.MethodPost, "/file/download", map[string]any{"fids": []string{fid}}, true, &dlResp); err == nil && len(dlResp) > 0 {
-		dl := dlResp[0]
-		if dlURL := strings.TrimSpace(dl.DownloadURL); dlURL != "" {
-			if filename == "" {
-				filename = dl.FileName
-			}
-			if size == 0 {
-				size = dl.Size
-			}
-			hdr := maps.Clone(baseHeaders)
-			hdr["Cookie"] = mergeCookies(baseCookie, cookies)
-			native := IsNativePlayableFilename(filename)
-			label := "原画 " + ContainerLabel(filename)
-			streams = append(streams, catalog.Stream{
-				Label:          label,
-				Quality:        "original",
-				URL:            dlURL,
-				Headers:        hdr,
-				Filename:       filename,
-				NativePlayable: native,
-				IsOriginal:     true,
-				Size:           size,
-			})
-		}
-	} else {
-		dlErr = err
+	if originalStream != nil {
+		streams = append(streams, *originalStream)
 	}
 
 	if len(streams) == 0 {
-		if err := errors.Join(playErr, dlErr); err != nil {
+		if err := errors.Join(dlErr, playErr); err != nil {
 			return catalog.Playback{}, fmt.Errorf("未获取到%s播放地址：%w", c.provider.Label(), err)
 		}
 		return catalog.Playback{}, fmt.Errorf("未获取到%s播放地址，请检查账号权限或稍后重试", c.provider.Label())
@@ -694,6 +869,15 @@ func (c *quarkClient) ResolveSavedFile(ctx context.Context, fid, filename string
 		Filename: primary.Filename,
 		Streams:  streams,
 	}, nil
+}
+
+func isLowTranscodeQuality(q string) bool {
+	switch strings.ToLower(strings.TrimSpace(q)) {
+	case "low", "ld", "normal", "sd":
+		return true
+	default:
+		return false
+	}
 }
 
 func resolutionRank(q string) int {

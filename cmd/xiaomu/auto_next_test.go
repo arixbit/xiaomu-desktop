@@ -139,10 +139,11 @@ func TestAutoNextWhenClockStopsJustBeforeDuration(t *testing.T) {
 	a.setFullScreen(true)
 	a.player.Close()
 	decoder := &endTestVideo{}
-	p, err := ui.NewVideoPlayer(decoder)
+	vp, err := ui.NewVideoPlayer(decoder)
 	if err != nil {
 		t.Fatal(err)
 	}
+	p := wrapSystemPlayer(vp)
 	a.player = p
 	requests := 0
 	a.title.session = &recoverySession{play: func(_ context.Context, line string, e catalog.Episode) (catalog.Playback, error) {

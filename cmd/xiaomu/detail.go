@@ -747,6 +747,11 @@ func (a *app) sourceAccordion(c *ui.Context, candidates []library.Item) {
 		} else {
 			ui.Spacer(c)
 		}
+		if titleKey(search.query) == titleKey(t.name) && len(search.groups) > 1 && len(candidates) > 0 {
+			if glassButton(c, fmt.Sprintf("相近结果 (%d)", len(search.groups))).Clicked() {
+				a.showRelated()
+			}
+		}
 		if !a.inStack(routeSearch) && a.library.root != nil && titleKey(search.query) != titleKey(t.name) {
 			if glassButton(c, "查找其他来源").Clicked() {
 				a.startScan(search, t.name, false)
@@ -831,6 +836,12 @@ func (a *app) sourceRowContent(c *ui.Context, item library.Item, dot, state stri
 		ui.Box(c).Size(8, 8).Radius(4).Background(ui.Hex(dot))
 	}
 	ui.Text(c, item.Entry.Label()).Bold().SingleLine()
+	switch item.Entry.Site.Kind {
+	case config.KindPanWeb, config.KindPanShare:
+		ui.Text(c, "网盘").FontSize(12).TextColor(ui.Hex("#ff8b78")).SingleLine()
+	case config.KindAList:
+		ui.Text(c, "AList").FontSize(12).TextColor(ui.Hex("#ff8b78")).SingleLine()
+	}
 	if item.Video.Remarks != "" {
 		ui.Text(c, item.Video.Remarks).FontSize(13).TextColor(textMuted).SingleLine()
 	}

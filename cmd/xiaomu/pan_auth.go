@@ -54,7 +54,7 @@ func loginSpecFor(p pan.Provider) (panLoginSpec, bool) {
 			loginURL:     "https://pan.baidu.com/",
 			cookieDomain: "baidu.com",
 			readyCookie: func(cookies []mygo.Cookie) bool {
-				return hasCookie(cookies, "BDUSS")
+				return hasCookie(cookies, "BDUSS") && hasCookieForHost(cookies, "STOKEN", "pan.baidu.com")
 			},
 		}, true
 	case pan.Provider115:
@@ -79,8 +79,34 @@ func hasCookie(cookies []mygo.Cookie, name string) bool {
 	return false
 }
 
+func cookieMatchesHost(domain, host string) bool {
+	d := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(domain)), ".")
+	h := strings.ToLower(strings.TrimSpace(host))
+	if d == "" || h == "" {
+		return false
+	}
+	return h == d || strings.HasSuffix(h, "."+d)
+}
+
+func hasCookieForHost(cookies []mygo.Cookie, name, host string) bool {
+	for _, c := range cookies {
+		if strings.EqualFold(c.Name, name) && strings.TrimSpace(c.Value) != "" && cookieMatchesHost(c.Domain, host) {
+			return true
+		}
+	}
+	return false
+}
+
 func formatCookieHeader(cookies []mygo.Cookie) string {
+	return formatCookiesForHost(cookies, "")
+}
+
+// formatCookiesForHost serializes cookies applicable to host, giving exact-host
+// cookies precedence over parent-domain cookies (critical for pan.baidu.com's
+// STOKEN vs passport.baidu.com's STOKEN).
+func formatCookiesForHost(cookies []mygo.Cookie, host string) string {
 	seen := map[string]string{}
+	specificity := map[string]int{}
 	order := make([]string, 0, len(cookies))
 	for _, c := range cookies {
 		name := strings.TrimSpace(c.Name)
@@ -88,10 +114,20 @@ func formatCookieHeader(cookies []mygo.Cookie) string {
 		if name == "" || val == "" {
 			continue
 		}
+		if host != "" && !cookieMatchesHost(c.Domain, host) {
+			continue
+		}
+		spec := len(strings.TrimPrefix(strings.TrimSpace(c.Domain), "."))
 		if _, ok := seen[name]; !ok {
 			order = append(order, name)
+			seen[name] = val
+			specificity[name] = spec
+			continue
 		}
-		seen[name] = val
+		if spec >= specificity[name] {
+			seen[name] = val
+			specificity[name] = spec
+		}
 	}
 	parts := make([]string, 0, len(order))
 	for _, name := range order {
@@ -245,7 +281,11 @@ func (a *app) watchPanLoginWindow(ctx context.Context, ls *panLoginSession, sess
 			if spec.readyCookie != nil && !spec.readyCookie(cookies) {
 				continue
 			}
-			cookieStr := formatCookieHeader(cookies)
+			cookieHost := ""
+			if ls.provider == pan.ProviderBaidu {
+				cookieHost = "pan.baidu.com"
+			}
+			cookieStr := formatCookiesForHost(cookies, cookieHost)
 			if cookieStr == "" || cookieStr == lastCandidate {
 				continue
 			}
@@ -270,6 +310,12 @@ func (a *app) watchPanLoginWindow(ctx context.Context, ls *panLoginSession, sess
 				}
 			case pan.ProviderBaidu:
 				updated.BaiduCookie = cookieStr
+				checkCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+				_, err = pan.NewBaiduClient(pan.BaiduClientOptions{Credentials: &updated}).CheckAuth(checkCtx)
+				cancel()
+				if err != nil {
+					continue
+				}
 			case pan.Provider115:
 				updated.P115Cookie = cookieStr
 			}
@@ -301,7 +347,6 @@ func (a *app) watchPanLoginWindow(ctx context.Context, ls *panLoginSession, sess
 
 func (a *app) applyAuthorizedCredentials(provider pan.Provider, updated pan.Credentials) {
 	a.panUI.creds = updated
-	a.panUI.qualityIdx = panQualityIndex(updated.EffectiveQuality())
 	pan.SetDefaultCredentials(updated)
 	if err := a.persistPanCredentials(); err != nil {
 		a.status = fmt.Sprintf("%s登录成功，但保存到本机失败：%v", provider.Label(), err)

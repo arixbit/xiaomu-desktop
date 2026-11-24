@@ -2,8 +2,6 @@ package main
 
 import (
 	"time"
-
-	"github.com/egoist/mygo/ui"
 )
 
 // The release function belongs to active playback, not to the window or to
@@ -11,7 +9,7 @@ import (
 type playbackPower struct {
 	keepAwake func(reason string, display bool) func()
 	release   func()
-	player    *ui.VideoPlayer
+	player    mediaPlayer
 	end       playbackEnd
 }
 

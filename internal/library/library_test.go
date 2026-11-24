@@ -185,3 +185,18 @@ func TestCancelSearchReleasesBoundedWorkers(t *testing.T) {
 		t.Fatalf("peak=%d active=%d", peak.Load(), active.Load())
 	}
 }
+
+func TestTaskPriorityPlacesPanAndAListAlongsideCMS(t *testing.T) {
+	for _, kind := range []config.Kind{config.KindJSON, config.KindXML, config.KindPanWeb, config.KindPanShare, config.KindAList} {
+		got := taskPriority(task{target: &Target{Entry: Entry{Site: config.Site{Kind: kind}}}})
+		if got != 0 {
+			t.Fatalf("taskPriority(%s) = %d, want 0", kind, got)
+		}
+	}
+	for _, kind := range []config.Kind{config.KindDRPY2, config.KindFongMi, config.KindXBPQ} {
+		got := taskPriority(task{target: &Target{Entry: Entry{Site: config.Site{Kind: kind}}}})
+		if got != 1 {
+			t.Fatalf("taskPriority(%s) = %d, want 1", kind, got)
+		}
+	}
+}

@@ -273,7 +273,7 @@ func (a *app) flushHistory() {
 
 // recordHistory notes once a second where the episode on show is, and writes
 // it to disk now and then; leaving the player writes it too.
-func (a *app) recordHistory(p *ui.VideoPlayer, now time.Time) {
+func (a *app) recordHistory(p mediaPlayer, now time.Time) {
 	t := a.title
 	if !a.hasEpisodes() || a.playingEpisode == "" || now.Sub(a.history.noted) < time.Second {
 		return

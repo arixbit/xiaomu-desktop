@@ -52,8 +52,11 @@ func OpenContent(ctx context.Context, site config.Site, assets string) (Session,
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if site.Kind == config.KindJSON || site.Kind == config.KindXML {
+	switch site.Kind {
+	case config.KindJSON, config.KindXML:
 		return catalog.OpenCMS(site)
+	case config.KindPanWeb:
+		return pan.OpenWebSiteContent(site)
 	}
 	session, _, err := Open(ctx, site, assets)
 	return session, err

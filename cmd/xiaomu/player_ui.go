@@ -99,7 +99,7 @@ func (a *app) playerScreen(c *ui.Context) {
 	screen.Children(func() {
 		ui.Row(c).Fill().Children(func() {
 			ui.Box(c).Grow(1).FillHeight().Clip().Children(func() {
-				ui.Video(c, p).Key(p).Fill().Fit(ui.Contain).Label("视频画面").Focusable().AutoFocus().Bind(&a.playerFocus).
+				p.View(c).Key(p).Fill().Fit(ui.Contain).Label("视频画面").Focusable().AutoFocus().Bind(&a.playerFocus).
 					HitTest(func(x, y float32, r ui.Rect) bool {
 						w, h := p.Size()
 						return a.fullScreen || playerPictureRect(r, w, h).Contains(x, y)
@@ -187,7 +187,7 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 	})
 }
 
-func (a *app) playerState(c *ui.Context, p *ui.VideoPlayer) {
+func (a *app) playerState(c *ui.Context, p mediaPlayer) {
 	message := ""
 	switch {
 	case a.running(jobPlay):
@@ -220,7 +220,7 @@ func (a *app) playerState(c *ui.Context, p *ui.VideoPlayer) {
 	})
 }
 
-func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, compact bool) {
+func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact bool) {
 	ui.Row(c).Absolute().Left(18).Right(18).Bottom(18).Justify(ui.Center).Children(func() {
 		ui.Column(c).FillWidth().MaxWidth(900).Padding(10, 15).Gap(8).
 			Radius(24).Material(glass.Glass{Style: glass.Clear, Tint: ui.RGBA(9, 15, 31, 0.59)}).
@@ -291,6 +291,8 @@ func (a *app) playerControls(c *ui.Context, p *ui.VideoPlayer, hasEpisodes, comp
 				}
 				ui.Spacer(c)
 				a.streamControls(c)
+				a.audioTrackControls(c, p)
+				a.subtitleTrackControls(c, p)
 				a.danmakuButton(c)
 				rate := p.Rate()
 				if rate <= 0 {
@@ -473,7 +475,7 @@ func (a *app) hasEpisodes() bool {
 
 // trackPlayback seeks to where a resumed episode stopped, then keeps the
 // position for the play history and for changing line or source.
-func (a *app) trackPlayback(c *ui.Context, p *ui.VideoPlayer) {
+func (a *app) trackPlayback(c *ui.Context, p mediaPlayer) {
 	if !p.Ready() || p.Err() != nil || a.playFailure != nil || a.autoNextPending {
 		return
 	}
@@ -499,7 +501,7 @@ func (a *app) trackPlayback(c *ui.Context, p *ui.VideoPlayer) {
 	a.recordHistory(p, c.Now())
 }
 
-func (a *app) advanceEpisode(p *ui.VideoPlayer, now time.Time) {
+func (a *app) advanceEpisode(p mediaPlayer, now time.Time) {
 	if !a.hasEpisodes() || !a.autoNext || a.autoNextPending || a.running(jobPlay) || a.panelChoice != nil && a.panelOpen || a.playFailure != nil || p.Err() != nil {
 		a.episodeEnd = playbackEnd{}
 		return
@@ -667,6 +669,63 @@ func (a *app) streamControls(c *ui.Context) {
 			}
 		}
 	}).Label("切换画质")
+}
+
+func (a *app) audioTrackControls(c *ui.Context, p mediaPlayer) {
+	tp, ok := p.(trackCapablePlayer)
+	if !ok {
+		return
+	}
+	tracks := tp.AudioTracks()
+	if len(tracks) == 0 {
+		return
+	}
+	ui.MenuButton(c, "音轨", func(m *ui.Menu) {
+		for i, tr := range tracks {
+			label := formatAudioTrackLabel(tr, i)
+			if m.Item(label).ID(fmt.Sprintf("audio-%d", tr.ID)).Radio(tr.Selected).Chosen() {
+				if err := tp.SelectAudioTrack(tr.ID); err != nil {
+					a.status = "切换音轨失败：" + err.Error()
+				}
+			}
+		}
+	}).Label("切换音轨")
+}
+
+func (a *app) subtitleTrackControls(c *ui.Context, p mediaPlayer) {
+	if a.playingLive {
+		return
+	}
+	tp, ok := p.(trackCapablePlayer)
+	if !ok {
+		return
+	}
+	tracks := tp.SubtitleTracks()
+	visible := tp.SubtitleVisible()
+	ui.MenuButton(c, "字幕", func(m *ui.Menu) {
+		hasSelected := false
+		for i, tr := range tracks {
+			selected := tr.Selected && visible
+			if selected {
+				hasSelected = true
+			}
+			label := formatSubtitleTrackLabel(tr, i)
+			if m.Item(label).ID(fmt.Sprintf("sub-%d", tr.ID)).Radio(selected).Chosen() {
+				if err := tp.SelectSubtitleTrack(tr.ID); err != nil {
+					a.status = "切换字幕失败：" + err.Error()
+				}
+			}
+		}
+		if m.Item("关闭字幕").ID("sub-off").Radio(!hasSelected).Chosen() {
+			if err := tp.DisableSubtitleTrack(); err != nil {
+				a.status = "关闭字幕失败：" + err.Error()
+			}
+		}
+		m.Separator()
+		if m.Item("加载外挂字幕…").ID("sub-load").Chosen() {
+			a.openSubtitleFileDialog()
+		}
+	}).Label("切换字幕")
 }
 
 func (a *app) switchPlayingStream(idx int) {

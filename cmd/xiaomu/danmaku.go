@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -122,8 +123,26 @@ func (a *app) refreshDanmakuTrack() {
 	s.screen.SetDensity(maxRows, minGap)
 }
 
+func (a *app) canUseDanmaku() bool {
+	return a.hasEpisodes() || a.playingFile
+}
+
+func (a *app) danmakuTargetMeta() (title, year string, episode int) {
+	if a.playingFile {
+		return parseLocalDanmakuMeta(a.playingName)
+	}
+	if a.title != nil {
+		title = a.title.name
+		if a.title.detail != nil {
+			year = danmakuExtractYear(a.title.detail.Year)
+		}
+	}
+	episode = danmakuNumber(a.playingEpisode)
+	return title, year, episode
+}
+
 func (a *app) toggleDanmaku() {
-	if !a.hasEpisodes() {
+	if !a.canUseDanmaku() {
 		return
 	}
 	a.ensurePreferences()
@@ -141,9 +160,10 @@ func (a *app) applyDanmakuEnabled() {
 		return
 	}
 	if len(s.comments) == 0 {
-		if s.title == "" && a.title != nil {
-			s.title, s.query = a.title.name, a.title.name
-			if number := danmakuNumber(a.playingEpisode); number > 0 {
+		if s.title == "" {
+			title, _, number := a.danmakuTargetMeta()
+			s.title, s.query = title, title
+			if number > 0 {
 				s.episodeQuery = strconv.Itoa(number)
 			}
 		}
@@ -151,18 +171,23 @@ func (a *app) applyDanmakuEnabled() {
 	}
 }
 
-// Each episode gets its own cancellable job; the existing job generation
-// rejects results from an older player, a disabled overlay or a closed window.
+// Each episode or local file gets its own cancellable job; the existing job
+// generation rejects results from an older player, a disabled overlay or a
+// closed window.
 func (a *app) startDanmaku() {
-	if !a.hasEpisodes() {
+	if !a.canUseDanmaku() {
+		return
+	}
+	title, _, number := a.danmakuTargetMeta()
+	if title == "" {
 		return
 	}
 	s := &a.danmaku
-	if s.title != a.title.name {
-		s.title, s.query, s.preferredAnime = a.title.name, a.title.name, ""
+	if s.title != title {
+		s.title, s.query, s.preferredAnime = title, title, ""
 	}
 	s.episodeQuery = ""
-	if number := danmakuNumber(a.playingEpisode); number > 0 {
+	if number > 0 {
 		s.episodeQuery = strconv.Itoa(number)
 	}
 	if a.preferences.Danmaku.Enabled {
@@ -260,6 +285,19 @@ func (a *app) danmakuSearchQuery() (query, episode string, number int, ok bool) 
 }
 
 func (a *app) danmakuPlaybackMeta(episode string) (year, name string, index int, singleEpisode bool) {
+	if a.playingFile {
+		_, fileYear, fileEp := parseLocalDanmakuMeta(a.playingName)
+		year = fileYear
+		index = -1
+		if episode != "" {
+			name = episode
+		} else if fileEp > 0 {
+			name = strconv.Itoa(fileEp)
+		} else {
+			singleEpisode = true
+		}
+		return year, name, index, singleEpisode
+	}
 	source, idx, ok := a.currentEpisode()
 	if !ok {
 		index = -1
@@ -285,7 +323,7 @@ func (a *app) danmakuClient() (*danmaku.Client, error) {
 }
 
 func (a *app) searchDanmaku(automatic bool) {
-	if !a.hasEpisodes() {
+	if !a.canUseDanmaku() {
 		return
 	}
 	s := &a.danmaku
@@ -429,21 +467,22 @@ func (a *app) danmakuButtonLabel() string {
 }
 
 func (a *app) danmakuButton(c *ui.Context) {
-	if !a.hasEpisodes() {
+	if !a.canUseDanmaku() {
 		return
 	}
 	if ui.Button(c, a.danmakuButtonLabel()).Label("弹幕").Radius(16).Material(glass.Glass{Style: glass.Clear, Interactive: true}).TextColor(playerText).Clicked() {
 		a.ensurePreferences()
 		s := &a.danmaku
 		s.open, s.address = true, a.preferences.Danmaku.API
+		title, _, number := a.danmakuTargetMeta()
 		if s.title == "" {
-			s.title = a.title.name
-			if number := danmakuNumber(a.playingEpisode); number > 0 {
+			s.title = title
+			if number > 0 {
 				s.episodeQuery = strconv.Itoa(number)
 			}
 		}
 		if s.query == "" {
-			s.query = a.title.name
+			s.query = title
 		}
 	}
 }
@@ -781,8 +820,8 @@ var (
 	}}
 )
 
-func (a *app) danmakuHighlightCurve(c *ui.Context, player *ui.VideoPlayer, duration time.Duration) {
-	if !a.hasEpisodes() || !a.preferences.Danmaku.Enabled || len(a.danmaku.comments) == 0 || duration <= 0 {
+func (a *app) danmakuHighlightCurve(c *ui.Context, player mediaPlayer, duration time.Duration) {
+	if !a.canUseDanmaku() || !a.preferences.Danmaku.Enabled || len(a.danmaku.comments) == 0 || duration <= 0 {
 		return
 	}
 	s := &a.danmaku
@@ -853,8 +892,8 @@ func danmakuArea(picture, bounds ui.Rect, fraction float32, avoidControls, prote
 	return ui.Rect{X: picture.X, Y: top, W: picture.W, H: usable * fraction}
 }
 
-func (a *app) danmakuOverlay(c *ui.Context, player *ui.VideoPlayer, avoidControls bool) {
-	if !a.preferences.Danmaku.Enabled || len(a.danmaku.comments) == 0 || !a.hasEpisodes() {
+func (a *app) danmakuOverlay(c *ui.Context, player mediaPlayer, avoidControls bool) {
+	if !a.preferences.Danmaku.Enabled || len(a.danmaku.comments) == 0 || !a.canUseDanmaku() {
 		return
 	}
 	ui.Box(c).Absolute().Left(0).Right(0).Top(0).Bottom(0).PassThrough().Label("弹幕画面").Draw(func(p *ui.Painter, r ui.Rect) {
@@ -904,6 +943,49 @@ var danmakuLeadingTag = regexp.MustCompile(`^(?:\s*【[^】]+】\s*)+`)
 var danmakuYearSuffix = regexp.MustCompile(`\s*[（(]([0-9]{4})[)）]\s*$`)
 var danmakuYearPattern = regexp.MustCompile(`\b(19[0-9]{2}|20[0-9]{2})\b`)
 var danmakuProviderSuffix = regexp.MustCompile(`(?i)\s*【[^】]+】\s*from\s+[a-z0-9_-]+\s*$`)
+var localLeadingBracketTag = regexp.MustCompile(`^(?:\s*(?:\[[^\]]+\]|【[^】]+】)\s*)+`)
+var localDashEpisode = regexp.MustCompile(`(?:\s*[-–—]\s*)0*([0-9]{1,3})(?:\s*[\[\(【（]|$)`)
+var localTitleCutoff = regexp.MustCompile(`(?i)(?:^|[\s._\-\[\(【（])(?:s[0-9]{1,2}[\s._-]*e[0-9]{1,3}|ep(?:isode)?[\s._-]*[0-9]{1,3}|e[0-9]{2,3}|第\s*[0-9]+\s*[集话話期]|(?:19|20)[0-9]{2}|2160p|1080p|720p|480p|4k|uhd|hdr10\+?|hdr|dovi|dv|web-?dl|webrip|bluray|blu-ray|bdrip|remux|h\.?26[45]|x26[45]|hevc|avc|av1|aac|ac3|eac3|ddp\d*|dts(?:-?hd)?|truehd|atmos|flac|10bit|60fps)(?:$|[\s._\-\]\)】）])`)
+var localTrailingTags = regexp.MustCompile(`(?:\s*(?:\[[^\]]+\]|【[^】]+】|\([^)]+\)|（[^）]+）)\s*)+$`)
+
+// parseLocalDanmakuMeta extracts a clean title, optional release year and
+// optional episode number from a local video filename so danmaku matching works
+// cleanly for downloaded movies, series and anime files.
+func parseLocalDanmakuMeta(filename string) (title, year string, episode int) {
+	base := strings.TrimSpace(filepath.Base(filename))
+	if ext := filepath.Ext(base); ext != "" {
+		base = strings.TrimSuffix(base, ext)
+	}
+	if base == "" {
+		return "", "", 0
+	}
+	year = danmakuExtractYear(base)
+	if m := danmakuNamedEpisode.FindStringSubmatch(base); len(m) == 2 {
+		episode, _ = strconv.Atoi(m[1])
+	} else if m := danmakuTaggedEpisode.FindStringSubmatch(base); len(m) == 2 {
+		episode, _ = strconv.Atoi(m[1])
+	} else if m := localDashEpisode.FindStringSubmatch(base); len(m) == 2 {
+		episode, _ = strconv.Atoi(m[1])
+	}
+
+	cleaned := strings.TrimSpace(localLeadingBracketTag.ReplaceAllString(base, ""))
+	cut := len(cleaned)
+	if loc := localTitleCutoff.FindStringIndex(cleaned); loc != nil && loc[0] > 0 && loc[0] < cut {
+		cut = loc[0]
+	}
+	if loc := localDashEpisode.FindStringIndex(cleaned); loc != nil && loc[0] > 0 && loc[0] < cut {
+		cut = loc[0]
+	}
+	cleaned = strings.TrimSpace(cleaned[:cut])
+	cleaned = strings.TrimSpace(localTrailingTags.ReplaceAllString(cleaned, ""))
+	cleaned = strings.NewReplacer(".", " ", "_", " ").Replace(cleaned)
+	cleaned = strings.TrimRight(cleaned, " -–—")
+	cleaned = strings.Join(strings.Fields(cleaned), " ")
+	if cleaned == "" {
+		cleaned = strings.Join(strings.Fields(strings.NewReplacer(".", " ", "_", " ").Replace(base)), " ")
+	}
+	return cleaned, year, episode
+}
 
 func danmakuNumber(name string) int {
 	parts := danmakuNamedEpisode.FindStringSubmatch(name)

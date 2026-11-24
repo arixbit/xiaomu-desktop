@@ -56,22 +56,36 @@ var (
 	vodDetailHref = regexp.MustCompile(`(?i)/(?:voddetail|detail|vod/detail/id)/([A-Za-z0-9_-]+)`)
 )
 
-// OpenWebSite opens a plaintext Wogg-style pan site without Android jars.
-func OpenWebSite(ctx context.Context, site config.Site) (*WebSiteSession, []catalog.Category, error) {
+// OpenWebSiteContent creates a lightweight session for search or detail without
+// fetching the homepage first.
+func OpenWebSiteContent(site config.Site) (*WebSiteSession, error) {
 	base := WebSiteURL(site.Ext)
 	if base == "" {
-		return nil, nil, fmt.Errorf("此网盘站点未提供明文网址，需要专用 Android 爬虫")
+		return nil, fmt.Errorf("此网盘站点未提供明文网址，需要专用 Android 爬虫")
 	}
 	jar, _ := cookiejar.New(nil)
-	s := &WebSiteSession{
+	return &WebSiteSession{
 		baseURL: base,
 		client:  &http.Client{Transport: netproxy.Transport(), Jar: jar, Timeout: 15 * time.Second},
-	}
-	doc, finalURL, err := s.fetchDoc(ctx, base+"/")
+	}, nil
+}
+
+// OpenWebSite opens a plaintext Wogg-style pan site without Android jars.
+func OpenWebSite(ctx context.Context, site config.Site) (*WebSiteSession, []catalog.Category, error) {
+	s, err := OpenWebSiteContent(site)
 	if err != nil {
 		return nil, nil, err
 	}
-	s.cats = parseWebCategories(doc)
+	doc, finalURL, err := s.fetchDoc(ctx, s.baseURL+"/")
+	if err != nil {
+		return nil, nil, err
+	}
+	rawCats := parseWebCategories(doc)
+	s.home = parseWebCards(doc, finalURL)
+	if len(s.home.Videos) == 0 && len(rawCats) == 0 {
+		return nil, nil, fmt.Errorf("网盘站点首页未解析到有效影片")
+	}
+	s.cats = rawCats
 	if len(s.cats) == 0 {
 		s.cats = []catalog.Category{
 			{ID: "1", Name: "电影"},
@@ -80,7 +94,6 @@ func OpenWebSite(ctx context.Context, site config.Site) (*WebSiteSession, []cata
 			{ID: "4", Name: "综艺"},
 		}
 	}
-	s.home = parseWebCards(doc, finalURL)
 	return s, s.cats, nil
 }
 
@@ -163,8 +176,19 @@ func parseWebCards(doc *goquery.Document, base string) catalog.Page {
 	}
 
 	// Standard Wogg / MacCMS module-item cards.
+	// Check detail URL selectors in strict priority order so an earlier play-button
+	// anchor (e.g. <a href="/vod/play/..." title="立刻播放...">) never shadows the detail link.
 	doc.Find(".module-item, .module-card-item, .module-search-item, .vodlist_item, .stui-vodlist__box").Each(func(_ int, item *goquery.Selection) {
-		link := item.Find("a[href*='detail'], a[href*='voddetail'], a[title]").First()
+		link := item.Find("a[href*='voddetail']").First()
+		if link.Length() == 0 {
+			link = item.Find("a[href*='detail']").First()
+		}
+		if link.Length() == 0 {
+			link = item.Find("h3 a[href]").First()
+		}
+		if link.Length() == 0 {
+			link = item.Find("a[title]").First()
+		}
 		if link.Length() == 0 {
 			link = item.Find("a[href]").First()
 		}
@@ -244,28 +268,56 @@ func (s *WebSiteSession) Search(ctx context.Context, query string, page int) (ca
 	if page < 1 {
 		page = 1
 	}
-	q := url.PathEscape(strings.TrimSpace(query))
-	candidates := []string{
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return catalog.Page{}, nil
+	}
+	q := url.PathEscape(trimmed)
+	primary := []string{
 		fmt.Sprintf("%s/index.php/vod/search/page/%d/wd/%s.html", s.baseURL, page, q),
 		fmt.Sprintf("%s/vodsearch/%s----------%d---.html", s.baseURL, q, page),
-		fmt.Sprintf("%s/index.php/vod/search.html?wd=%s&page=%d", s.baseURL, url.QueryEscape(strings.TrimSpace(query)), page),
+	}
+	type searchRes struct {
+		page catalog.Page
+		err  error
+	}
+	searchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch := make(chan searchRes, len(primary))
+	for _, target := range primary {
+		go func(u string) {
+			doc, finalURL, err := s.fetchDoc(searchCtx, u)
+			if err != nil {
+				ch <- searchRes{err: err}
+				return
+			}
+			ch <- searchRes{page: parseWebCards(doc, finalURL)}
+		}(target)
 	}
 	var lastErr error
-	for _, target := range candidates {
-		doc, finalURL, err := s.fetchDoc(ctx, target)
-		if err != nil {
-			lastErr = err
+	for range primary {
+		r := <-ch
+		if r.err != nil {
+			lastErr = r.err
 			continue
 		}
-		p := parseWebCards(doc, finalURL)
-		if len(p.Videos) > 0 {
+		if len(r.page.Videos) > 0 {
+			cancel()
+			return r.page, nil
+		}
+	}
+	fallback := fmt.Sprintf("%s/index.php/vod/search.html?wd=%s&page=%d", s.baseURL, url.QueryEscape(trimmed), page)
+	doc, finalURL, err := s.fetchDoc(ctx, fallback)
+	if err == nil {
+		if p := parseWebCards(doc, finalURL); len(p.Videos) > 0 {
 			return p, nil
 		}
+		return catalog.Page{}, nil
 	}
 	if lastErr != nil {
 		return catalog.Page{}, lastErr
 	}
-	return catalog.Page{}, nil
+	return catalog.Page{}, err
 }
 
 func (s *WebSiteSession) Detail(ctx context.Context, id string) (catalog.Detail, error) {

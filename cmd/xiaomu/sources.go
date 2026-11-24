@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/egoist/mygo/ui"
@@ -55,8 +56,40 @@ func (a *app) sourcesView(c *ui.Context) {
 			if a.running(jobConfig) {
 				ui.Text(c, "正在加载配置…").TextColor(textMuted)
 			}
+			totalVisible, totalFailed, totalUnsupported := 0, 0, 0
 			for i := range l.documents {
-				a.documentSites(c, &l.documents[i])
+				v, f, u := a.documentSites(c, &l.documents[i])
+				totalVisible += v
+				totalFailed += f
+				totalUnsupported += u
+			}
+			if l.root != nil && len(l.documents) > 0 && totalVisible == 0 && totalFailed > 0 && !a.showFailedSites {
+				ui.Text(c, "当前没有可用站点，可点击「重新测速」重新检测。").FontSize(13).TextColor(textMuted)
+			}
+			if totalFailed > 0 || totalUnsupported > 0 {
+				var parts []string
+				if totalFailed > 0 {
+					parts = append(parts, fmt.Sprintf("%d 个失效站点", totalFailed))
+				}
+				if totalUnsupported > 0 {
+					parts = append(parts, fmt.Sprintf("%d 个不兼容站点", totalUnsupported))
+				}
+				prefix := "已过滤 "
+				if a.showFailedSites && totalFailed > 0 {
+					prefix = "当前共含 "
+				}
+				ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, prefix+strings.Join(parts, "、")+"（点击「重新测速」可重新检测）").FontSize(12).TextColor(textMuted).Grow(1)
+					if totalFailed > 0 {
+						toggle := "查看失效站点"
+						if a.showFailedSites {
+							toggle = "隐藏失效站点"
+						}
+						if glassButton(c, toggle).Padding(5, 10).Clicked() {
+							a.showFailedSites = !a.showFailedSites
+						}
+					}
+				})
 			}
 		})
 		a.panCredentialsCard(c)
@@ -89,44 +122,56 @@ func (a *app) sourcesView(c *ui.Context) {
 	})
 }
 
-// documentSites lists one line's sites; choosing one browses it alone.
-func (a *app) documentSites(c *ui.Context, document *libraryDocument) {
+// documentSites lists one line's valid sites; choosing one browses it alone.
+// Invalid sites (unsupported or live-failed) are filtered out by default.
+func (a *app) documentSites(c *ui.Context, document *libraryDocument) (visibleCount, failedCount, unsupportedCount int) {
 	name := document.line
 	if name == "" {
 		name = "已导入片库"
 	}
-	skipped := 0
+	var visible []library.Entry
 	for _, site := range document.doc.Sites {
 		if site.Kind.Unsupported() {
-			skipped++
+			unsupportedCount++
+			continue
 		}
+		entry := library.Entry{Site: site, Config: document.doc, Line: document.line}
+		failed := a.isSiteFailed(entry.Key())
+		if failed {
+			failedCount++
+			if !a.showFailedSites {
+				continue
+			}
+		}
+		visible = append(visible, entry)
 	}
-	label := fmt.Sprintf("%s · %d 个站点", name, len(document.doc.Sites)-skipped)
+	visibleCount = len(visible)
+	if visibleCount == 0 {
+		return visibleCount, failedCount, unsupportedCount
+	}
+	label := fmt.Sprintf("%s · %d 个站点", name, visibleCount)
 	ui.Collapsible(c.Key(document.doc.URL), label, &document.open, func() {
 		ui.Column(c).FillWidth().Padding(4, 0, 8, 0).Gap(10).Children(func() {
 			ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
-				for i, site := range document.doc.Sites {
-					if site.Kind.Unsupported() {
-						continue
-					}
-					entry := library.Entry{Site: site, Config: document.doc, Line: document.line}
+				for i, entry := range visible {
+					key := entry.Key()
 					// The button stays the site's name; its last
 					// measured latency sits beside it, in the same
 					// form as the detail page. An unmeasured site
 					// shows nothing, never a made-up number.
 					ui.Row(c).Key(i).Gap(6).AlignItems(ui.Center).Children(func() {
-						if glassButton(c, site.Name).Clicked() {
+						if glassButton(c, entry.Site.Name).Clicked() {
 							a.openSite(entry)
 						}
-						if d, ok := a.latency.get(entry.Key()); ok {
+						if a.isSiteFailed(key) {
+							ui.Text(c, "失效").FontSize(12).TextColor(textMuted)
+						} else if d, ok := a.latency.get(key); ok {
 							ui.Text(c, formatLatency(d)).FontSize(13).TextColor(textMuted)
 						}
 					})
 				}
 			})
-			if skipped > 0 {
-				ui.Text(c, fmt.Sprintf("另有 %d 个站点暂不兼容，已从首页和搜索中跳过", skipped)).FontSize(12).TextColor(textMuted)
-			}
 		})
 	})
+	return visibleCount, failedCount, unsupportedCount
 }

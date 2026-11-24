@@ -92,7 +92,7 @@ func TestPlayerLetterboxDoesNotTogglePlayback(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		a.adoptPlayer(p)
+		a.adoptPlayer(wrapSystemPlayer(p))
 		tt := ui.NewTester(a.view, size.w, size.h)
 		tt.SetTitleBar(dragBar)
 		// Exercise both horizontal and vertical black bars, away from controls.
@@ -160,7 +160,7 @@ func TestPlayerPendingClickDoesNotAffectNewEpisode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.adoptPlayer(p)
+	a.adoptPlayer(wrapSystemPlayer(p))
 	tt.Advance(time.Second)
 	if !p.Playing() {
 		t.Fatal("previous episode's pending click paused the new player")

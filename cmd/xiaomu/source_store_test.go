@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/arixbit/xiaomu-desktop/internal/config"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -413,5 +414,28 @@ func TestRefreshLiveUpdatesAllPlaylistsAndFallsBackOnError(t *testing.T) {
 	}
 	if !strings.Contains(a.status, "加载频道失败") {
 		t.Fatalf("expected error status on failed playlist refresh, got %q", a.status)
+	}
+}
+
+func TestCachedConfigReclassifiesLegacyCSPSites(t *testing.T) {
+	legacy := &cachedConfig{
+		Config: config.Config{
+			URL: "https://example.com/line.json",
+			Sites: []config.Site{
+				{Key: "wogg", Name: "玩偶示例", Type: 3, API: "csp_Wogg", Ext: "https://example.com/t.json$$$https://wogg.example.com", Kind: config.KindCSP},
+				{Key: "share", Name: "夸克分享", Type: 3, API: "csp_QuarkShare", Ext: "https://example.com/t.json$$$https://example.com/list.txt", Kind: config.KindCSP},
+				{Key: "alist", Name: "AList", Type: 3, API: "csp_Alist", Ext: `{"盘":"https://alist.example.com"}`, Kind: config.KindCSP},
+			},
+		},
+	}
+	restored := legacy.toConfig()
+	if restored.Sites[0].Kind != config.KindPanWeb {
+		t.Fatalf("wogg kind = %s, want %s", restored.Sites[0].Kind, config.KindPanWeb)
+	}
+	if restored.Sites[1].Kind != config.KindPanShare {
+		t.Fatalf("share kind = %s, want %s", restored.Sites[1].Kind, config.KindPanShare)
+	}
+	if restored.Sites[2].Kind != config.KindAList {
+		t.Fatalf("alist kind = %s, want %s", restored.Sites[2].Kind, config.KindAList)
 	}
 }

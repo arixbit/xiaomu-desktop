@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
@@ -18,22 +17,10 @@ import (
 type panUIState struct {
 	creds          pan.Credentials
 	path           string
-	qualityIdx     int
 	promptOpen     bool
 	promptProvider pan.Provider
 	promptReason   string
 	onAuthSuccess  func()
-}
-
-var panQualityOptions = []struct {
-	value string
-	label string
-}{
-	{"auto", "自动"},
-	{"4k", "4K"},
-	{"2k", "2K"},
-	{"1080p", "1080P"},
-	{"original", "原画"},
 }
 
 var panAccountProviders = []pan.Provider{
@@ -41,16 +28,6 @@ var panAccountProviders = []pan.Provider{
 	pan.ProviderAli,
 	pan.ProviderUC,
 	pan.ProviderBaidu,
-}
-
-func panQualityIndex(v string) int {
-	v = strings.ToLower(strings.TrimSpace(v))
-	for i, opt := range panQualityOptions {
-		if opt.value == v {
-			return i
-		}
-	}
-	return 0
 }
 
 func panCredentialsPath() (string, error) {
@@ -77,15 +54,11 @@ func (a *app) restorePanCredentials() {
 		return
 	}
 	a.panUI.creds = creds
-	a.panUI.qualityIdx = panQualityIndex(creds.EffectiveQuality())
 	pan.SetDefaultCredentials(creds)
 }
 
 func (a *app) persistPanCredentials() error {
 	c := a.panUI.creds
-	if a.panUI.qualityIdx >= 0 && a.panUI.qualityIdx < len(panQualityOptions) {
-		c.PreferredQuality = panQualityOptions[a.panUI.qualityIdx].value
-	}
 	a.panUI.creds = c
 	pan.SetDefaultCredentials(c)
 	if !a.persist {
@@ -113,8 +86,8 @@ func (a *app) logoutPanProvider(p pan.Provider) {
 }
 
 func (a *app) cleanupPanTempFiles() {
-	if !a.panUI.creds.Has(pan.ProviderQuark) && !a.panUI.creds.Has(pan.ProviderUC) {
-		a.status = "尚未登录夸克或 UC 网盘"
+	if !a.panUI.creds.Has(pan.ProviderQuark) && !a.panUI.creds.Has(pan.ProviderUC) && !a.panUI.creds.Has(pan.ProviderBaidu) {
+		a.status = "尚未登录夸克、UC 或百度网盘"
 		return
 	}
 	a.run(jobPan, "清理网盘临时文件", func(ctx context.Context) (jobResult, error) {
@@ -143,7 +116,7 @@ func (a *app) panCredentialsCard(c *ui.Context) {
 				ui.Text(c, "点击播放配置中的网盘影片时，未登录会自动弹出对应网盘的官方页面授权，登录完成后自动保存到本机。公开 AList 站无需登录。").
 					FontSize(13).TextColor(textMuted)
 			})
-			if creds.Has(pan.ProviderQuark) || creds.Has(pan.ProviderUC) {
+			if creds.Has(pan.ProviderQuark) || creds.Has(pan.ProviderUC) || creds.Has(pan.ProviderBaidu) {
 				if glassButton(c, "清理临时文件").Disabled(a.running(jobPan)).Clicked() {
 					a.cleanupPanTempFiles()
 				}
@@ -167,13 +140,49 @@ func (a *app) panCredentialsCard(c *ui.Context) {
 				})
 			}
 		})
-		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "网盘默认画质").FontSize(13).TextColor(textMuted)
-			if ui.Segmented(c, &a.panUI.qualityIdx, "自动", "4K", "2K", "1080P", "原画").Label("网盘默认画质").Changed() {
-				_ = a.persistPanCredentials()
-			}
-		})
+		if panSites := a.panSiteEntries(); len(panSites) > 0 {
+			ui.Column(c).FillWidth().Gap(8).Children(func() {
+				ui.Text(c, fmt.Sprintf("已识别的网盘 / AList 站点（%d 个，点击直接浏览）", len(panSites))).FontSize(13).TextColor(textMuted)
+				ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
+					for i, entry := range panSites {
+						ui.Row(c).Key(i).Gap(6).AlignItems(ui.Center).Children(func() {
+							if glassButton(c, entry.Site.Name).Padding(6, 12).Clicked() {
+								a.openSite(entry)
+							}
+							if d, ok := a.latency.get(entry.Key()); ok {
+								ui.Text(c, formatLatency(d)).FontSize(12).TextColor(textMuted)
+							}
+						})
+					}
+				})
+			})
+		}
 	})
+}
+
+func (a *app) panSiteEntries() []library.Entry {
+	var out []library.Entry
+	seen := map[string]bool{}
+	for _, doc := range a.library.documents {
+		for _, site := range doc.doc.Sites {
+			switch site.Kind {
+			case config.KindPanWeb, config.KindPanShare, config.KindAList:
+			default:
+				continue
+			}
+			entry := library.Entry{Site: site, Config: doc.doc, Line: doc.line}
+			key := entry.Key()
+			if seen[key] {
+				continue
+			}
+			if !a.showFailedSites && a.isSiteFailed(key) {
+				continue
+			}
+			seen[key] = true
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 func (a *app) panAuthPromptDialog(c *ui.Context) {

@@ -11,14 +11,14 @@ import (
 const playerClickDelay = 500 * time.Millisecond
 
 type playerPointerState struct {
-	player              *ui.VideoPlayer
+	player              mediaPlayer
 	down, moved, double bool
 	x, y                float32
 	clickAt             time.Time
 	wasPlaying          bool
 }
 
-func (a *app) handlePlayerPointer(p *ui.VideoPlayer, ev ui.InputEvent) bool {
+func (a *app) handlePlayerPointer(p mediaPlayer, ev ui.InputEvent) bool {
 	if p != a.player || a.closed || ev.Button != 0 {
 		return false
 	}
@@ -54,7 +54,7 @@ func (a *app) handlePlayerPointer(p *ui.VideoPlayer, ev ui.InputEvent) bool {
 	return false
 }
 
-func (a *app) flushPlayerClick(c *ui.Context, p *ui.VideoPlayer) {
+func (a *app) flushPlayerClick(c *ui.Context, p mediaPlayer) {
 	s := &a.playerPointer
 	if s.player != p {
 		*s = playerPointerState{player: p}

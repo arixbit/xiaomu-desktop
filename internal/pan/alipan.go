@@ -363,14 +363,15 @@ func (c *aliClient) ResolvePlayback(ctx context.Context, item FileItem) (catalog
 		"User-Agent": aliUA,
 		"Referer":    aliReferer,
 	}
-	var streams []catalog.Stream
+	var allStreams []catalog.Stream
+	var hdStreams []catalog.Stream
 	for _, task := range preview.VideoPreviewPlayInfo.LiveTranscodingTaskList {
 		u := strings.TrimSpace(task.URL)
 		if u == "" {
 			continue
 		}
 		q := strings.ToLower(strings.TrimSpace(task.TemplateID))
-		streams = append(streams, catalog.Stream{
+		stream := catalog.Stream{
 			Label:          transcodeLabel(q, 0, 0),
 			Quality:        q,
 			URL:            u,
@@ -378,7 +379,15 @@ func (c *aliClient) ResolvePlayback(ctx context.Context, item FileItem) (catalog
 			Filename:       "stream.m3u8",
 			NativePlayable: true,
 			IsHLS:          true,
-		})
+		}
+		allStreams = append(allStreams, stream)
+		if !isLowTranscodeQuality(q) {
+			hdStreams = append(hdStreams, stream)
+		}
+	}
+	streams := hdStreams
+	if len(streams) == 0 {
+		streams = allStreams
 	}
 	sort.SliceStable(streams, func(i, j int) bool {
 		return resolutionRank(streams[i].Quality) > resolutionRank(streams[j].Quality)

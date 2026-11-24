@@ -18,7 +18,7 @@ import (
 // The opt-in AVPlayer test needs macOS's main event loop. Ordinary tests keep
 // using the headless UI tester and require no generated media or application.
 func TestMain(m *testing.M) {
-	if os.Getenv("XIAOMU_NATIVE_MEDIA_DIR") == "" {
+	if os.Getenv("XIAOMU_NATIVE_MEDIA_DIR") == "" && os.Getenv("XIAOMU_NATIVE_MPV_TEST") == "" {
 		os.Exit(m.Run())
 	}
 	result := make(chan int, 1)
@@ -72,7 +72,7 @@ func TestNativeIPTVHLS(t *testing.T) {
 	}
 	p := a.player
 	p.SetMuted(true)
-	tt := ui.NewTester(func(c *ui.Context) { ui.Video(c, p).Size(160, 90) }, 160, 90)
+	tt := ui.NewTester(func(c *ui.Context) { p.View(c).Size(160, 90) }, 160, 90)
 	deadline := time.Now().Add(15 * time.Second)
 	var first [32]byte
 	ready, changed := false, false

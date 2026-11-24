@@ -49,7 +49,7 @@ func (a *app) handleKeyboard(c *ui.Context) {
 		}
 		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 	}
-	if a.hasEpisodes() && c.Shortcut(0, ui.KeyD) && !c.ShortcutRepeated() {
+	if a.canUseDanmaku() && c.Shortcut(0, ui.KeyD) && !c.ShortcutRepeated() {
 		a.toggleDanmaku()
 		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 	}
@@ -70,7 +70,7 @@ func (a *app) handleKeyboard(c *ui.Context) {
 	a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 }
 
-func togglePlayback(p *ui.VideoPlayer) {
+func togglePlayback(p mediaPlayer) {
 	if p.Playing() {
 		p.Pause()
 	} else {

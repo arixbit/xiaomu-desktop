@@ -465,7 +465,7 @@ func isAListScript(api string) bool {
 
 func isPanShareCSP(name string) bool {
 	switch strings.ToLower(name) {
-	case "csp_quarkshare", "csp_ucshare", "csp_alishare", "csp_p115share", "csp_pushshare":
+	case "csp_quarkshare", "csp_ucshare", "csp_alishare", "csp_baidushare", "csp_p115share", "csp_pushshare":
 		return true
 	default:
 		return false

@@ -134,6 +134,10 @@ func (a *app) searchLibrary() {
 }
 
 func (a *app) startScan(s *libraryScan, query string, more bool) {
+	a.startScanWithSkip(s, query, more, true)
+}
+
+func (a *app) startScanWithSkip(s *libraryScan, query string, more, skipFailed bool) {
 	l := &a.library
 	if l.root == nil || a.closed {
 		return
@@ -142,7 +146,11 @@ func (a *app) startScan(s *libraryScan, query string, more bool) {
 	if l.searchCache == nil {
 		l.searchCache = &library.SearchCache{}
 	}
-	options := library.Options{Assets: strings.TrimSpace(a.browser.assets), Query: query, Cached: maps.Clone(l.cached), SearchCache: l.searchCache}
+	var skip map[string]bool
+	if skipFailed && strings.TrimSpace(query) != "" {
+		skip = a.siteHealth.snapshotKeys()
+	}
+	options := library.Options{Assets: strings.TrimSpace(a.browser.assets), Query: query, Cached: maps.Clone(l.cached), SearchCache: l.searchCache, Skip: skip}
 	if more {
 		options.More = append([]library.Target(nil), s.more...)
 		if len(options.More) == 0 {
@@ -246,7 +254,7 @@ func (a *app) startScan(s *libraryScan, query string, more bool) {
 // reloadScan repeats a pass, asking again the sites that failed before.
 func (a *app) reloadScan(s *libraryScan) {
 	a.library.searchCache = &library.SearchCache{}
-	a.startScan(s, s.query, false)
+	a.startScanWithSkip(s, s.query, false, false)
 }
 
 func (a *app) applyLibraryEvent(s *libraryScan, event library.Event) {
@@ -387,13 +395,22 @@ func (a *app) appendLibraryEvent(s *libraryScan, event library.Event) bool {
 	if result == nil {
 		return docAdded
 	}
-	// A site just answered: how long it took is its measured speed,
-	// whether the page came back or the request failed. A cached reply
-	// carries no duration, because no network happened.
-	if event.Duration > 0 {
+	entryKey := result.Target.Entry.Key()
+	// A site just answered: record latency on success, and update live health
+	// from home scans (or heal a site that returns search results).
+	if event.Duration > 0 && event.Err == nil {
 		// The store is best-effort: a failed save must not disturb
 		// the scan, and the next measurement overwrites it anyway.
-		a.recordLatency(result.Target.Entry.Key(), event.Duration)
+		a.recordLatency(entryKey, event.Duration)
+	}
+	if s.query == "" {
+		if event.Err != nil || len(result.Page.Videos) == 0 {
+			a.markSiteFailed(entryKey)
+		} else {
+			a.markSiteHealthy(entryKey)
+		}
+	} else if event.Err == nil && len(result.Page.Videos) > 0 {
+		a.markSiteHealthy(entryKey)
 	}
 	if event.Err != nil {
 		// A failed later page can be retried without repeating successful pages.
@@ -405,7 +422,6 @@ func (a *app) appendLibraryEvent(s *libraryScan, event library.Event) bool {
 	if s.seen == nil {
 		s.seen = make(map[itemID]struct{})
 	}
-	entryKey := result.Target.Entry.Key()
 	for _, video := range result.Page.Videos {
 		if video.ID == "" {
 			continue

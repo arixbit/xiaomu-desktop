@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/pan"
 )
 
 func TestAListBrowseSearchDetailAndPlay(t *testing.T) {
@@ -120,7 +121,7 @@ func TestAListBrowseSearchDetailAndPlay(t *testing.T) {
 		t.Fatalf("search = %+v err=%v", found, err)
 	}
 
-	// Single MKV detail & play marks NativePlayable=false for non-AVFoundation containers.
+	// Single MKV detail & play reflects platform native container capability.
 	detailMKV, err := sess.Detail(context.Background(), string(found.Videos[0].ID))
 	if err != nil || len(detailMKV.Sources) != 1 || len(detailMKV.Sources[0].Episodes) != 1 {
 		t.Fatalf("mkv detail = %+v err=%v", detailMKV, err)
@@ -129,7 +130,7 @@ func TestAListBrowseSearchDetailAndPlay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(playMKV.Streams) != 1 || playMKV.Streams[0].NativePlayable || playMKV.Filename != "示例4K电影.mkv" {
+	if len(playMKV.Streams) != 1 || playMKV.Streams[0].NativePlayable != pan.IsNativePlayableFilename("示例4K电影.mkv") || playMKV.Filename != "示例4K电影.mkv" {
 		t.Fatalf("unexpected MKV playback: %+v", playMKV)
 	}
 

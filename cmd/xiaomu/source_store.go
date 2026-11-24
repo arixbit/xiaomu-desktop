@@ -96,6 +96,14 @@ func (c *cachedConfig) toConfig() *config.Config {
 	doc.FromDepot = c.FromDepot
 	doc.Line = c.Line
 	doc.Lines = append([]config.Line(nil), c.Lines...)
+	if len(doc.Sites) > 0 {
+		doc.Sites = append([]config.Site(nil), doc.Sites...)
+		for i := range doc.Sites {
+			if doc.Sites[i].Kind == "" || doc.Sites[i].Kind.Unsupported() {
+				doc.Sites[i].Kind = config.Classify(doc.Sites[i].Type, doc.Sites[i].API, doc.Sites[i].Ext, "")
+			}
+		}
+	}
 	return &doc
 }
 

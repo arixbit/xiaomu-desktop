@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -54,7 +55,7 @@ func (p Provider) Label() string {
 
 // Supported reports whether this build has a native resolver for the provider.
 func (p Provider) Supported() bool {
-	return p == ProviderQuark || p == ProviderUC || p == ProviderAli
+	return p == ProviderQuark || p == ProviderUC || p == ProviderAli || p == ProviderBaidu
 }
 
 // LoginURL returns the official web login page for provider.
@@ -363,7 +364,7 @@ func DecodeEpisodeID(raw string) (FileItem, bool) {
 }
 
 var (
-	shareURLPattern = regexp.MustCompile(`(?i)(?:push://|push:)?(https?://(?:pan\.quark\.cn/s/[A-Za-z0-9_-]+|drive\.uc\.cn/s/[A-Za-z0-9_-]+|(?:www\.)?(?:alipan|aliyundrive)\.com/s/[A-Za-z0-9_-]+|(?:115|115cdn|anxia)\.com/s/[A-Za-z0-9_-]+|cloud\.189\.cn/(?:t/[A-Za-z0-9_-]+|web/share\?code=[A-Za-z0-9_-]+)|pan\.xunlei\.com/s/[A-Za-z0-9_-]+|pan\.baidu\.com/s/[A-Za-z0-9_-]+)[^\s"'<>]*)`)
+	shareURLPattern = regexp.MustCompile(`(?i)(?:push://|push:)?(https?://(?:pan\.quark\.cn/s/[A-Za-z0-9_-]+|drive\.uc\.cn/s/[A-Za-z0-9_-]+|(?:www\.)?(?:alipan|aliyundrive)\.com/s/[A-Za-z0-9_-]+|(?:115|115cdn|anxia)\.com/s/[A-Za-z0-9_-]+|cloud\.189\.cn/(?:t/[A-Za-z0-9_-]+|web/share\?code=[A-Za-z0-9_-]+)|pan\.xunlei\.com/s/[A-Za-z0-9_-]+|pan\.baidu\.com/(?:s/[A-Za-z0-9_-]+|share/init\?[^\s"'<>]*surl=[A-Za-z0-9_-]+))[^\s"'<>]*)`)
 	passcodePattern = regexp.MustCompile(`(?i)(?:提取码|密码|访问码|pwd|code)\s*[:：=]?\s*([A-Za-z0-9]{4,8})`)
 )
 
@@ -416,6 +417,15 @@ func ParseShareURL(raw string) (ShareRef, bool) {
 	case "pan.baidu.com":
 		provider = ProviderBaidu
 		shareID = shareIDFromPath(u.Path, "/s/")
+		if shareID == "" {
+			if surl := strings.TrimSpace(u.Query().Get("surl")); surl != "" {
+				if !strings.HasPrefix(surl, "1") {
+					shareID = "1" + surl
+				} else {
+					shareID = surl
+				}
+			}
+		}
 	default:
 		return ShareRef{}, false
 	}
@@ -516,17 +526,34 @@ var nativePlayableExts = map[string]bool{
 	".m3u8": true,
 }
 
+var mpvPlayableExts = map[string]bool{
+	".mkv":  true,
+	".webm": true,
+	".flv":  true,
+	".ts":   true,
+	".m2ts": true,
+	".avi":  true,
+	".wmv":  true,
+	".mpg":  true,
+	".mpeg": true,
+	".rmvb": true,
+}
+
 // IsVideoFilename reports whether name has a common video file extension.
 func IsVideoFilename(name string) bool {
 	ext := strings.ToLower(path.Ext(strings.TrimSpace(name)))
 	return videoExts[ext]
 }
 
-// IsNativePlayableFilename reports whether Xiaomu's built-in system player
-// (AVFoundation / Media Foundation) natively supports the container format.
+// IsNativePlayableFilename reports whether Xiaomu's built-in player natively
+// supports the container format on the current platform (full-format mygo-player
+// on macOS and Windows amd64, system decoder fallback elsewhere).
 func IsNativePlayableFilename(name string) bool {
 	ext := strings.ToLower(path.Ext(strings.TrimSpace(name)))
-	return nativePlayableExts[ext]
+	if nativePlayableExts[ext] {
+		return true
+	}
+	return (runtime.GOOS == "darwin" || (runtime.GOOS == "windows" && runtime.GOARCH == "amd64")) && mpvPlayableExts[ext]
 }
 
 // ContainerLabel returns a short uppercase container label such as "MKV" or "MP4".
@@ -626,8 +653,13 @@ func PickPreferredStream(streams []catalog.Stream, preference string) int {
 			}
 		}
 	}
-	// Default: prefer highest natively playable stream so built-in playback works
-	// immediately (4K/2K/1080P HLS or native MP4 original).
+	// Default: prefer natively playable original stream first, then highest
+	// natively playable stream.
+	for i, s := range streams {
+		if s.IsOriginal && s.NativePlayable {
+			return i
+		}
+	}
 	for i, s := range streams {
 		if s.NativePlayable {
 			return i

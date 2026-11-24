@@ -15,6 +15,7 @@ import (
 	"github.com/arixbit/xiaomu-desktop/internal/config"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/arixbit/xiaomu-desktop/internal/pan"
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -285,5 +286,44 @@ func TestPlayUnauthenticatedPanPromptsLoginAndResumesAutomatically(t *testing.T)
 	}
 	if loginTriggered != pan.ProviderQuark || !resumed || playCalls != 2 || !a.panUI.creds.Has(pan.ProviderQuark) {
 		t.Fatalf("login+resume incomplete: triggered=%s resumed=%v playCalls=%d hasCred=%v", loginTriggered, resumed, playCalls, a.panUI.creds.Has(pan.ProviderQuark))
+	}
+}
+
+func TestSourcesPageSurfacesPanAndAListSitesDirectly(t *testing.T) {
+	a := &app{}
+	defer a.close()
+	doc := &config.Config{
+		URL: "https://example.com/line.json",
+		Sites: []config.Site{
+			{Key: "drpy", Name: "普通站点", Type: 3, API: "https://example.com/drpy2.js", Ext: "https://example.com/rule.js", Kind: config.KindDRPY2},
+			{Key: "wogg", Name: "玩偶4K示例", Type: 3, API: "csp_Wogg", Ext: "https://wogg.example.com", Kind: config.KindPanWeb},
+			{Key: "alist", Name: "公开AList示例", Type: 3, API: "csp_Alist", Ext: `{"盘":"https://alist.example.com"}`, Kind: config.KindAList},
+		},
+	}
+	a.library.root = doc
+	// Even when the line is collapsed (open=false), pan/AList sites are surfaced in the pan card.
+	a.library.documents = []libraryDocument{{doc: doc, line: "示例线路", open: false}}
+	a.nav = []routeKind{routeSources}
+
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.Frame()
+	if !tt.HasText("已识别的网盘 / AList 站点（2 个，点击直接浏览）") {
+		t.Fatalf("pan sites summary missing: %v", tt.Texts())
+	}
+	if !tt.HasText("玩偶4K示例") || !tt.HasText("公开AList示例") {
+		t.Fatalf("pan site buttons missing while line is collapsed: %v", tt.Texts())
+	}
+}
+
+func TestFormatCookiesForHostKeepsPanBaiduSTOKEN(t *testing.T) {
+	cookies := []mygo.Cookie{
+		{Name: "BDUSS", Value: "bduss_ok", Domain: ".baidu.com"},
+		{Name: "STOKEN", Value: "pan_stoken_ok", Domain: "pan.baidu.com"},
+		{Name: "STOKEN", Value: "passport_wrong", Domain: "passport.baidu.com"},
+		{Name: "STOKEN", Value: "parent_wrong", Domain: ".baidu.com"},
+	}
+	got := formatCookiesForHost(cookies, "pan.baidu.com")
+	if !strings.Contains(got, "BDUSS=bduss_ok") || !strings.Contains(got, "STOKEN=pan_stoken_ok") || strings.Contains(got, "wrong") {
+		t.Fatalf("unexpected baidu cookie header: %q", got)
 	}
 }
