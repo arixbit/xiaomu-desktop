@@ -19,6 +19,11 @@ import (
 // episodeChunk is how many episodes show at once; longer series page.
 const episodeChunk = 50
 
+// detailHedgeDelay is how long automatic detail loading waits on the primary
+// candidate before launching a backup candidate in parallel to avoid hanging
+// on a single slow source.
+var detailHedgeDelay = 1500 * time.Millisecond
+
 // titlePage is one title and the sites that have it. Its session belongs to
 // the source on show, and serves the player while an episode plays.
 type titlePage struct {
@@ -224,13 +229,19 @@ func (a *app) autoOpenTitle() {
 	candidates := a.candidates()
 	preferred := a.sourceMemory.entries[titleKey(t.name)].Preferred
 	preferredSeen := false
+	var untried []library.Item
 	for _, item := range candidates {
-		if preferred.matches(item) {
+		isPref := preferred.matches(item)
+		if isPref {
 			preferredSeen = true
-			if t.failed[itemKey(item)] == "" {
-				a.openCandidate(item)
-				return
-			}
+		}
+		if t.failed[itemKey(item)] != "" {
+			continue
+		}
+		if isPref {
+			untried = append([]library.Item{item}, untried...)
+		} else {
+			untried = append(untried, item)
 		}
 	}
 	// Library replies arrive out of order. Give the saved source its chance
@@ -238,11 +249,13 @@ func (a *app) autoOpenTitle() {
 	if !preferredSeen && preferred.VideoID != "" && a.configAvailable(preferred.ConfigURL) && a.library.search.running && titleKey(a.library.search.query) == titleKey(t.name) {
 		return
 	}
-	for _, item := range candidates {
-		if _, bad := t.failed[itemKey(item)]; !bad {
-			a.openCandidate(item)
-			return
-		}
+	if len(untried) >= 2 && detailHedgeDelay > 0 {
+		a.openCandidatesHedged(untried[0], untried[1])
+		return
+	}
+	if len(untried) == 1 {
+		a.openCandidate(untried[0])
+		return
 	}
 	if t.searchFallback {
 		t.searchFallback = false
@@ -305,6 +318,30 @@ func stripHTML(s string) string {
 	return strings.Join(strings.Fields(out), " ")
 }
 
+// applyDetail updates the active source's lines and episodes while keeping
+// established title header metadata (poster, year, type and synopsis) stable
+// across source switches. Missing header fields are filled when a later source
+// provides them.
+func (t *titlePage) applyDetail(detail catalog.Detail) {
+	if t.pic != "" {
+		detail.Pic = t.pic
+	} else if detail.Pic != "" {
+		t.pic = detail.Pic
+	}
+	if prev := t.detail; prev != nil {
+		if prev.Year != "" {
+			detail.Year = prev.Year
+		}
+		if prev.Type != "" {
+			detail.Type = prev.Type
+		}
+		if prev.Content != "" {
+			detail.Content = prev.Content
+		}
+	}
+	t.detail = &detail
+}
+
 // openCandidate shows the title as one of its sources has it.
 func (a *app) openCandidate(item library.Item) {
 	t := a.title
@@ -330,9 +367,10 @@ func (a *app) openCandidate(item library.Item) {
 		}
 		return jobResult{discard: session.Close, apply: func() {
 			a.closeSession(t.session)
-			t.session, t.detail, t.item = session, &detail, item
-			t.line = a.preferredLine(t.name, item, detail)
-			t.chunk = a.initialEpisodeChunk(t.name, detail, t.line)
+			t.session, t.item = session, item
+			t.applyDetail(detail)
+			t.line = a.preferredLine(t.name, item, *t.detail)
+			t.chunk = a.initialEpisodeChunk(t.name, *t.detail, t.line)
 			delete(t.failed, key)
 			// The detail read is the freshest measurement of this
 			// site's speed; a failed read records nothing.
@@ -354,6 +392,150 @@ func (a *app) openCandidate(item library.Item) {
 		}
 		// The page shows the failure beside its source and tries the next one.
 		t.failed[key] = jobError("读取", err)
+		a.status = ""
+		a.autoOpenTitle()
+	})
+}
+
+type candidateOutcome struct {
+	item    library.Item
+	session source.Session
+	detail  catalog.Detail
+	elapsed time.Duration
+	err     error
+}
+
+type hedgedDetailError struct {
+	failed map[string]string
+	last   error
+}
+
+func (e hedgedDetailError) Error() string {
+	if e.last != nil {
+		return e.last.Error()
+	}
+	return "候选来源均读取失败"
+}
+
+// openCandidatesHedged starts reading primary immediately and, if it neither
+// succeeds nor fails within detailHedgeDelay, launches backup in parallel.
+// The first candidate that succeeds wins; the slower request is canceled and
+// any late session is closed without leaking.
+func (a *app) openCandidatesHedged(primary, backup library.Item) {
+	t := a.title
+	if t == nil {
+		return
+	}
+	a.cancelJob(jobPlay)
+	a.playFailure = nil
+	t.pending = primary
+	titleName := t.name
+	preferred := a.sourceMemory.entries[titleKey(titleName)].Preferred
+	primaryRemembered := preferred.matches(primary)
+	backupRemembered := preferred.matches(backup)
+	assets := strings.TrimSpace(a.browser.assets)
+	delay := detailHedgeDelay
+	a.run(jobTitle, "读取影片详情", func(ctx context.Context) (jobResult, error) {
+		raceCtx, raceCancel := context.WithCancel(ctx)
+		outcomes := make(chan candidateOutcome, 2)
+		launch := func(item library.Item, isRemembered bool) {
+			go func() {
+				start := time.Now()
+				session, detail, err := openItem(raceCtx, item, assets)
+				elapsed := time.Since(start)
+				if err == nil && isRemembered && titleKey(detail.Name) != titleKey(titleName) {
+					session.Close()
+					session = nil
+					err = fmt.Errorf("上次的影片编号已变更，重新查找来源")
+				}
+				outcomes <- candidateOutcome{item: item, session: session, detail: detail, elapsed: elapsed, err: err}
+			}()
+		}
+
+		launch(primary, primaryRemembered)
+		inFlight := 1
+		backupStarted := false
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		hedgeCh := timer.C
+		failed := map[string]string{}
+		var lastErr error
+
+		for inFlight > 0 || !backupStarted {
+			select {
+			case <-hedgeCh:
+				hedgeCh = nil
+				if !backupStarted && ctx.Err() == nil {
+					backupStarted = true
+					inFlight++
+					launch(backup, backupRemembered)
+				} else if !backupStarted {
+					backupStarted = true
+				}
+			case res := <-outcomes:
+				inFlight--
+				if res.err == nil {
+					raceCancel()
+					if remaining := inFlight; remaining > 0 {
+						go func() {
+							for range remaining {
+								late := <-outcomes
+								if late.session != nil {
+									late.session.Close()
+								}
+							}
+						}()
+					}
+					winner := res
+					return jobResult{discard: winner.session.Close, apply: func() {
+						a.closeSession(t.session)
+						t.session, t.item = winner.session, winner.item
+						t.applyDetail(winner.detail)
+						t.line = a.preferredLine(t.name, winner.item, *t.detail)
+						t.chunk = a.initialEpisodeChunk(t.name, *t.detail, t.line)
+						for fk, msg := range failed {
+							t.failed[fk] = msg
+						}
+						delete(t.failed, itemKey(winner.item))
+						a.recordLatency(winner.item.Entry.Key(), winner.elapsed)
+						a.updateFollowedTitle()
+					}}, nil
+				}
+				if ctx.Err() != nil {
+					raceCancel()
+					if remaining := inFlight; remaining > 0 {
+						go func() {
+							for range remaining {
+								late := <-outcomes
+								if late.session != nil {
+									late.session.Close()
+								}
+							}
+						}()
+					}
+					return jobResult{}, ctx.Err()
+				}
+				failed[itemKey(res.item)] = jobError("读取", res.err)
+				lastErr = res.err
+				if !backupStarted {
+					timer.Stop()
+					hedgeCh = nil
+					backupStarted = true
+					inFlight++
+					launch(backup, backupRemembered)
+				}
+			}
+		}
+		raceCancel()
+		return jobResult{}, hedgedDetailError{failed: failed, last: lastErr}
+	}, func(err error) {
+		if he, ok := err.(hedgedDetailError); ok {
+			for fk, msg := range he.failed {
+				t.failed[fk] = msg
+			}
+		} else {
+			t.failed[itemKey(primary)] = jobError("读取", err)
+		}
 		a.status = ""
 		a.autoOpenTitle()
 	})
@@ -545,8 +727,8 @@ func (a *app) resumeAfterPanLogin(line string, episode catalog.Episode, at time.
 				if a.title != t {
 					return
 				}
-				t.detail = &detail
-				for i, src := range detail.Sources {
+				t.applyDetail(detail)
+				for i, src := range t.detail.Sources {
 					if src.Name == line && len(src.Episodes) > 0 {
 						t.line, t.chunk = i, 0
 						a.playEpisodeAt(src.Name, src.Episodes[0], at)
@@ -741,7 +923,7 @@ func (a *app) detailHeader(c *ui.Context, t *titlePage) {
 	p := paletteFor(c)
 	ui.Row(c).FillWidth().Gap(22).AlignItems(ui.Start).Children(func() {
 		pic := t.pic
-		if t.detail != nil && t.detail.Pic != "" {
+		if pic == "" && t.detail != nil && t.detail.Pic != "" {
 			pic = t.detail.Pic
 		}
 		posterBox := ui.Box(c).Size(170, 240).Radius(16).Clip().Background(p.cardPlaceholder)

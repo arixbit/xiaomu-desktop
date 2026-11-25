@@ -14,7 +14,13 @@ import (
 	"github.com/arixbit/xiaomu-desktop/internal/source"
 )
 
-const workers = 4
+const (
+	workers                 = source.BackgroundLimit
+	interactiveWorkers      = source.InteractiveLimit
+	defaultBackgroundTime   = 12 * time.Second
+	defaultInteractiveTime  = 8 * time.Second
+	unknownLatencyThreshold = 2 * time.Second
+)
 
 // Entry identifies a site and the playback parsers belonging to its line.
 type Entry struct {
@@ -52,16 +58,20 @@ type Target struct {
 	Page  int
 }
 
-// Options controls a home/search scan. Cached documents are read-only snapshots.
+// Options controls a home/search scan. Cached documents, Latency and
+// PreferredKeys are read-only snapshots.
 type Options struct {
-	Assets      string
-	Query       string
-	Cached      map[string]*config.Config
-	More        []Target
-	Fetch       config.Fetcher
-	Timeout     time.Duration
-	SearchCache *SearchCache
-	Skip        map[string]bool
+	Assets        string
+	Query         string
+	Cached        map[string]*config.Config
+	More          []Target
+	Fetch         config.Fetcher
+	Timeout       time.Duration
+	SearchCache   *SearchCache
+	Skip          map[string]bool
+	Interactive   bool
+	Latency       map[string]time.Duration
+	PreferredKeys map[string]bool
 }
 
 // Result is one site's completed page; failures do not discard other results.
@@ -101,20 +111,30 @@ type completion struct {
 }
 
 // Scan loads all lines in an imported depot and streams recommendations (empty
-// Query) or search results. Four workers bound network and script work. Every
-// task has a deadline; cancellation waits for workers and releases all runtimes.
+// Query) or search results. Background scans stay bounded to 4 workers;
+// interactive foreground searches scale up lightweight HTTP sites while still
+// capping heavy script engines. Every task has a deadline; cancellation waits
+// for workers and releases all runtimes.
 func Scan(ctx context.Context, root *config.Config, options Options, emit func(Event)) error {
 	if root == nil {
 		return fmt.Errorf("请先添加片库")
 	}
+	workerCount := workers
+	if options.Interactive {
+		workerCount = interactiveWorkers
+	}
 	if options.Timeout <= 0 {
-		options.Timeout = 12 * time.Second
+		if options.Interactive {
+			options.Timeout = defaultInteractiveTime
+		} else {
+			options.Timeout = defaultBackgroundTime
+		}
 	}
 	options.Query = strings.TrimSpace(options.Query)
 	jobs := make(chan task)
-	completed := make(chan completion, workers)
+	completed := make(chan completion, workerCount)
 	var wg sync.WaitGroup
-	for range workers {
+	for range workerCount {
 		wg.Go(func() {
 			for work := range jobs {
 				if ctx.Err() != nil {
@@ -173,15 +193,17 @@ func Scan(ctx context.Context, root *config.Config, options Options, emit func(E
 	initial := progress
 	initial.Document, initial.URL, initial.Line = root, root.URL, root.Line
 	emit(initial)
-	running, runningDocs := 0, 0
+	running, runningDocs, runningScripts := 0, 0, 0
+	docLimit := max(2, workerCount/2)
 	served := map[string]int{}
 	for len(queue) > 0 || running > 0 {
 		var send chan task
 		var next task
-		nextIndex := 0
+		nextIndex := -1
 		if len(queue) > 0 {
-			// Keep room for videos while slow depot lines are still loading.
-			// Prefer CMS feeds, sharing turns among configurations of that kind.
+			// Keep room for videos while slow depot lines are still loading,
+			// prefer preferred/fast lightweight sites, and avoid dispatching
+			// extra script sites while the script pool is already saturated.
 			docIndex, siteIndex := -1, -1
 			for i, candidate := range queue {
 				if candidate.target == nil {
@@ -190,16 +212,20 @@ func Scan(ctx context.Context, root *config.Config, options Options, emit func(E
 					}
 					continue
 				}
-				if siteIndex < 0 || taskPriority(candidate) < taskPriority(queue[siteIndex]) ||
-					(taskPriority(candidate) == taskPriority(queue[siteIndex]) && served[candidate.target.Entry.Config.URL] < served[queue[siteIndex].target.Entry.Config.URL]) {
+				if runningScripts >= source.ScriptLimit && isScriptSite(candidate.target.Entry.Site.Kind) {
+					continue
+				}
+				if siteIndex < 0 || betterSiteTask(candidate, queue[siteIndex], options, served) {
 					siteIndex = i
 				}
 			}
 			nextIndex = siteIndex
-			if docIndex >= 0 && (siteIndex < 0 || runningDocs < workers/2) {
+			if docIndex >= 0 && (siteIndex < 0 || runningDocs < docLimit) {
 				nextIndex = docIndex
 			}
-			send, next = jobs, queue[nextIndex]
+			if nextIndex >= 0 {
+				send, next = jobs, queue[nextIndex]
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -208,6 +234,9 @@ func Scan(ctx context.Context, root *config.Config, options Options, emit func(E
 			queue = append(queue[:nextIndex], queue[nextIndex+1:]...)
 			if next.target != nil {
 				served[next.target.Entry.Config.URL]++
+				if isScriptSite(next.target.Entry.Site.Kind) {
+					runningScripts++
+				}
 			} else {
 				runningDocs++
 			}
@@ -216,6 +245,8 @@ func Scan(ctx context.Context, root *config.Config, options Options, emit func(E
 			running--
 			if done.task.target == nil {
 				runningDocs--
+			} else if isScriptSite(done.task.target.Entry.Site.Kind) {
+				runningScripts--
 			}
 			if done.cooling {
 				progress.Cooling++
@@ -251,6 +282,45 @@ func taskPriority(work task) int {
 	}
 }
 
+func isScriptSite(kind config.Kind) bool {
+	return taskPriority(task{target: &Target{Entry: Entry{Site: config.Site{Kind: kind}}}}) != 0
+}
+
+func betterSiteTask(a, b task, options Options, served map[string]int) bool {
+	keyA, keyB := a.target.Entry.Key(), b.target.Entry.Key()
+	prefA, prefB := options.PreferredKeys[keyA], options.PreferredKeys[keyB]
+	if prefA != prefB {
+		return prefA
+	}
+	priA, priB := taskPriority(a), taskPriority(b)
+	if priA != priB {
+		return priA < priB
+	}
+	latA, hasLatA := options.Latency[keyA]
+	latB, hasLatB := options.Latency[keyB]
+	if hasLatA || hasLatB {
+		effA := unknownLatencyThreshold
+		if hasLatA && latA > 0 {
+			effA = latA
+		}
+		effB := unknownLatencyThreshold
+		if hasLatB && latB > 0 {
+			effB = latB
+		}
+		if effA != effB {
+			return effA < effB
+		}
+	}
+	return served[a.target.Entry.Config.URL] < served[b.target.Entry.Config.URL]
+}
+
+func acquireScanSlot(ctx context.Context, interactive bool) (func(), error) {
+	if interactive {
+		return source.AcquireInteractive(ctx)
+	}
+	return source.AcquireBackground(ctx)
+}
+
 func execute(parent context.Context, work task, options Options) (out completion) {
 	ctx, cancel := context.WithTimeout(parent, options.Timeout)
 	defer cancel()
@@ -268,7 +338,7 @@ func execute(parent context.Context, work task, options Options) (out completion
 			out.doc = cached
 			return out
 		}
-		release, err := source.AcquireBackground(ctx)
+		release, err := acquireScanSlot(ctx, options.Interactive)
 		if err != nil {
 			out.err = err
 			return out
@@ -297,12 +367,20 @@ func execute(parent context.Context, work task, options Options) (out completion
 		}()
 	}
 	var session source.Session
-	release, acquireErr := source.AcquireBackground(ctx)
+	release, acquireErr := acquireScanSlot(ctx, options.Interactive)
 	if acquireErr != nil {
 		out.err = acquireErr
 		return out
 	}
 	defer release()
+	if isScriptSite(target.Entry.Site.Kind) {
+		releaseScript, scriptErr := source.AcquireScript(ctx)
+		if scriptErr != nil {
+			out.err = scriptErr
+			return out
+		}
+		defer releaseScript()
+	}
 	// Queueing for the shared budget is not the source's measured latency.
 	start = time.Now()
 	var categories []catalog.Category

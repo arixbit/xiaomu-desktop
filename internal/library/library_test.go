@@ -200,3 +200,123 @@ func TestTaskPriorityPlacesPanAndAListAlongsideCMS(t *testing.T) {
 		}
 	}
 }
+
+func TestInteractiveScanRunsIndependentlyOfBlockedBackground(t *testing.T) {
+	// Occupy every background slot with slow background requests.
+	bgStarted := make(chan struct{}, workers)
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	defer bgCancel()
+	bgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bgStarted <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer bgSrv.Close()
+	bgRoot := &config.Config{URL: bgSrv.URL + "/bg"}
+	for i := range workers {
+		bgRoot.Sites = append(bgRoot.Sites, config.Site{Key: fmt.Sprintf("bg-%d", i), API: bgSrv.URL, Kind: config.KindJSON})
+	}
+	bgDone := make(chan struct{})
+	go func() {
+		defer close(bgDone)
+		_ = Scan(bgCtx, bgRoot, Options{Query: "背景"}, func(Event) {})
+	}()
+	for range workers {
+		select {
+		case <-bgStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("background slots did not fill")
+		}
+	}
+
+	// An interactive search scales above BackgroundLimit without waiting on background work.
+	var active, peak atomic.Int32
+	fgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := active.Add(1)
+		defer active.Add(-1)
+		for old := peak.Load(); n > old && !peak.CompareAndSwap(old, n); old = peak.Load() {
+		}
+		time.Sleep(40 * time.Millisecond)
+		fmt.Fprint(w, `{"pagecount":1,"list":[{"vod_id":"1","vod_name":"示例"}]}`)
+	}))
+	defer fgSrv.Close()
+	fgRoot := &config.Config{URL: fgSrv.URL + "/fg"}
+	for i := range 16 {
+		fgRoot.Sites = append(fgRoot.Sites, config.Site{Key: fmt.Sprintf("fg-%d", i), API: fmt.Sprintf("%s/%d", fgSrv.URL, i), Kind: config.KindJSON})
+	}
+	var results int
+	err := Scan(context.Background(), fgRoot, Options{Query: "示例", Interactive: true}, func(e Event) {
+		if e.Result != nil && e.Err == nil {
+			results++
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results != 16 {
+		t.Fatalf("results=%d, want 16", results)
+	}
+	if peak.Load() <= workers || peak.Load() > interactiveWorkers {
+		t.Fatalf("interactive peak concurrency = %d, want in (%d, %d]", peak.Load(), workers, interactiveWorkers)
+	}
+
+	bgCancel()
+	<-bgDone
+}
+
+func TestScanSchedulesPreferredAndFasterSitesFirst(t *testing.T) {
+	root := &config.Config{URL: "https://example.com/depot"}
+	makeTask := func(key string, kind config.Kind) task {
+		target := Target{Entry: Entry{Config: root, Site: config.Site{Key: key, API: "https://example.com/" + key, Kind: kind}}, Page: 1}
+		return task{target: &target}
+	}
+	preferred := makeTask("pref", config.KindDRPY2) // even a script site goes first if preferred
+	fast := makeTask("fast", config.KindJSON)
+	unknown := makeTask("unknown", config.KindJSON)
+	slow := makeTask("slow", config.KindJSON)
+	script := makeTask("script", config.KindXBPQ)
+
+	opts := Options{
+		PreferredKeys: map[string]bool{preferred.target.Entry.Key(): true},
+		Latency: map[string]time.Duration{
+			fast.target.Entry.Key(): 180 * time.Millisecond,
+			slow.target.Entry.Key(): 5 * time.Second,
+		},
+	}
+	served := map[string]int{}
+	if !betterSiteTask(preferred, fast, opts, served) {
+		t.Fatal("preferred site did not outrank fast site")
+	}
+	if !betterSiteTask(fast, unknown, opts, served) {
+		t.Fatal("fast site did not outrank unmeasured site")
+	}
+	if !betterSiteTask(unknown, slow, opts, served) {
+		t.Fatal("unmeasured site did not outrank very slow site")
+	}
+	if !betterSiteTask(slow, script, opts, served) {
+		t.Fatal("lightweight CMS site did not outrank heavy script site")
+	}
+}
+
+func TestInteractiveScanCapsConcurrentScriptSites(t *testing.T) {
+	var scriptActive, scriptPeak atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := scriptActive.Add(1)
+		defer scriptActive.Add(-1)
+		for old := scriptPeak.Load(); n > old && !scriptPeak.CompareAndSwap(old, n); old = scriptPeak.Load() {
+		}
+		time.Sleep(35 * time.Millisecond)
+		fmt.Fprint(w, `<html><div class="item"><a href="/v/1" title="示例">示例</a></div></html>`)
+	}))
+	defer srv.Close()
+	root := &config.Config{URL: srv.URL + "/config"}
+	ext := fmt.Sprintf(`{"搜索url":"%s/s?wd={wd}","数组":"<div class=\"item\">&&</div>","标题":"title=\"&&\"","链接":"href=\"&&\""}`, srv.URL)
+	for i := range 10 {
+		root.Sites = append(root.Sites, config.Site{Key: fmt.Sprintf("xbpq-%d", i), Kind: config.KindXBPQ, API: "csp_XBPQ", Ext: ext})
+	}
+	if err := Scan(context.Background(), root, Options{Query: "示例", Interactive: true}, func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+	if scriptPeak.Load() > 4 {
+		t.Fatalf("script peak concurrency = %d, want <= 4", scriptPeak.Load())
+	}
+}

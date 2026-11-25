@@ -40,33 +40,79 @@ func testClient(t *testing.T, handler http.HandlerFunc) *Client {
 	return c
 }
 
-func TestFetchHotListsAndPersistIndependently(t *testing.T) {
+func TestFetchAllCollectionsAndPersistIndependently(t *testing.T) {
+	wantPaths := map[Kind]string{
+		Hot:         "/rexxar/api/v2/subject_collection/subject_real_time_hotest/items",
+		Movie:       "/rexxar/api/v2/subject_collection/movie_hot_gaia/items",
+		TV:          "/rexxar/api/v2/subject_collection/tv_hot/items",
+		Show:        "/rexxar/api/v2/subject_collection/show_hot/items",
+		Animation:   "/rexxar/api/v2/subject_collection/tv_animation/items",
+		ShortDrama:  "/rexxar/api/v2/subject/recent_hot/tv",
+		Documentary: "/rexxar/api/v2/subject_collection/tv_documentary/items",
+		Top250:      "/rexxar/api/v2/subject_collection/movie_top250/items",
+	}
+	seenPaths := map[string]bool{}
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		if r.URL.Path != "/j/search_subjects" || q.Get("tag") != "热门" || q.Get("page_start") != "0" || q.Get("page_limit") != "24" || q.Get("sort") != "recommend" {
-			t.Errorf("unexpected request: %s", r.URL)
+		wantReferer := "https://m.douban.com/"
+		if r.URL.Path == wantPaths[ShortDrama] {
+			wantReferer = "https://movie.douban.com/tv/"
+			if q.Get("start") != "0" || q.Get("limit") != "24" || q.Get("category") != "tv" || q.Get("type") != "tv_short_drama" || q.Get("include_short_drama") != "true" {
+				t.Errorf("unexpected short drama query: %s", r.URL)
+			}
+		} else if q.Get("start") != "0" || q.Get("count") != "24" {
+			t.Errorf("unexpected query: %s", r.URL)
 		}
-		if r.Header.Get("Referer") != "https://movie.douban.com/" || r.Header.Get("User-Agent") != "Mozilla/5.0" {
-			t.Errorf("headers: %v", r.Header)
+		if r.Header.Get("Referer") != wantReferer || r.Header.Get("User-Agent") != "Mozilla/5.0" {
+			t.Errorf("headers: %v (want referer %q)", r.Header, wantReferer)
 		}
-		fmt.Fprintf(w, `{"subjects":[{"id":"1","title":%q,"cover":"https://example.com/poster.jpg","rate":"8.5"},{"id":"2","title":"暂未评分","rate":"","episodes_info":"更新至12集"},{"id":"1","title":"重复"},{"id":"","title":"无效条目"},{"id":"3","title":" "}]}`, q.Get("type"))
+		seenPaths[r.URL.Path] = true
+		switch r.URL.Path {
+		case wantPaths[ShortDrama]:
+			fmt.Fprint(w, `{"total":100,"items":[
+				{"id":"short-1","title":"热门短剧演示","type":"tv","pic":{"large":"https://example.com/short.jpg"},"rating":{"value":7.8}},
+				{"id":"playlist-1","title":"非影视片单","type":"playlist"}
+			]}`)
+		case wantPaths[Movie]:
+			// movie_hot_gaia uses cover.url instead of pic.
+			fmt.Fprint(w, `{"total":300,"subject_collection_items":[
+				{"id":"1","title":"movie","type":"movie","cover":{"url":"https://example.com/movie.jpg"},"rating":{"value":8.5}},
+				{"id":"2","title":"暂未评分","type":"movie","rating":{"value":0},"episodes_info":"更新至12集"},
+				{"id":"1","title":"重复","type":"movie"},
+				{"id":"","title":"无效条目","type":"movie"},
+				{"id":"3","title":" ","type":"movie"}
+			]}`)
+		case wantPaths[Hot]:
+			// subject_real_time_hotest can include non-video items such as books/music.
+			fmt.Fprint(w, `{"total":20,"subject_collection_items":[
+				{"id":"10","title":"hot","type":"tv","pic":{"large":"https://example.com/hot.jpg"},"rating":{"value":8.7},"rank":1},
+				{"id":"11","title":"一本热书","type":"book","rating":{"value":9.1},"rank":2},
+				{"id":"12","title":"一首热歌","type":"music","rating":{"value":8.8},"rank":3}
+			]}`)
+		case wantPaths[Top250]:
+			fmt.Fprint(w, `{"total":250,"subject_collection_items":[
+				{"id":"250","title":"top250","type":"movie","cover_url":"https://example.com/top.jpg","rating":{"value":9.7},"rank":1}
+			]}`)
+		default:
+			name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/rexxar/api/v2/subject_collection/"), "/items")
+			fmt.Fprintf(w, `{"total":10,"subject_collection_items":[{"id":%q,"title":%q,"type":"tv","pic":{"normal":"https://example.com/p.jpg"},"rating":{"value":8.1},"episodes_info":"更新至8集"}]}`, name, name)
+		}
 	})
-	for _, kind := range []Kind{Movie, TV} {
+
+	for _, kind := range AllKinds() {
 		feed, err := c.Fetch(context.Background(), kind)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("%s: %v", kind, err)
 		}
-		if len(feed.Subjects) != 2 || feed.Subjects[0].Title != string(kind) || feed.Subjects[0].Rating != "8.5" || feed.Subjects[1].Episodes != "更新至12集" {
-			t.Fatalf("feed=%+v", feed)
+		if !seenPaths[wantPaths[kind]] {
+			t.Fatalf("%s did not hit %s", kind, wantPaths[kind])
 		}
 		if err := c.Save(feed); err != nil {
-			t.Fatal(err)
+			t.Fatalf("%s save: %v", kind, err)
 		}
-	}
-	for _, kind := range []Kind{Movie, TV} {
 		cached := New(c.CacheDir).Cached(kind)
-		if !cached.Fresh(time.Now()) || cached.Subjects[0].Title != string(kind) {
-			t.Fatalf("cache=%+v", cached)
+		if !cached.Fresh(time.Now()) || len(cached.Subjects) != len(feed.Subjects) {
+			t.Fatalf("%s cache=%+v", kind, cached)
 		}
 		info, err := os.Stat(c.cachePath(kind))
 		if err != nil {
@@ -76,6 +122,79 @@ func TestFetchHotListsAndPersistIndependently(t *testing.T) {
 		if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
 			t.Fatal("cache permissions are too broad")
 		}
+	}
+
+	movie := c.Cached(Movie)
+	if len(movie.Subjects) != 2 || movie.Subjects[0].Cover != "https://example.com/movie.jpg" || movie.Subjects[0].Rating != "8.5" || movie.Subjects[1].Rating != "" || movie.Subjects[1].Episodes != "更新至12集" || !movie.HasMore() {
+		t.Fatalf("movie=%+v", movie)
+	}
+	hot := c.Cached(Hot)
+	if len(hot.Subjects) != 1 || hot.Subjects[0].Title != "hot" || hot.Subjects[0].Rank != 1 || hot.Next != 3 || !hot.HasMore() {
+		t.Fatalf("hot=%+v", hot)
+	}
+	short := c.Cached(ShortDrama)
+	if len(short.Subjects) != 1 || short.Subjects[0].Title != "热门短剧演示" || short.Subjects[0].Rating != "7.8" || short.Next != 2 || !short.HasMore() {
+		t.Fatalf("short=%+v", short)
+	}
+	top := c.Cached(Top250)
+	if len(top.Subjects) != 1 || top.Subjects[0].Cover != "https://example.com/top.jpg" || top.Subjects[0].Rank != 1 || top.Subjects[0].Rating != "9.7" || !top.HasMore() {
+		t.Fatalf("top250=%+v", top)
+	}
+	if len(HotKinds()) != len(AllKinds())-1 {
+		t.Fatalf("HotKinds=%v AllKinds=%v", HotKinds(), AllKinds())
+	}
+}
+
+func TestFetchPageAndMergePagination(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("start") {
+		case "0":
+			fmt.Fprint(w, `{"total":3,"subject_collection_items":[
+				{"id":"1","title":"第一部","type":"movie","rating":{"value":9.7},"rank":1},
+				{"id":"2","title":"第二部","type":"movie","rating":{"value":9.6},"rank":2}
+			]}`)
+		case "2":
+			fmt.Fprint(w, `{"total":3,"subject_collection_items":[
+				{"id":"2","title":"第二部重复","type":"movie","rating":{"value":9.6},"rank":2},
+				{"id":"3","title":"第三部","type":"movie","rating":{"value":9.5},"rank":3}
+			]}`)
+		default:
+			fmt.Fprint(w, `{"total":3,"subject_collection_items":[]}`)
+		}
+	})
+
+	p1, err := c.Fetch(context.Background(), Top250)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p1.Subjects) != 2 || p1.Next != 2 || p1.Total != 3 || !p1.HasMore() {
+		t.Fatalf("p1=%+v", p1)
+	}
+	origUpdated := p1.Updated
+
+	p2, err := c.FetchPage(context.Background(), Top250, p1.Next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged := MergePage(p1, p2)
+	if len(merged.Subjects) != 3 || merged.Subjects[2].ID != "3" || merged.Subjects[2].Rank != 3 {
+		t.Fatalf("merged=%+v", merged)
+	}
+	if !merged.Updated.Equal(origUpdated) {
+		t.Fatalf("merge altered original refresh timestamp: %v vs %v", merged.Updated, origUpdated)
+	}
+	if merged.HasMore() {
+		t.Fatalf("expected pagination exhausted: %+v", merged)
+	}
+
+	// Empty trailing page succeeds cleanly without error and keeps HasMore false.
+	emptyPage, err := c.FetchPage(context.Background(), Top250, 99)
+	if err != nil {
+		t.Fatalf("empty trailing page errored: %v", err)
+	}
+	done := MergePage(merged, emptyPage)
+	if done.HasMore() || len(done.Subjects) != 3 {
+		t.Fatalf("done=%+v", done)
 	}
 }
 
@@ -87,7 +206,8 @@ func TestBadResponsesLeavePreviousCacheIntact(t *testing.T) {
 		{"rate limited", "", "HTTP 429", 429},
 		{"html validation", "<html>verify</html>", "网页验证", 200},
 		{"malformed", "{broken", "无法读取", 200},
-		{"empty", `{"subjects":[]}`, "暂未返回", 200},
+		{"empty", `{"subject_collection_items":[]}`, "暂未返回", 200},
+		{"only non-video", `{"subject_collection_items":[{"id":"b1","title":"书","type":"book"}]}`, "暂未返回", 200},
 		{"missing list", `{"error":"blocked"}`, "暂未返回", 200},
 		{"oversized", strings.Repeat(" ", maxBytes+1), "过大", 200},
 	} {

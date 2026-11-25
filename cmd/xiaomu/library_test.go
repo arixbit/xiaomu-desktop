@@ -43,10 +43,14 @@ func TestLibraryItemRankPrefersDoubanHotTitles(t *testing.T) {
 
 func TestHotTitlesComeFromCachedDoubanLists(t *testing.T) {
 	a := &app{}
+	a.discovery.hot.feed = douban.Feed{Subjects: []douban.Subject{{Title: "实时热播"}}}
 	a.discovery.movie.feed = douban.Feed{Subjects: []douban.Subject{{Title: "热播电影"}}}
 	a.discovery.tv.feed = douban.Feed{Subjects: []douban.Subject{{Title: "热播剧集"}}}
+	a.discovery.show.feed = douban.Feed{Subjects: []douban.Subject{{Title: "热播综艺"}}}
+	a.discovery.short.feed = douban.Feed{Subjects: []douban.Subject{{Title: "热门短剧"}}}
+	a.discovery.top250.feed = douban.Feed{Subjects: []douban.Subject{{Title: "经典老片"}}}
 	hot := a.hotTitles()
-	if !hot[titleKey("热播电影")] || !hot[titleKey("热播剧集")] || hot[titleKey("其他")] {
+	if !hot[titleKey("实时热播")] || !hot[titleKey("热播电影")] || !hot[titleKey("热播剧集")] || !hot[titleKey("热播综艺")] || !hot[titleKey("热门短剧")] || hot[titleKey("经典老片")] || hot[titleKey("其他")] {
 		t.Fatalf("hot titles: %v", hot)
 	}
 }

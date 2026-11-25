@@ -90,10 +90,12 @@ func TestSuggestMatchesOrdering(t *testing.T) {
 func TestSearchSuggestionsMergeHistoryAndDouban(t *testing.T) {
 	a := &app{}
 	a.searchHistory.queries = []string{"搜过的片"}
+	a.discovery.hot.feed = douban.Feed{Subjects: []douban.Subject{{Title: "实时热播"}}}
 	a.discovery.movie.feed = douban.Feed{Subjects: []douban.Subject{{Title: "热播电影"}, {Title: "搜过的片"}}}
 	a.discovery.tv.feed = douban.Feed{Subjects: []douban.Subject{{Title: "热播剧集"}}}
+	a.discovery.top250.feed = douban.Feed{Subjects: []douban.Subject{{Title: "经典高分"}}}
 	got := a.searchSuggestions()
-	if len(got) != 3 || got[0] != "搜过的片" || got[1] != "热播电影" || got[2] != "热播剧集" {
+	if len(got) != 5 || got[0] != "搜过的片" || got[1] != "实时热播" || got[2] != "热播电影" || got[3] != "热播剧集" || got[4] != "经典高分" {
 		t.Fatalf("history first, then hot titles, deduped: %q", got)
 	}
 }

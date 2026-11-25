@@ -13,7 +13,7 @@
 - **播放引擎**：优先使用 `github.com/arixbit/mygo-player`（`libmpv` LGPL-2.1+，零 cgo；macOS 走 VideoToolbox + Metal 零拷贝，Windows x64 走 D3D11VA + `ui.Bitmap`），支持全格式容器、多音轨、内外挂字幕及原生请求头；其他平台与无头单测平滑回退 MyGo 内置 `ui.VideoPlayer`。HTTP/HLS/HTTP-FLV 播放经 `127.0.0.1` 本地代理注入 Referer / UA / Cookie、改写 m3u8 并统计下载速度；`libmpv` 后端下直播亦支持直连 `rtsp://` / `rtmp://`。
 - **脚本引擎**：`modernc.org/quickjs`（纯 Go，无 cgo），用于运行 drpy2 与 FongMi class 脚本；另原生解释 `csp_XBPQ` 规则与 type 0/1 CMS。
 - **隔离 WebView**：仅用于动态网页嗅探（`cmd/xiaomu/sniff.go`）和网盘官方网页登录（`cmd/xiaomu/pan_auth.go`），不向页面暴露 Go 方法。
-- **目标平台**：macOS 13+（`darwin/universal`，App 声明与 Go 1.27.3 最低要求一致）与 Windows 10/11（`windows/amd64`；`mygo-player v0.5.1` 暂未提供 `windows/arm64` 动态库）。
+- **目标平台**：macOS 13+（`darwin/arm64` 与 `darwin/amd64` 分架构打包，App 声明与 Go 1.27.3 最低要求一致）与 Windows 10/11（`windows/amd64`；`mygo-player v0.5.1` 暂未提供 `windows/arm64` 动态库）。
 
 ## 目录
 
