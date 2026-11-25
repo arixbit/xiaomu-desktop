@@ -2,11 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -231,4 +236,57 @@ func TestDarwinArchUpdateSourceRetriesTransientErrorsAndRequiresHTTPS(t *testing
 		t.Fatalf("loopback Open failed: %v", err)
 	}
 	rc.Close()
+}
+
+func TestUniversalBridgeManifestValidForTwoHopMigration(t *testing.T) {
+	bridgePath := filepath.Join("..", "..", "scripts", "update-darwin-universal-bridge.json")
+	raw, err := os.ReadFile(bridgePath)
+	if err != nil {
+		t.Fatalf("read bridge manifest: %v", err)
+	}
+	var manifest struct {
+		Version   string `json:"version"`
+		Notes     string `json:"notes"`
+		URL       string `json:"url"`
+		Size      int64  `json:"size"`
+		Signature string `json:"signature"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("parse bridge manifest: %v", err)
+	}
+	if manifest.Version != "0.9.8" {
+		t.Fatalf("bridge manifest version = %q, want 0.9.8", manifest.Version)
+	}
+	const wantURL = "https://github.com/arixbit/xiaomu-desktop/releases/download/v0.9.8/xiaomu-0.9.8-darwin-universal.tar.gz"
+	if manifest.URL != wantURL {
+		t.Fatalf("bridge manifest url = %q, want %q", manifest.URL, wantURL)
+	}
+	if manifest.Size <= 0 {
+		t.Fatalf("bridge manifest size = %d, want > 0", manifest.Size)
+	}
+	if strings.TrimSpace(manifest.Notes) == "" {
+		t.Fatal("bridge manifest notes must not be empty")
+	}
+	sig, err := base64.StdEncoding.DecodeString(manifest.Signature)
+	if err != nil || len(sig) != ed25519.SignatureSize {
+		t.Fatalf("invalid bridge manifest signature: len=%d err=%v", len(sig), err)
+	}
+
+	// Ensure mygo.json still carries a valid Ed25519 public key for updater verification.
+	cfgRaw, err := os.ReadFile(filepath.Join("..", "..", "mygo.json"))
+	if err != nil {
+		t.Fatalf("read mygo.json: %v", err)
+	}
+	var cfg struct {
+		Updates struct {
+			PublicKey string `json:"publicKey"`
+		} `json:"updates"`
+	}
+	if err := json.Unmarshal(cfgRaw, &cfg); err != nil {
+		t.Fatalf("parse mygo.json: %v", err)
+	}
+	pub, err := base64.StdEncoding.DecodeString(cfg.Updates.PublicKey)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		t.Fatalf("invalid mygo.json updates.publicKey: len=%d err=%v", len(pub), err)
+	}
 }

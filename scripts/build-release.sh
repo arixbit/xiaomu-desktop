@@ -1,7 +1,11 @@
 #!/bin/sh
 # Release builds must include signed update archives and manifests for both macOS architectures.
-# Pass --with-universal-bridge during a migration release to also produce the signed universal
-# update archive and manifest for older v0.3.0-v0.9.7 installations.
+# By default, the script also stages the frozen 2 KB v0.9.8 universal bridge manifest
+# (scripts/update-darwin-universal-bridge.json) into <out>/darwin-universal/update-darwin-universal.json
+# so legacy v0.3.0-v0.9.7 Universal users always two-hop upgrade (0.9.7 -> 0.9.8 -> latest
+# single-arch) without hitting 404 or rebuilding a 47 MB Universal tarball.
+# Pass --with-universal-bridge only if you explicitly need to build a fresh Universal tarball
+# and manifest for the current version.
 set +x
 set -eu
 
@@ -28,6 +32,7 @@ command -v python3 >/dev/null 2>&1 || {
 }
 
 python3 - "$@" <<'PY'
+import base64
 import json
 import os
 from pathlib import Path
@@ -106,15 +111,34 @@ for arch, _ in architectures:
         if zip_res.returncode:
             sys.exit(zip_res.returncode)
 
+static_bridge_src = Path("scripts/update-darwin-universal-bridge.json")
 if with_universal_bridge:
-    # Transition bridge only: produce the signed universal update archive and
-    # manifest (without DMG/ZIP) so legacy Universal users auto-update onto a
-    # release whose updater switches them to arm64/amd64 on the next upgrade.
+    # Rebuild a fresh signed universal update archive and manifest (without DMG/ZIP)
+    # for the current version instead of reusing the frozen v0.9.8 two-hop bridge manifest.
     bridge_res = subprocess.run(
         ["go", "tool", "mygo", "build", "-platform", "darwin/universal", "-skip-dmg", "-skip-notarize", *build_args]
     )
     if bridge_res.returncode:
         sys.exit(bridge_res.returncode)
+else:
+    # Stage only the frozen 2 KB v0.9.8 universal manifest so legacy v0.3.0-v0.9.7
+    # Universal installs automatically two-hop via v0.9.8 onto single-arch updates.
+    if not static_bridge_src.is_file():
+        sys.exit(f"缺少静态过渡桥接清单：{static_bridge_src}")
+    bridge_meta = json.loads(static_bridge_src.read_text(encoding="utf-8"))
+    sig = base64.b64decode(bridge_meta.get("signature") or "", validate=True)
+    if (
+        not bridge_meta.get("version")
+        or not str(bridge_meta.get("url") or "").startswith("https://")
+        or int(bridge_meta.get("size") or 0) <= 0
+        or len(sig) != 64
+    ):
+        sys.exit(f"静态过渡桥接清单校验失败：{static_bridge_src}")
+    bridge_dir = out / "darwin-universal"
+    if bridge_dir.exists():
+        shutil.rmtree(bridge_dir)
+    bridge_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(static_bridge_src, bridge_dir / "update-darwin-universal.json")
 
 missing = []
 arch_errors = []
@@ -158,6 +182,10 @@ if with_universal_bridge:
                 got = set(probe.stdout.strip().split())
                 if probe.returncode != 0 or got != {"x86_64", "arm64"}:
                     arch_errors.append(f"{binary}: 期望 x86_64 arm64，实际 {probe.stdout.strip() or probe.stderr.strip()}")
+else:
+    bridge_manifest = out / "darwin-universal" / "update-darwin-universal.json"
+    if not bridge_manifest.is_file() or bridge_manifest.stat().st_size == 0:
+        missing.append(str(bridge_manifest))
 
 if missing:
     sys.exit("发布构建不完整，以下产物缺失或为空：\n  " + "\n  ".join(missing))

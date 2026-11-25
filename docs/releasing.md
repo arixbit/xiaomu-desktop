@@ -22,7 +22,7 @@ sh scripts/build-release.sh -o build/releases/v0.3.0
 
 脚本默认读取上述私钥路径，也可用 `XIAOMU_UPDATE_KEY_FILE` 指定路径，或让 CI 从密钥库注入 `MYGO_UPDATER_PRIVATE_KEY`。缺少密钥时脚本会停止；MyGo 会拒绝与公钥不匹配的密钥。脚本固定分架构构建 `darwin/arm64`（Apple Silicon）与 `darwin/amd64`（Intel）两套独立包，并在所选输出目录检查全部 DMG、ZIP、签名更新包、更新清单及单架构二进制，缺少或架构不符都会失败。普通 `go tool mygo build` 仍可用于本地测试，但缺少私钥时不会生成在线更新附件，不能直接用作公开发布。
 
-在从 Universal 切换到分架构发布的**过渡桥梁版**中，可附加 `--with-universal-bridge`（例如 `sh scripts/build-release.sh --with-universal-bridge -o build/releases/v0.9.8`），额外生成不含 DMG/ZIP 的 `xiaomu-<版本>-darwin-universal.tar.gz` 与 `update-darwin-universal.json` 供旧版 Universal 用户自动升到过渡版；过渡版内置的 macOS 更新源会按当前实际运行架构（`arm64` / `amd64`）拉取后续单架构更新清单，再下一版起去掉该参数即可完成无感迁移。
+默认构建还会把仓库内固化的 2 KB `v0.9.8` 签名桥接清单（`scripts/update-darwin-universal-bridge.json`，其 `url` 固定指向 `v0.9.8` Release 内保留的 `xiaomu-0.9.8-darwin-universal.tar.gz`）自动复制到 `<输出目录>/darwin-universal/update-darwin-universal.json`。后续版本（`v0.9.9+`）**无需再构建或上传 47 MB Universal 更新包**，只需在每次 Release 一并上传这份 2 KB 的 `update-darwin-universal.json`（且不删除 `v0.9.8` Release），即可让仍停留在 `v0.3.0–v0.9.7` 的旧版 macOS 用户永久自动两跳升级（先升 `v0.9.8` 桥梁版，重启后再自动升至最新单架构轻量版），不会遇到 404 断更；而已升至 `v0.9.8+` 的用户会优先请求单架构清单，不会回退或降级。仅当需要重新为当前版本构建完整 Universal 更新包时，才显式传入 `--with-universal-bridge`。
 
 Windows 发布用 `sh scripts/build-release-windows.sh -o build/releases/vX.Y.Z`，同样需要上述更新签名密钥。脚本固定构建 `windows/amd64`（因 `mygo-player v0.5.1` 暂仅提供 `windows-amd64` 动态库 `mpv-2.dll`，当前不构建 `windows/arm64` 产物），并在所选输出目录检查安装包、签名更新包及更新清单，缺少任一产物都会失败。验证后按下节上传附件。
 
@@ -36,6 +36,7 @@ Windows 上 MyGo 会自动下载 NSIS，macOS/Linux 上需要 `makensis`。安�
 - `xiaomu-<版本>-macos-arm64.zip` / `xiaomu-<版本>-macos-amd64.zip`：macOS 可选手动安装压缩包。
 - `xiaomu-<版本>-darwin-arm64.tar.gz` / `xiaomu-<版本>-darwin-amd64.tar.gz`：macOS 更新器下载的对应架构签名更新包。
 - `update-darwin-arm64.json` / `update-darwin-amd64.json`：与各架构更新包配套的版本、说明、大小和签名。
+- `update-darwin-universal.json`：由构建脚本自动从 `scripts/update-darwin-universal-bridge.json` 复用的 2 KB 固定桥接清单（指向 `v0.9.8` Release 内的 Universal 归档，无需再上传新的 Universal `.tar.gz`），保障 `v0.3.0–v0.9.7` 旧版 macOS 永久两跳自动更新不碰 404。
 - `SHA256SUMS`：所有上传附件（除校验文件自身）的 SHA-256。
 - `xiaomu-setup-<版本>-amd64.exe`：Windows x64 安装包（NSIS，内置 `mpv-2.dll`）。
 - `xiaomu-<版本>-windows-amd64.tar.gz`：Windows x64 更新器下载的签名更新包。
@@ -47,4 +48,4 @@ Windows 上 MyGo 会自动下载 NSIS，macOS/Linux 上需要 `makensis`。安�
 
 更新窗口使用原生 `ui`，默认每天检查、由用户确认安装。用户在更新窗口勾选自动下载安装后，后续更新才会自动下载并于下次启动生效。安装完成时会保存播放历史。
 
-App 必须已移出只读 DMG，并能写入所在目录。开发构建和没有写入权限的安装不会自动检查，手动检查会显示不可更新的原因。v0.2.0 及更早版本没有更新器，需手动安装一次新版本。v0.3.0 至 v0.9.7 的 macOS Universal 包会先通过过渡桥梁版的 `update-darwin-universal.json` 自动更新；自过渡版起，macOS 应用内更新器按实际运行芯片动态请求 `update-darwin-arm64.json` 或 `update-darwin-amd64.json`（若单架构清单缺失则自动回退 `update-darwin-universal.json`），后续更新会自动将旧版 Universal 替换为对应芯片的轻量单架构包。若用户跳过过渡版长期未升级，只需手动下载安装一次对应架构的新包即可。
+App 必须已移出只读 DMG，并能写入所在目录。开发构建和没有写入权限的安装不会自动检查，手动检查会显示不可更新的原因。v0.2.0 及更早版本没有更新器，需手动安装一次新版本。v0.3.0 至 v0.9.7 的 macOS Universal 包会从最新 Release 读取这 2 KB 的 `update-darwin-universal.json` 并自动先升级到 `v0.9.8` 过渡桥梁版；重启进入 `v0.9.8` 后，macOS 应用内更新器按实际运行芯片动态请求 `update-darwin-arm64.json` 或 `update-darwin-amd64.json`（若单架构清单缺失则自动回退 `update-darwin-universal.json`，且不会降级），随后自动升级到最新单架构轻量包。因此只要不删除 `v0.9.8` Release 且后续版本持续随附这份 2 KB 桥接清单，老版本用户无论间隔多久都不会因 404 中断更新。
