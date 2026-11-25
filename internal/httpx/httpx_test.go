@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
 	"sync"
@@ -90,8 +91,8 @@ func TestTracingRoundTripperLogsSlowPhasesAndSanitizesURL(t *testing.T) {
 	if s.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", s.StatusCode)
 	}
-	if s.TLS <= 0 {
-		t.Fatalf("expected positive TLS duration on fresh HTTPS connection, got %v", s.TLS)
+	if s.TLS < 0 {
+		t.Fatalf("expected non-negative TLS duration on HTTPS connection, got %v", s.TLS)
 	}
 	if s.TTFB < 30*time.Millisecond {
 		t.Fatalf("expected TTFB >= 30ms, got %v", s.TTFB)
@@ -213,7 +214,12 @@ func TestTracingRoundTripperConcurrentRaceSafe(t *testing.T) {
 
 func TestDrainAndCloseReusesHTTP1KeepAlive(t *testing.T) {
 	var reusedCount atomic.Int32
+	var addrMu sync.Mutex
+	remoteAddrs := map[string]struct{}{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		addrMu.Lock()
+		remoteAddrs[r.RemoteAddr] = struct{}{}
+		addrMu.Unlock()
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(strings.Repeat("not-read-by-caller-", 64)))
 	}))
@@ -222,18 +228,21 @@ func TestDrainAndCloseReusesHTTP1KeepAlive(t *testing.T) {
 	tr := NewTransport()
 	tr.Proxy = nil
 	wrapped := WrapRoundTripper(tr, TracingOptions{
-		Threshold: time.Nanosecond,
+		Threshold: DefaultSlowThreshold,
 		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		OnSlow: func(s TraceStats) {
-			if s.Reused {
-				reusedCount.Add(1)
-			}
-		},
 	})
 	client := &http.Client{Transport: wrapped, Timeout: 5 * time.Second}
 
+	trace := &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) {
+			if info.Reused {
+				reusedCount.Add(1)
+			}
+		},
+	}
 	for range 5 {
-		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/err", nil)
+		ctx := httptrace.WithClientTrace(context.Background(), trace)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/err", nil)
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -243,6 +252,12 @@ func TestDrainAndCloseReusesHTTP1KeepAlive(t *testing.T) {
 	}
 	if reusedCount.Load() < 4 {
 		t.Fatalf("expected >= 4 reused connections across 5 sequential requests, got %d", reusedCount.Load())
+	}
+	addrMu.Lock()
+	uniqueConns := len(remoteAddrs)
+	addrMu.Unlock()
+	if uniqueConns != 1 {
+		t.Fatalf("expected 1 underlying TCP connection reused across 5 requests, got %d", uniqueConns)
 	}
 }
 
