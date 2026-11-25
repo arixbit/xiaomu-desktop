@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	github.com/PuerkitoBio/goquery v1.10.3
-	github.com/arixbit/mygo-player v0.2.1
+	github.com/arixbit/mygo-player v0.5.1
 	github.com/egoist/mygo v0.10.0
 	golang.org/x/net v0.59.0
 	modernc.org/quickjs v0.27.0

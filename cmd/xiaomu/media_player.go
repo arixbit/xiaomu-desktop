@@ -41,17 +41,20 @@ type mediaPlayer interface {
 // mediaTrack describes one video, audio, or subtitle stream exposed by
 // track-capable playback engines such as mygo-player.
 type mediaTrack struct {
-	ID         int64
-	Title      string
-	Lang       string
-	Codec      string
-	Width      int
-	Height     int
-	FPS        float64
-	Channels   int
-	SampleRate int
-	Selected   bool
-	External   bool
+	ID               int64
+	Title            string
+	Lang             string
+	Codec            string
+	Width            int
+	Height           int
+	FPS              float64
+	Channels         int
+	SampleRate       int
+	Selected         bool
+	Default          bool
+	Forced           bool
+	External         bool
+	ExternalFilename string
 }
 
 // trackCapablePlayer is optionally implemented by mediaPlayer backends that
@@ -69,10 +72,15 @@ type trackCapablePlayer interface {
 }
 
 // advancedMediaPlayer is optionally implemented by mediaPlayer backends (such
-// as mygo-player / libmpv) that expose loop control, arbitrary property
-// getters/setters, and video track metadata.
+// as mygo-player / libmpv) that expose loop control, typed subtitle/video
+// fine-tuning, arbitrary property getters/setters, and video track metadata.
 type advancedMediaPlayer interface {
 	SetLoop(loop bool) error
+	SetSubtitleDelay(d time.Duration) error
+	SetSubtitleScale(scale float64) error
+	SetSubtitlePos(pos int) error
+	SetVideoRotate(deg int) error
+	SetPanscan(v float64) error
 	SetPropertyString(name, value string) error
 	GetPropertyString(name string) (string, error)
 	VideoTracks() []mediaTrack
@@ -324,6 +332,26 @@ func (m *mpvMediaPlayer) SetLoop(loop bool) error {
 	return m.p.SetLoop(loop)
 }
 
+func (m *mpvMediaPlayer) SetSubtitleDelay(d time.Duration) error {
+	return m.p.SetSubtitleDelay(d)
+}
+
+func (m *mpvMediaPlayer) SetSubtitleScale(scale float64) error {
+	return m.p.SetSubtitleScale(scale)
+}
+
+func (m *mpvMediaPlayer) SetSubtitlePos(pos int) error {
+	return m.p.SetSubtitlePos(pos)
+}
+
+func (m *mpvMediaPlayer) SetVideoRotate(deg int) error {
+	return m.p.SetVideoRotate(deg)
+}
+
+func (m *mpvMediaPlayer) SetPanscan(v float64) error {
+	return m.p.SetPanscan(v)
+}
+
 func (m *mpvMediaPlayer) SetPropertyString(name, value string) error {
 	return m.p.SetPropertyString(name, value)
 }
@@ -336,6 +364,12 @@ func (m *mpvMediaPlayer) VideoTracks() []mediaTrack {
 	return convertMPVTracks(m.p.VideoTracks())
 }
 
+var (
+	_ mediaPlayer         = (*mpvMediaPlayer)(nil)
+	_ trackCapablePlayer  = (*mpvMediaPlayer)(nil)
+	_ advancedMediaPlayer = (*mpvMediaPlayer)(nil)
+)
+
 func convertMPVTracks(in []mpvplayer.Track) []mediaTrack {
 	if len(in) == 0 {
 		return nil
@@ -343,17 +377,20 @@ func convertMPVTracks(in []mpvplayer.Track) []mediaTrack {
 	out := make([]mediaTrack, len(in))
 	for i, tr := range in {
 		out[i] = mediaTrack{
-			ID:         tr.ID,
-			Title:      tr.Title,
-			Lang:       tr.Lang,
-			Codec:      tr.Codec,
-			Width:      tr.Width,
-			Height:     tr.Height,
-			FPS:        tr.FPS,
-			Channels:   tr.Channels,
-			SampleRate: tr.SampleRate,
-			Selected:   tr.Selected,
-			External:   tr.External,
+			ID:               tr.ID,
+			Title:            tr.Title,
+			Lang:             tr.Lang,
+			Codec:            tr.Codec,
+			Width:            tr.Width,
+			Height:           tr.Height,
+			FPS:              tr.FPS,
+			Channels:         tr.Channels,
+			SampleRate:       tr.SampleRate,
+			Selected:         tr.Selected,
+			Default:          tr.Default,
+			Forced:           tr.Forced,
+			External:         tr.External,
+			ExternalFilename: tr.ExternalFilename,
 		}
 	}
 	return out
@@ -397,12 +434,28 @@ func isSystemContainer(target string) bool {
 	return false
 }
 
+func trackDisplayTitle(t mediaTrack) string {
+	if t.External && t.ExternalFilename != "" {
+		// Reuse mygo-player's external track title cleanup so libmpv's noisy
+		// suffix titles ("srt", "en.srt") and URL query credentials collapse to
+		// the clean basename while preserving explicit titles.
+		return (mpvplayer.Track{
+			ID:               t.ID,
+			Title:            t.Title,
+			External:         true,
+			ExternalFilename: t.ExternalFilename,
+		}).DisplayName()
+	}
+	return strings.TrimSpace(t.Title)
+}
+
 func formatAudioTrackLabel(t mediaTrack, idx int) string {
 	var parts []string
-	if title := strings.TrimSpace(t.Title); title != "" {
+	lang := displayTrackLang(t.Lang)
+	if title := trackDisplayTitle(t); title != "" && !(lang != "" && strings.EqualFold(title, t.Lang)) {
 		parts = append(parts, title)
 	}
-	if lang := displayTrackLang(t.Lang); lang != "" && (len(parts) == 0 || !strings.Contains(strings.ToLower(parts[0]), strings.ToLower(lang))) {
+	if lang != "" && (len(parts) == 0 || !strings.Contains(strings.ToLower(parts[0]), strings.ToLower(lang))) {
 		parts = append(parts, lang)
 	}
 	if len(parts) == 0 {
@@ -422,14 +475,18 @@ func formatAudioTrackLabel(t mediaTrack, idx int) string {
 
 func formatSubtitleTrackLabel(t mediaTrack, idx int) string {
 	var parts []string
-	if title := strings.TrimSpace(t.Title); title != "" {
+	lang := displayTrackLang(t.Lang)
+	if title := trackDisplayTitle(t); title != "" && !(lang != "" && strings.EqualFold(title, t.Lang)) {
 		parts = append(parts, title)
 	}
-	if lang := displayTrackLang(t.Lang); lang != "" && (len(parts) == 0 || !strings.Contains(strings.ToLower(parts[0]), strings.ToLower(lang))) {
+	if lang != "" && (len(parts) == 0 || !strings.Contains(strings.ToLower(parts[0]), strings.ToLower(lang))) {
 		parts = append(parts, lang)
 	}
 	if len(parts) == 0 {
 		parts = append(parts, fmt.Sprintf("字幕 %d", idx+1))
+	}
+	if t.Forced {
+		parts = append(parts, "强制")
 	}
 	if codec := formatTrackCodec(t.Codec); codec != "" {
 		parts = append(parts, codec)
@@ -441,13 +498,22 @@ func formatSubtitleTrackLabel(t mediaTrack, idx int) string {
 }
 
 func displayTrackLang(code string) string {
-	switch strings.ToLower(strings.TrimSpace(code)) {
-	case "", "und", "unk":
+	c := strings.ToLower(strings.TrimSpace(code))
+	switch c {
+	case "", "und", "unk", "mis", "zxx", "mul":
 		return ""
-	case "zh", "zho", "chi", "zh-cn", "zh-hans", "chs", "sc":
+	case "zh", "zho", "chi", "zh-cn", "zh-hans", "chs", "sc", "cmn":
 		return "中文"
 	case "zh-tw", "zh-hk", "zh-hant", "cht", "tc":
 		return "繁体中文"
+	case "yue", "cantonese":
+		return "粤语"
+	}
+	base := c
+	if i := strings.IndexAny(base, "-_"); i > 0 {
+		base = base[:i]
+	}
+	switch base {
 	case "en", "eng":
 		return "English"
 	case "ja", "jpn":
@@ -462,10 +528,12 @@ func displayTrackLang(code string) string {
 		return "西班牙语"
 	case "ru", "rus":
 		return "俄语"
-	case "yue", "cantonese":
+	case "yue":
 		return "粤语"
+	case "zh", "zho", "chi", "cmn":
+		return "中文"
 	default:
-		return strings.ToUpper(strings.TrimSpace(code))
+		return mpvplayer.LanguageName(code)
 	}
 }
 

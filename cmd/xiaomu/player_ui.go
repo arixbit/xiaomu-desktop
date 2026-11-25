@@ -173,9 +173,17 @@ func (a *app) playerScreen(c *ui.Context) {
 	})
 }
 
-func playerGlassButton(c *ui.Context, label string) ui.Element {
-	return applyPressPose(ui.Button(c, label).Radius(16).
+func stylePlayerGlassControl(el ui.Element) ui.Element {
+	return applyPressPose(el.Radius(16).
 		Material(glass.Glass{Style: glass.Clear, Interactive: true}).TextColor(playerText))
+}
+
+func playerGlassButton(c *ui.Context, label string) ui.Element {
+	return stylePlayerGlassControl(ui.Button(c, label))
+}
+
+func playerGlassMenuButton(c *ui.Context, label string, build func(m *ui.Menu)) ui.Element {
+	return stylePlayerGlassControl(ui.MenuButton(c, label, build))
 }
 
 func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
@@ -520,13 +528,17 @@ func (a *app) playerPanel(c *ui.Context, key string) ui.Element {
 	return panel
 }
 
-func panelButton(c *ui.Context, label string, selected bool) ui.Element {
+func stylePanelGlassControl(el ui.Element, selected bool) ui.Element {
 	tint := ui.RGBA(55, 50, 92, 0.39)
 	if selected {
 		tint = ui.RGBA(102, 98, 143, 0.57)
 	}
-	return applyPressPose(ui.Button(c, label).FillWidth().Padding(10, 12).Radius(14).
+	return applyPressPose(el.FillWidth().Padding(10, 12).Radius(14).
 		Material(glass.Glass{Style: glass.Clear, Tint: tint, Interactive: true}).TextColor(playerText))
+}
+
+func panelButton(c *ui.Context, label string, selected bool) ui.Element {
+	return stylePanelGlassControl(ui.Button(c, label), selected)
 }
 
 func (a *app) panelEpisodes(c *ui.Context) {
@@ -604,7 +616,7 @@ func (a *app) panelSources(c *ui.Context, candidates []library.Item) {
 	ui.Text(c, "来源").Bold()
 	if len(candidates) > 1 {
 		retry := a.panelChoice != nil && a.panelChoice.detail == nil && !a.running(jobPlay)
-		ui.MenuButton(c, label, func(m *ui.Menu) {
+		stylePanelGlassControl(ui.MenuButton(c, label, func(m *ui.Menu) {
 			for _, candidate := range candidates {
 				key := itemKey(candidate)
 				selected := item.Entry.Config != nil && itemKey(item) == key
@@ -612,7 +624,7 @@ func (a *app) panelSources(c *ui.Context, candidates []library.Item) {
 					a.switchSource(candidate)
 				}
 			}
-		}).Label("选择来源").FillWidth()
+		}), false).Label("选择来源")
 	} else {
 		ui.Text(c, label)
 	}
@@ -957,7 +969,7 @@ func (a *app) streamControls(c *ui.Context) {
 			currentLabel = l
 		}
 	}
-	ui.MenuButton(c, currentLabel, func(m *ui.Menu) {
+	playerGlassMenuButton(c, currentLabel, func(m *ui.Menu) {
 		for i, s := range a.playingStreams {
 			label := s.Label
 			if label == "" {
@@ -980,7 +992,7 @@ func (a *app) audioTrackControls(c *ui.Context, p mediaPlayer) {
 	if len(tracks) <= 1 {
 		return
 	}
-	ui.MenuButton(c, "音轨", func(m *ui.Menu) {
+	playerGlassMenuButton(c, "音轨", func(m *ui.Menu) {
 		for i, tr := range tracks {
 			label := formatAudioTrackLabel(tr, i)
 			if m.Item(label).ID(fmt.Sprintf("audio-%d", tr.ID)).Radio(tr.Selected).Chosen() {
@@ -1005,7 +1017,7 @@ func (a *app) subtitleTrackControls(c *ui.Context, p mediaPlayer) {
 	tracks := tp.SubtitleTracks()
 	visible := tp.SubtitleVisible()
 	hasActive := hasActiveSubtitleTrack(p)
-	ui.MenuButton(c, "字幕", func(m *ui.Menu) {
+	playerGlassMenuButton(c, "字幕", func(m *ui.Menu) {
 		if len(tracks) > 0 {
 			for i, tr := range tracks {
 				selected := tr.Selected && visible
