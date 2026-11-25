@@ -310,7 +310,7 @@ func (a *app) homeView(c *ui.Context) {
 	// Wrap tabs below 1180px so wider CJK fallback/scaled fonts never crowd
 	// or clip the inline refresh icon button alongside all 9 tabs.
 	wrapTabs := width < 1180
-	separateMetaRow := hasMeta && width < 1300
+	separateMetaRow := hasMeta && width < 1380
 	headerReserve := float32(180)
 	if separateMetaRow {
 		headerReserve = 224
@@ -398,7 +398,7 @@ func (a *app) homeView(c *ui.Context) {
 					a.loadDiscoveryTab(false)
 				}
 				if !separateMetaRow && d.tab != "sites" {
-					ui.Row(c).Gap(10).AlignItems(ui.Center).Shrink(0).Children(func() {
+					ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 						renderDiscoveryMeta(false)
 					})
 				}
