@@ -1,13 +1,128 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"runtime"
+	"strings"
+	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/netproxy"
 	"github.com/egoist/mygo/plugins/updater"
 	updatenative "github.com/egoist/mygo/plugins/updater/native"
 	"github.com/egoist/mygo/ui"
 )
+
+const updateReleaseDownloadBase = "https://github.com/arixbit/xiaomu-desktop/releases/latest/download/"
+
+// darwinArchUpdateSource routes macOS update checks to the running CPU's
+// single-architecture manifest (update-darwin-arm64.json / amd64.json),
+// allowing legacy Universal installations upgraded to this bridge release to
+// migrate seamlessly onto per-architecture builds on the next update.
+type darwinArchUpdateSource struct {
+	baseURL string
+	arch    string
+	client  *http.Client
+	delays  []time.Duration
+}
+
+func newDarwinArchUpdateSource(arch string) *darwinArchUpdateSource {
+	if arch != "arm64" && arch != "amd64" {
+		return nil
+	}
+	base := netproxy.Transport()
+	tr := base.Clone()
+	tr.ResponseHeaderTimeout = 30 * time.Second
+	return &darwinArchUpdateSource{
+		baseURL: updateReleaseDownloadBase,
+		arch:    arch,
+		client:  &http.Client{Transport: tr},
+		delays:  []time.Duration{time.Second, 2 * time.Second},
+	}
+}
+
+func (s *darwinArchUpdateSource) Manifest(ctx context.Context, _ bool) (io.ReadCloser, error) {
+	base := strings.TrimRight(s.baseURL, "/") + "/"
+	primary := base + "update-darwin-" + s.arch + ".json"
+	body, status, err := s.get(ctx, primary)
+	if err == nil {
+		return body, nil
+	}
+	if status == http.StatusNotFound {
+		fallback := base + "update-darwin-universal.json"
+		if fbBody, _, fbErr := s.get(ctx, fallback); fbErr == nil {
+			return fbBody, nil
+		}
+	}
+	return nil, err
+}
+
+func (s *darwinArchUpdateSource) Open(ctx context.Context, rawURL string) (io.ReadCloser, error) {
+	body, _, err := s.get(ctx, rawURL)
+	return body, err
+}
+
+func (s *darwinArchUpdateSource) get(ctx context.Context, rawURL string) (io.ReadCloser, int, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, 0, err
+	}
+	if u.Scheme != "https" && !(u.Scheme == "http" && isUpdateLoopback(u.Hostname())) {
+		return nil, 0, fmt.Errorf("拒绝通过非 HTTPS 地址获取更新：%s", rawURL)
+	}
+	client := s.client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	for try := 0; ; try++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			return nil, 0, err
+		}
+		// Keep User-Agent strictly ASCII: GitHub's release asset CDN rejects
+		// non-ASCII User-Agent headers on cache misses.
+		req.Header.Set("User-Agent", "xiaomu-updater")
+		resp, err := client.Do(req)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			return resp.Body, resp.StatusCode, nil
+		}
+		status := 0
+		var attemptErr error
+		retryable := false
+		if err != nil {
+			attemptErr = err
+			retryable = ctx.Err() == nil
+		} else {
+			status = resp.StatusCode
+			resp.Body.Close()
+			attemptErr = fmt.Errorf("GET %s: %s", rawURL, resp.Status)
+			retryable = status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
+		}
+		if !retryable || try >= len(s.delays) {
+			return nil, status, attemptErr
+		}
+		timer := time.NewTimer(s.delays[try])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, 0, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func isUpdateLoopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
 
 // watchUpdates connects the existing background checks to the main window.
 // Subscribe before reading so a check completed during startup is also shown.
@@ -87,6 +202,11 @@ func updateRailButton(c *ui.Context, version string, height float32) ui.Element 
 // initUpdates runs before App.Run. The native plugin checks in the background
 // and asks before installing, unless the user opts into automatic downloads.
 func (a *app) initUpdates() {
+	if runtime.GOOS == "darwin" {
+		if src := newDarwinArchUpdateSource(runtime.GOARCH); src != nil {
+			mygo.Updater.SetSource(src)
+		}
+	}
 	mygo.Use(updatenative.New(updater.Options{Language: "zh-Hans"}))
 	updater.OnInstalled(a.flushHistory)
 	fileItems := []*mygo.MenuItem{

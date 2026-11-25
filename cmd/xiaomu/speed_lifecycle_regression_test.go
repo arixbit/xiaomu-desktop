@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/source"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -43,13 +44,17 @@ func TestFixSpeedLifecycle(t *testing.T) {
 			a.library = libraryBrowser{root: root, cached: map[string]*config.Config{}, documents: []libraryDocument{{doc: root}}}
 			a.favorites.entries = []favoriteEntry{{Name: "合成追剧"}}
 			a.startScan(&a.library.feed, "", false)
-			a.startScan(&a.library.search, "合成", false)
 			a.refreshFollowing()
 			a.startSourceSpeedTest()
 			time.Sleep(35 * time.Millisecond)
+			if bgPeak := peak.Load(); bgPeak > source.BackgroundLimit {
+				t.Errorf("background budget exceeded by feed/follow/speed: %d > %d", bgPeak, source.BackgroundLimit)
+			}
+			a.startScan(&a.library.search, "合成", false)
+			time.Sleep(35 * time.Millisecond)
 			t.Logf("combined feed/search/follow/speed peak=%d active=%d", peak.Load(), active.Load())
-			if peak.Load() > 4 {
-				t.Errorf("shared budget exceeded: %d", peak.Load())
+			if limit := int64(source.BackgroundLimit + source.InteractiveLimit); peak.Load() > limit {
+				t.Errorf("combined budget exceeded: %d > %d", peak.Load(), limit)
 			}
 			before := requests.Load()
 			start := time.Now()

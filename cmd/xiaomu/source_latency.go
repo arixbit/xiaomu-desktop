@@ -81,6 +81,23 @@ func (s *latencyStore) get(key string) (time.Duration, bool) {
 	return time.Duration(e.Ms) * time.Millisecond, true
 }
 
+// snapshot returns an immutable copy of positive site latencies for scan scheduling.
+func (s *latencyStore) snapshot() map[string]time.Duration {
+	if len(s.entries) == 0 {
+		return nil
+	}
+	out := make(map[string]time.Duration, len(s.entries))
+	for k, e := range s.entries {
+		if e.Ms > 0 {
+			out[k] = time.Duration(e.Ms) * time.Millisecond
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func readLatency(path string) (map[string]latencyEntry, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {

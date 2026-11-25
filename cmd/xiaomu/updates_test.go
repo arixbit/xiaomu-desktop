@@ -1,7 +1,14 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"io"
 	"math"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -108,4 +115,120 @@ func TestUpdateButtonRemainsClickable(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDarwinArchUpdateSourceRoutesByArchAndFallsBackOn404(t *testing.T) {
+	if src := newDarwinArchUpdateSource("ppc64"); src != nil {
+		t.Fatalf("unexpected source for unsupported arch: %+v", src)
+	}
+
+	for _, arch := range []string{"arm64", "amd64"} {
+		t.Run(arch, func(t *testing.T) {
+			var gotPath, gotUA string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				gotUA = r.Header.Get("User-Agent")
+				fmt.Fprintf(w, `{"version":"0.9.9","url":"%s/pkg.tar.gz"}`, "https://example.com")
+			}))
+			defer srv.Close()
+
+			src := &darwinArchUpdateSource{
+				baseURL: srv.URL,
+				arch:    arch,
+				client:  srv.Client(),
+				delays:  []time.Duration{time.Millisecond},
+			}
+			rc, err := src.Manifest(context.Background(), false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(rc)
+			rc.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantPath := "/update-darwin-" + arch + ".json"
+			if gotPath != wantPath {
+				t.Fatalf("requested %q, want %q", gotPath, wantPath)
+			}
+			if gotUA != "xiaomu-updater" {
+				t.Fatalf("User-Agent = %q, want ASCII xiaomu-updater", gotUA)
+			}
+			if !strings.Contains(string(body), `"0.9.9"`) {
+				t.Fatalf("body=%s", body)
+			}
+		})
+	}
+
+	// Missing per-arch manifest (404) falls back to universal manifest.
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path == "/update-darwin-amd64.json" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `{"version":"0.9.8","url":"https://example.com/universal.tar.gz"}`)
+	}))
+	defer srv.Close()
+
+	src := &darwinArchUpdateSource{
+		baseURL: srv.URL,
+		arch:    "amd64",
+		client:  srv.Client(),
+		delays:  []time.Duration{time.Millisecond},
+	}
+	rc, err := src.Manifest(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := io.ReadAll(rc)
+	rc.Close()
+	if len(paths) != 2 || paths[0] != "/update-darwin-amd64.json" || paths[1] != "/update-darwin-universal.json" {
+		t.Fatalf("fallback paths=%v", paths)
+	}
+	if !strings.Contains(string(data), "universal.tar.gz") {
+		t.Fatalf("fallback body=%s", data)
+	}
+}
+
+func TestDarwinArchUpdateSourceRetriesTransientErrorsAndRequiresHTTPS(t *testing.T) {
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/update-darwin-universal.json" {
+			t.Error("transient 503 must not fall back to universal manifest")
+		}
+		if attempts.Add(1) == 1 {
+			http.Error(w, "temporary", http.StatusServiceUnavailable)
+			return
+		}
+		fmt.Fprint(w, `{"version":"0.9.9"}`)
+	}))
+	defer srv.Close()
+
+	src := &darwinArchUpdateSource{
+		baseURL: srv.URL,
+		arch:    "arm64",
+		client:  srv.Client(),
+		delays:  []time.Duration{time.Millisecond},
+	}
+	rc, err := src.Manifest(context.Background(), false)
+	if err != nil {
+		t.Fatalf("retry failed: %v", err)
+	}
+	rc.Close()
+	if attempts.Load() != 2 {
+		t.Fatalf("attempts=%d, want 2", attempts.Load())
+	}
+
+	if _, err := src.Open(context.Background(), "http://example.com/xiaomu.tar.gz"); err == nil || !strings.Contains(err.Error(), "HTTPS") {
+		t.Fatalf("plain HTTP update URL was not rejected: %v", err)
+	}
+
+	// Loopback HTTP is allowed for local tests.
+	rc, err = src.Open(context.Background(), srv.URL+"/update-darwin-arm64.json")
+	if err != nil {
+		t.Fatalf("loopback Open failed: %v", err)
+	}
+	rc.Close()
 }

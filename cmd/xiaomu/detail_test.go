@@ -2,8 +2,12 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
@@ -167,6 +171,9 @@ func TestDetailHeaderShowsDoubanScore(t *testing.T) {
 func TestDoubanScoreLookup(t *testing.T) {
 	_, doc := suggestionTestServer(t)
 	a := newSuggestionTestApp(t, doc)
+	a.discovery.hot.feed = douban.Feed{Subjects: []douban.Subject{
+		{Title: "演示热播", Rating: "8.8"},
+	}}
 	a.discovery.movie.feed = douban.Feed{Subjects: []douban.Subject{
 		{Title: "演示电影", Rating: "8.6"},
 		{Title: "没有评分", Rating: ""},
@@ -174,11 +181,20 @@ func TestDoubanScoreLookup(t *testing.T) {
 	a.discovery.tv.feed = douban.Feed{Subjects: []douban.Subject{
 		{Title: "演示剧集", Rating: "9.1"},
 	}}
+	a.discovery.top250.feed = douban.Feed{Subjects: []douban.Subject{
+		{Title: "演示经典", Rating: "9.7", Rank: 1},
+	}}
+	if got := a.doubanScore("演示热播"); got != "8.8" {
+		t.Fatalf("hot list score = %q, want 8.8", got)
+	}
 	if got := a.doubanScore("演示电影"); got != "8.6" {
 		t.Fatalf("movie list score = %q, want 8.6", got)
 	}
 	if got := a.doubanScore("演示剧集"); got != "9.1" {
 		t.Fatalf("tv list score = %q, want 9.1", got)
+	}
+	if got := a.doubanScore("演示经典"); got != "9.7" {
+		t.Fatalf("top250 list score = %q, want 9.7", got)
 	}
 	if got := a.doubanScore("没有评分"); got != "" {
 		t.Fatalf("unrated title score = %q, want empty", got)
@@ -282,5 +298,164 @@ func TestDetailSourceHintOnlyWhenCurrentFails(t *testing.T) {
 	tt.Frame()
 	if !tt.HasText("当前来源播不了") {
 		t.Fatalf("hint missing after the current source failed: %v", tt.Texts())
+	}
+}
+
+func TestAutoOpenDetailHedgesSlowPrimaryAndSkipsBackupWhenFast(t *testing.T) {
+	origDelay := detailHedgeDelay
+	detailHedgeDelay = 30 * time.Millisecond
+	t.Cleanup(func() { detailHedgeDelay = origDelay })
+
+	t.Run("slow primary loses to hedged backup and cancels", func(t *testing.T) {
+		primaryCanceled := make(chan struct{}, 1)
+		var backupHits atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/slow":
+				<-r.Context().Done()
+				primaryCanceled <- struct{}{}
+			case "/fast":
+				backupHits.Add(1)
+				fmt.Fprint(w, `{"list":[{"vod_id":"2","vod_name":"演示剧","vod_play_from":"快线","vod_play_url":"第1集$https://example.com/1.mp4"}]}`)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer srv.Close()
+
+		doc := &config.Config{URL: srv.URL + "/config"}
+		seeds := []library.Item{
+			{Entry: library.Entry{Config: doc, Site: config.Site{Key: "slow", Name: "慢源", Type: 1, Kind: config.KindJSON, API: srv.URL + "/slow"}}, Video: catalog.Video{ID: "1", Name: "演示剧"}},
+			{Entry: library.Entry{Config: doc, Site: config.Site{Key: "fast", Name: "快源", Type: 1, Kind: config.KindJSON, API: srv.URL + "/fast"}}, Video: catalog.Video{ID: "2", Name: "演示剧"}},
+		}
+		a := &app{}
+		defer a.close()
+		a.library = libraryBrowser{root: doc, cached: map[string]*config.Config{doc.URL: doc}}
+		a.openTitle("演示剧", "", seeds)
+		if a.title == nil || a.title.detail == nil || a.title.item.Entry.Site.Key != "fast" {
+			t.Fatalf("hedged backup did not win: title=%+v", a.title)
+		}
+		if backupHits.Load() != 1 {
+			t.Fatalf("backupHits=%d, want 1", backupHits.Load())
+		}
+		select {
+		case <-primaryCanceled:
+		case <-time.After(time.Second):
+			t.Fatal("slow primary request was not canceled after backup won")
+		}
+	})
+
+	t.Run("fast primary never touches backup", func(t *testing.T) {
+		var backupHits atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/backup" {
+				backupHits.Add(1)
+			}
+			fmt.Fprint(w, `{"list":[{"vod_id":"1","vod_name":"演示剧","vod_play_from":"主线","vod_play_url":"第1集$https://example.com/1.mp4"}]}`)
+		}))
+		defer srv.Close()
+
+		doc := &config.Config{URL: srv.URL + "/config"}
+		seeds := []library.Item{
+			{Entry: library.Entry{Config: doc, Site: config.Site{Key: "primary", Name: "主源", Type: 1, Kind: config.KindJSON, API: srv.URL + "/primary"}}, Video: catalog.Video{ID: "1", Name: "演示剧"}},
+			{Entry: library.Entry{Config: doc, Site: config.Site{Key: "backup", Name: "备源", Type: 1, Kind: config.KindJSON, API: srv.URL + "/backup"}}, Video: catalog.Video{ID: "2", Name: "演示剧"}},
+		}
+		a := &app{}
+		defer a.close()
+		a.library = libraryBrowser{root: doc, cached: map[string]*config.Config{doc.URL: doc}}
+		a.openTitle("演示剧", "", seeds)
+		if a.title == nil || a.title.detail == nil || a.title.item.Entry.Site.Key != "primary" {
+			t.Fatalf("fast primary did not win: title=%+v", a.title)
+		}
+		if backupHits.Load() != 0 {
+			t.Fatalf("backup was requested unnecessarily: hits=%d", backupHits.Load())
+		}
+	})
+
+	t.Run("both failing falls through to third candidate", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/third" {
+				fmt.Fprint(w, `{"list":[{"vod_id":"3","vod_name":"演示剧","vod_play_from":"三线","vod_play_url":"第1集$https://example.com/3.mp4"}]}`)
+				return
+			}
+			http.Error(w, "down", http.StatusBadGateway)
+		}))
+		defer srv.Close()
+
+		doc := &config.Config{URL: srv.URL + "/config"}
+		seeds := []library.Item{
+			{Entry: library.Entry{Config: doc, Site: config.Site{Key: "bad1", Name: "坏源1", Type: 1, Kind: config.KindJSON, API: srv.URL + "/bad1"}}, Video: catalog.Video{ID: "1", Name: "演示剧"}},
+			{Entry: library.Entry{Config: doc, Site: config.Site{Key: "bad2", Name: "坏源2", Type: 1, Kind: config.KindJSON, API: srv.URL + "/bad2"}}, Video: catalog.Video{ID: "2", Name: "演示剧"}},
+			{Entry: library.Entry{Config: doc, Site: config.Site{Key: "third", Name: "三源", Type: 1, Kind: config.KindJSON, API: srv.URL + "/third"}}, Video: catalog.Video{ID: "3", Name: "演示剧"}},
+		}
+		a := &app{}
+		defer a.close()
+		a.library = libraryBrowser{root: doc, cached: map[string]*config.Config{doc.URL: doc}}
+		a.openTitle("演示剧", "", seeds)
+		if a.title == nil || a.title.detail == nil || a.title.item.Entry.Site.Key != "third" {
+			t.Fatalf("third candidate did not open after first two failed: title=%+v", a.title)
+		}
+		if len(a.title.failed) != 2 {
+			t.Fatalf("failed count = %d, want 2: %+v", len(a.title.failed), a.title.failed)
+		}
+	})
+}
+
+func TestSwitchingSourcesPreservesTitleHeaderMetadataAndFillsMissing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/s1":
+			fmt.Fprint(w, `{"list":[{"vod_id":"1","vod_name":"演示剧","vod_pic":"https://example.com/site1.jpg","vod_year":"2026","vod_class":"科幻","vod_content":"首源完整简介。","vod_play_from":"线路A","vod_play_url":"第1集$https://example.com/a1.mp4"}]}`)
+		case "/s2":
+			fmt.Fprint(w, `{"list":[{"vod_id":"2","vod_name":"演示剧","vod_pic":"https://example.com/site2-blur.jpg","vod_year":"","vod_class":"广告分类","vod_content":"广告简介不应覆盖。","vod_play_from":"线路B","vod_play_url":"第1集$https://example.com/b1.mp4#第2集$https://example.com/b2.mp4"}]}`)
+		case "/empty":
+			fmt.Fprint(w, `{"list":[{"vod_id":"3","vod_name":"缺信息剧","vod_pic":"","vod_year":"","vod_class":"","vod_content":"","vod_play_from":"线路C","vod_play_url":"第1集$https://example.com/c1.mp4"}]}`)
+		case "/rich":
+			fmt.Fprint(w, `{"list":[{"vod_id":"4","vod_name":"缺信息剧","vod_pic":"https://example.com/rich.jpg","vod_year":"2025","vod_class":"悬疑","vod_content":"补齐后的简介。","vod_play_from":"线路D","vod_play_url":"第1集$https://example.com/d1.mp4"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	doc := &config.Config{URL: srv.URL + "/config"}
+	s1 := library.Item{Entry: library.Entry{Config: doc, Site: config.Site{Key: "s1", Name: "来源1", Type: 1, Kind: config.KindJSON, API: srv.URL + "/s1"}}, Video: catalog.Video{ID: "1", Name: "演示剧"}}
+	s2 := library.Item{Entry: library.Entry{Config: doc, Site: config.Site{Key: "s2", Name: "来源2", Type: 1, Kind: config.KindJSON, API: srv.URL + "/s2"}}, Video: catalog.Video{ID: "2", Name: "演示剧"}}
+
+	// 1. Opening with a Douban poster locks the poster and keeps first source's metadata on switch.
+	a := &app{}
+	defer a.close()
+	a.library = libraryBrowser{root: doc, cached: map[string]*config.Config{doc.URL: doc}}
+	a.openTitleWithScore("演示剧", "https://example.com/douban.jpg", []library.Item{s1, s2}, "8.9")
+	if a.title.detail == nil || a.title.detail.Pic != "https://example.com/douban.jpg" || a.title.detail.Year != "2026" || a.title.detail.Content != "首源完整简介。" {
+		t.Fatalf("initial detail metadata wrong: %+v", a.title.detail)
+	}
+	a.title.auto = false
+	a.openCandidate(s2)
+	if a.title.detail.Pic != "https://example.com/douban.jpg" || a.title.detail.Year != "2026" || a.title.detail.Type != "科幻" || a.title.detail.Content != "首源完整简介。" {
+		t.Fatalf("switching source overwrote header metadata: %+v", a.title.detail)
+	}
+	if len(a.title.detail.Sources) != 1 || a.title.detail.Sources[0].Name != "线路B" || len(a.title.detail.Sources[0].Episodes) != 2 {
+		t.Fatalf("switching source did not update lines/episodes: %+v", a.title.detail.Sources)
+	}
+
+	// 2. When initial header fields are missing, switching to a richer source fills them in.
+	empty := library.Item{Entry: library.Entry{Config: doc, Site: config.Site{Key: "empty", Name: "空源", Type: 1, Kind: config.KindJSON, API: srv.URL + "/empty"}}, Video: catalog.Video{ID: "3", Name: "缺信息剧"}}
+	rich := library.Item{Entry: library.Entry{Config: doc, Site: config.Site{Key: "rich", Name: "完整源", Type: 1, Kind: config.KindJSON, API: srv.URL + "/rich"}}, Video: catalog.Video{ID: "4", Name: "缺信息剧"}}
+	b := &app{}
+	defer b.close()
+	b.library = libraryBrowser{root: doc, cached: map[string]*config.Config{doc.URL: doc}}
+	b.openTitle("缺信息剧", "", []library.Item{empty, rich})
+	if b.title.detail.Pic != "" || b.title.detail.Year != "" || b.title.detail.Content != "" {
+		t.Fatalf("expected empty initial metadata: %+v", b.title.detail)
+	}
+	b.title.auto = false
+	b.openCandidate(rich)
+	if b.title.pic != "https://example.com/rich.jpg" || b.title.detail.Pic != "https://example.com/rich.jpg" || b.title.detail.Year != "2025" || b.title.detail.Type != "悬疑" || b.title.detail.Content != "补齐后的简介。" {
+		t.Fatalf("richer source did not fill missing header metadata: pic=%q detail=%+v", b.title.pic, b.title.detail)
+	}
+	b.openCandidate(empty)
+	if b.title.detail.Pic != "https://example.com/rich.jpg" || b.title.detail.Year != "2025" || b.title.detail.Content != "补齐后的简介。" {
+		t.Fatalf("switching back to empty source wiped filled metadata: %+v", b.title.detail)
 	}
 }

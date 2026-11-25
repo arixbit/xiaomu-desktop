@@ -15,13 +15,17 @@ const (
 	searchSuggestionLimit = 8  // rows in the suggestions popup
 )
 
+const discoveryFeedCount = 8
+
+type subjectSliceKey struct {
+	ptr *douban.Subject
+	n   int
+}
+
 type suggestionCache struct {
 	queriesPtr *string
 	queriesLen int
-	moviePtr   *douban.Subject
-	movieLen   int
-	tvPtr      *douban.Subject
-	tvLen      int
+	feeds      [discoveryFeedCount]subjectSliceKey
 	items      []string
 	valid      bool
 }
@@ -97,24 +101,31 @@ func (a *app) searchSuggestions() []string {
 	if len(a.searchHistory.queries) > 0 {
 		qPtr = &a.searchHistory.queries[0]
 	}
-	var mPtr *douban.Subject
-	movieSubjects := a.discovery.movie.feed.Subjects
-	if len(movieSubjects) > 0 {
-		mPtr = &movieSubjects[0]
+	lists := [discoveryFeedCount]*discoveryList{
+		&a.discovery.hot,
+		&a.discovery.movie,
+		&a.discovery.tv,
+		&a.discovery.show,
+		&a.discovery.animation,
+		&a.discovery.short,
+		&a.discovery.documentary,
+		&a.discovery.top250,
 	}
-	var tPtr *douban.Subject
-	tvSubjects := a.discovery.tv.feed.Subjects
-	if len(tvSubjects) > 0 {
-		tPtr = &tvSubjects[0]
+	var feedKeys [discoveryFeedCount]subjectSliceKey
+	total := len(a.searchHistory.queries)
+	for i, list := range lists {
+		subjects := list.feed.Subjects
+		if len(subjects) > 0 {
+			feedKeys[i] = subjectSliceKey{ptr: &subjects[0], n: len(subjects)}
+			total += len(subjects)
+		}
 	}
 	cache := &a.searchHistory.suggestions
 	if cache.valid &&
 		cache.queriesPtr == qPtr && cache.queriesLen == len(a.searchHistory.queries) &&
-		cache.moviePtr == mPtr && cache.movieLen == len(movieSubjects) &&
-		cache.tvPtr == tPtr && cache.tvLen == len(tvSubjects) {
+		cache.feeds == feedKeys {
 		return cache.items
 	}
-	total := len(a.searchHistory.queries) + len(movieSubjects) + len(tvSubjects)
 	seen := make(map[string]struct{}, total)
 	out := make([]string, 0, total)
 	add := func(name string) {
@@ -132,19 +143,15 @@ func (a *app) searchSuggestions() []string {
 	for _, query := range a.searchHistory.queries {
 		add(query)
 	}
-	for _, subject := range movieSubjects {
-		add(subject.Title)
-	}
-	for _, subject := range tvSubjects {
-		add(subject.Title)
+	for _, list := range lists {
+		for _, subject := range list.feed.Subjects {
+			add(subject.Title)
+		}
 	}
 	*cache = suggestionCache{
 		queriesPtr: qPtr,
 		queriesLen: len(a.searchHistory.queries),
-		moviePtr:   mPtr,
-		movieLen:   len(movieSubjects),
-		tvPtr:      tPtr,
-		tvLen:      len(tvSubjects),
+		feeds:      feedKeys,
 		items:      out,
 		valid:      true,
 	}

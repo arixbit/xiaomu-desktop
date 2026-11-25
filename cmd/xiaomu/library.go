@@ -152,7 +152,22 @@ func (a *app) startScanWithSkip(s *libraryScan, query string, more, skipFailed b
 	if skipFailed && strings.TrimSpace(query) != "" {
 		skip = a.siteHealth.snapshotKeys()
 	}
-	options := library.Options{Assets: strings.TrimSpace(a.browser.assets), Query: query, Cached: maps.Clone(l.cached), SearchCache: l.searchCache, Skip: skip}
+	var preferred map[string]bool
+	if key := titleKey(query); key != "" {
+		if entryKey := a.sourceMemory.entries[key].Preferred.EntryKey; entryKey != "" {
+			preferred = map[string]bool{entryKey: true}
+		}
+	}
+	options := library.Options{
+		Assets:        strings.TrimSpace(a.browser.assets),
+		Query:         query,
+		Cached:        maps.Clone(l.cached),
+		SearchCache:   l.searchCache,
+		Skip:          skip,
+		Interactive:   s == &a.library.search,
+		Latency:       a.latency.snapshot(),
+		PreferredKeys: preferred,
+	}
 	if more {
 		options.More = append([]library.Target(nil), s.more...)
 		if len(options.More) == 0 {
@@ -616,11 +631,13 @@ func (a *app) hotTitles() map[string]bool {
 		}
 	}
 	if a.discovery.client != nil {
-		add(a.discovery.client.Cached(douban.Movie))
-		add(a.discovery.client.Cached(douban.TV))
+		for _, kind := range douban.HotKinds() {
+			add(a.discovery.client.Cached(kind))
+		}
 	}
-	add(a.discovery.movie.feed)
-	add(a.discovery.tv.feed)
+	for _, kind := range douban.HotKinds() {
+		add(a.discovery.listFor(kind).feed)
+	}
 	return hot
 }
 

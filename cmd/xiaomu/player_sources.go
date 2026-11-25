@@ -121,7 +121,8 @@ func (a *app) playPanelEpisode(line int, episode catalog.Episode, at time.Durati
 			}
 			t := a.title
 			a.closeSession(t.session)
-			t.session, t.detail, t.item, t.auto = choice.session, choice.detail, choice.item, false
+			t.session, t.item, t.auto = choice.session, choice.item, false
+			t.applyDetail(*choice.detail)
 			t.line, t.chunk = line, 0
 			delete(t.failed, itemKey(t.item))
 			a.panelChoice = nil // session ownership moved to the title
