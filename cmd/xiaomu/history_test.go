@@ -234,7 +234,7 @@ func TestResumeFromHistory(t *testing.T) {
 			t.Fatalf("click %q: %v; status %s; texts %v", label, err, a.status, tt.Texts())
 		}
 	}
-	click("播放历史")
+	click("历史")
 	if !tt.HasText("第2集 · 看到 00:30 / 10:00") || !tt.HasText("来源甲") {
 		t.Fatalf("history row: %v", tt.Texts())
 	}

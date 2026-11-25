@@ -19,6 +19,9 @@ func TestDanmakuSpeedAndAreaControlsPersist(t *testing.T) {
 	if err := tt.Click("弹幕"); err != nil {
 		t.Fatal(err)
 	}
+	if err := tt.Click("屏蔽词与高级弹幕服务…"); err != nil {
+		t.Fatal(err)
+	}
 	if a.preferences.Danmaku.Speed != 0.5 || a.preferences.Danmaku.Area != 0.5 {
 		t.Fatalf("defaults did not slow comments and limit their area: %+v", a.preferences.Danmaku)
 	}
@@ -93,6 +96,9 @@ func TestDanmakuDialogAlignmentAndScrollbarClearance(t *testing.T) {
 	a.danmaku.message = "已加载 471 条弹幕 · 示例剧 · 第10集"
 	tt := ui.NewTester(a.view, 1120, 760)
 	if err := tt.Click("弹幕"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("换集/搜片"); err != nil {
 		t.Fatal(err)
 	}
 	viewport, ok := tt.Find("弹幕设置内容")

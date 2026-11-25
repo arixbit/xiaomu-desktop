@@ -102,12 +102,10 @@ type app struct {
 	dispatch        func(func())
 	availableUpdate string
 
-	toast            toastFeedback
-	armed            armedConfirmState
-	playerOSD        playerOSDState
-	skipUndo         skipUndoState
-	windowThemeKnown bool
-	windowDarkTheme  bool
+	toast     toastFeedback
+	armed     armedConfirmState
+	playerOSD playerOSDState
+	skipUndo  skipUndoState
 
 	playingLive       bool
 	playingDirect     bool
@@ -143,6 +141,7 @@ type app struct {
 	panelTouched     bool
 	fullScreen       bool
 	playerOverlay    playerOverlayState
+	playerPopovers   playerPopoverState
 	playerPointer    playerPointerState
 	playerFocus      ui.Handle
 	autoNext         bool
@@ -157,7 +156,6 @@ type app struct {
 func (a *app) view(c *ui.Context) {
 	defer a.observeNowPlaying()
 	defer a.syncPlaybackPower(time.Now())
-	a.syncWindowCaptionTheme(c)
 	a.handleKeyboard(c)
 	if c.Vibrancy() {
 		c.Root().Background(ui.Transparent)
@@ -212,6 +210,7 @@ func (a *app) adoptPlayer(p mediaPlayer) {
 	a.resumeIssued = false
 	a.panelOpen, a.panelTouched, a.panelSource, a.panelTab = !a.fullScreen, false, -1, 0
 	a.playerOverlay = playerOverlayState{}
+	a.closePlayerPopovers()
 	a.playerPointer = playerPointerState{}
 	a.autoNextPending = false
 	a.autoNextCanceled = false
@@ -448,6 +447,9 @@ func main() {
 	if !mygo.App.RequestSingleInstanceLock() {
 		return
 	}
+	// Xiaomu always uses a unified cinema dark appearance across all pages,
+	// regardless of the OS light/dark setting.
+	mygo.Theme.SetSource(mygo.ThemeDark)
 	a := &app{autoNext: true, persist: true}
 	a.initUpdates()
 	a.notify = postNotification
@@ -492,15 +494,16 @@ func main() {
 	}
 	mygo.App.WhenReady(func() {
 		win := mygo.NewWindow(mygo.WindowOptions{
-			Title:         "小幕",
-			Width:         1120,
-			Height:        760,
-			MinWidth:      640,
-			MinHeight:     420,
-			StateKey:      "main",
-			TitleBarStyle: mygo.TitleBarHiddenInset,
-			Vibrancy:      mygo.VibrancyGlass,
-			Content:       ui.View(a.view),
+			Title:           "小幕",
+			Width:           1120,
+			Height:          760,
+			MinWidth:        640,
+			MinHeight:       420,
+			StateKey:        "main",
+			TitleBarStyle:   mygo.TitleBarHiddenInset,
+			BackgroundColor: "#0b1530",
+			Vibrancy:        mygo.VibrancyGlass,
+			Content:         ui.View(a.view),
 		})
 		a.window = win
 		a.dispatch = win.Update

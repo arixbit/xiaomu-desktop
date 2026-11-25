@@ -156,6 +156,7 @@ func updateButton(c *ui.Context, version string) ui.Element {
 		button.Tooltip("新版本 " + version + " 可用，点击查看更新")
 	}
 	button.Children(func() {
+		ui.Icon(c, navIconUpdate).Size(16, 16).TextColor(p.text).PassThrough()
 		ui.Text(c, label).SingleLine().ContentTransition(ctReplace)
 		if version != "" {
 			ui.Box(c).Size(7, 7).Radius(4).Background(p.accent).Label("新版本提示").PassThrough()
@@ -185,7 +186,7 @@ func updateRailButton(c *ui.Context, version string, height float32) ui.Element 
 		btn.Background(btn.AnimateColor("rail-upd-bg", bg, animColor)).Border(1, p.border)
 	} else {
 		btn.Material(p.controlMat)
-		if !p.dark || p.highContrast {
+		if p.highContrast {
 			btn.Border(1, p.border)
 		}
 	}

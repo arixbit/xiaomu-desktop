@@ -106,6 +106,7 @@ type playerExtraState struct {
 	sleepPending  time.Duration // set before first frame with c.Now()
 
 	subDelay           time.Duration
+	lastSubID          int64
 	autoChineseApplied bool
 	subOnline          subtitleOnlineState
 
@@ -124,6 +125,7 @@ func (a *app) resetPerVideoExtraState() {
 	e.rightHold = rightHoldState{}
 	e.statsCache = playerStatsCache{}
 	e.subDelay = 0
+	e.lastSubID = 0
 	e.autoChineseApplied = false
 	e.subOnline.results = nil
 	e.subOnline.message = ""
@@ -187,6 +189,7 @@ func (a *app) enterMiniMode() {
 	}
 	a.panelOpen, a.panelTouched = false, false
 	a.playerOverlay.keepVisible = false
+	a.closePlayerPopovers()
 	a.playerExtra.miniSavedPinned = a.playerExtra.pinned
 	a.playerExtra.miniMode = true
 	a.playerExtra.pinned = true
@@ -246,14 +249,29 @@ func (a *app) playerMiniDragStrip(c *ui.Context, height float32, showHandle bool
 func (a *app) playerMiniControls(c *ui.Context, p mediaPlayer) {
 	ui.Row(c).Key("hud-mini").Absolute().Left(10).Right(10).Bottom(10).Justify(ui.Center).
 		Transition(transHUDBottom).Children(func() {
-		ui.Row(c).FillWidth().Padding(6, 10).Gap(8).Radius(18).AlignItems(ui.Center).
-			Material(glass.Glass{Style: glass.Clear, Tint: ui.RGBA(9, 15, 31, 0.74)}).
+		ui.Row(c).FillWidth().Padding(5, 8).Gap(6).Radius(18).AlignItems(ui.Center).
+			Material(glass.Glass{Style: glass.Clear, Tint: ui.RGBA(9, 15, 31, 0.78)}).
+			Border(1, ui.RGBA(255, 255, 255, 0.12)).
 			TextColor(playerText).Children(func() {
 			playLabel := "暂停"
+			playIcon := iconPause
 			if !p.Playing() {
 				playLabel = "播放"
+				playIcon = iconPlay
 			}
-			if playerGlassButton(c, playLabel).Padding(4, 9).Clicked() {
+			playBtn := ui.ButtonBase(c.Key("mini-play-toggle")).Size(30, 30).Radius(15).Center().
+				Cursor(ui.CursorPointer).Label(playLabel).Tooltip("播放 / 暂停 (Space)").
+				Border(1, ui.RGBA(255, 255, 255, 0.14))
+			playBg := ui.RGBA(255, 255, 255, 0.18)
+			if playBtn.Hovered() {
+				playBg = ui.RGBA(255, 255, 255, 0.28)
+			}
+			playBtn.Background(playBtn.AnimateColor("mini-play-bg", playBg, animColor))
+			applyPressPose(playBtn)
+			playBtn.Children(func() {
+				ui.Icon(c, playIcon).Size(15, 15).TextColor(playerText).PassThrough()
+			})
+			if playBtn.Clicked() {
 				togglePlayback(p)
 				a.syncNowPlayingState()
 			}
@@ -270,10 +288,10 @@ func (a *app) playerMiniControls(c *ui.Context, p mediaPlayer) {
 			} else {
 				ui.Spacer(c)
 			}
-			if playerGlassButton(c, "还原").Padding(4, 9).Label("退出迷你小窗").Tooltip("退出迷你小窗 (T)").Clicked() {
+			if playerIconButton(c, "mini-restore", iconFullscreenEnter, 15, "退出迷你小窗", "还原窗口 (T)", false, false).Size(28, 28).Radius(9).Clicked() {
 				a.toggleMiniMode()
 			}
-			if playerGlassButton(c, "返回").Padding(4, 9).Label("关闭播放").Clicked() {
+			if playerIconButton(c, "mini-close", iconClose, 15, "关闭播放", "关闭播放", false, false).Size(28, 28).Radius(9).Clicked() {
 				a.leavePlayer()
 			}
 		})
@@ -982,7 +1000,64 @@ func (a *app) subtitleDownloadDir() string {
 	return filepath.Join(os.TempDir(), "xiaomu-subtitles")
 }
 
+func (a *app) setSubtitleEnabled(p mediaPlayer, on bool) {
+	tp, ok := p.(trackCapablePlayer)
+	if !ok {
+		return
+	}
+	tracks := tp.SubtitleTracks()
+	if !on {
+		for _, tr := range tracks {
+			if tr.Selected {
+				a.playerExtra.lastSubID = tr.ID
+				break
+			}
+		}
+		if err := tp.DisableSubtitleTrack(); err != nil {
+			a.status = "关闭字幕失败：" + err.Error()
+		} else {
+			a.showPlayerOSD("字幕已关")
+		}
+		return
+	}
+	if len(tracks) == 0 {
+		return
+	}
+	targetIdx := -1
+	if a.playerExtra.lastSubID != 0 {
+		for i, tr := range tracks {
+			if tr.ID == a.playerExtra.lastSubID {
+				targetIdx = i
+				break
+			}
+		}
+	}
+	if targetIdx < 0 {
+		a.ensurePreferences()
+		if a.preferences.Subtitle.PreferChinese {
+			bestRank := 0
+			for i, tr := range tracks {
+				if rank := chineseTrackRank(tr); rank > bestRank {
+					bestRank = rank
+					targetIdx = i
+				}
+			}
+		}
+	}
+	if targetIdx < 0 {
+		targetIdx = 0
+	}
+	chosen := tracks[targetIdx]
+	if err := tp.SelectSubtitleTrack(chosen.ID); err != nil {
+		a.status = "切换字幕失败：" + err.Error()
+	} else {
+		a.playerExtra.lastSubID = chosen.ID
+		a.showPlayerOSD("字幕：" + formatSubtitleTrackLabel(chosen, targetIdx))
+	}
+}
+
 func (a *app) openSubtitleDialog() {
+	a.closePlayerPopovers()
 	a.ensurePreferences()
 	so := &a.playerExtra.subOnline
 	so.open = true
@@ -1130,7 +1205,7 @@ func (a *app) subtitleDialog(c *ui.Context, p mediaPlayer) {
 	}
 	a.ensurePreferences()
 	sp := &a.preferences.Subtitle
-	ui.Themed(c, ui.DarkTheme()).Absolute().Left(0).Right(0).Top(0).Bottom(0).
+	ui.Themed(c, appDarkTheme(c)).Absolute().Left(0).Right(0).Top(0).Bottom(0).
 		Background(ui.Transparent).PassThrough().Children(func() {
 		pal := paletteFor(c)
 		ui.DialogBase(c, &so.open, func(backdrop, panel ui.Element) {
@@ -1353,12 +1428,36 @@ func (a *app) subtitleDialog(c *ui.Context, p mediaPlayer) {
 // --- More Controls Menu (画面比例/旋转/循环/定时关闭/截图/播放信息) ---
 
 func (a *app) morePlayerControls(c *ui.Context, p mediaPlayer) {
-	playerGlassMenuButton(c, "更多", func(m *ui.Menu) {
-		for _, mode := range []videoAspectMode{aspectOriginal, aspect16x9, aspect4x3, aspect21x9, aspectFill} {
-			if m.Item("画面 · " + mode.label()).ID(fmt.Sprintf("aspect-%d", mode)).Radio(a.playerExtra.aspect == mode).Chosen() {
-				a.setVideoAspect(p, mode)
-			}
+	hasActive := a.playerExtra.aspect != aspectOriginal ||
+		a.playerExtra.rotation != 0 ||
+		a.playerExtra.loop ||
+		a.playerExtra.sleepMode != sleepOff ||
+		a.playerExtra.statsOpen
+	btn := ui.ButtonBase(c.Key("player-more-btn")).Size(34, 34).Radius(10).Center().
+		Cursor(ui.CursorPointer).Label("更多播放控制").
+		Tooltip("画面比例、旋转 (R)、循环 (L)、定时关闭、截图 (S)、播放信息 (I)")
+	bg := ui.Transparent
+	if a.playerPopovers.more {
+		bg = ui.RGBA(255, 255, 255, 0.14)
+	} else if btn.Hovered() {
+		bg = ui.RGBA(255, 255, 255, 0.12)
+	}
+	btn.Background(btn.AnimateColor("more-bg", bg, animColor))
+	applyPressPose(btn)
+	btn.Children(func() {
+		ui.Icon(c, iconMore).Size(18, 18).TextColor(playerText).PassThrough()
+		if hasActive {
+			ui.Box(c).Size(5, 5).Radius(3).Absolute().Top(5).Right(5).Background(playerCoral).PassThrough()
 		}
+	})
+	btn.PopoverMenuButton(func(m *ui.Menu) {
+		m.Submenu("画面比例", func(sub *ui.Menu) {
+			for _, mode := range []videoAspectMode{aspectOriginal, aspect16x9, aspect4x3, aspect21x9, aspectFill} {
+				if sub.Item(mode.label()).ID(fmt.Sprintf("aspect-%d", mode)).Radio(a.playerExtra.aspect == mode).Chosen() {
+					a.setVideoAspect(p, mode)
+				}
+			}
+		}).Trailing(a.playerExtra.aspect.label())
 		if _, ok := p.(advancedMediaPlayer); ok {
 			rotLabel := "旋转 90° (R)"
 			if a.playerExtra.rotation != 0 {
@@ -1382,39 +1481,44 @@ func (a *app) morePlayerControls(c *ui.Context, p mediaPlayer) {
 			if m.Item(loopLabel).ID("loop-toggle").Checked(a.playerExtra.loop).Chosen() {
 				a.toggleLoop(p)
 			}
-			m.Separator()
 		}
-		offLabel := "定时关闭 · 关闭"
+		sleepTrailing := "已关"
 		if badge := a.sleepTimerBadge(c.Now()); badge != "" {
-			offLabel = "定时关闭 · 取消（" + badge + "）"
+			sleepTrailing = badge
 		}
-		if m.Item(offLabel).ID("sleep-0").Radio(a.playerExtra.sleepMode == sleepOff).Chosen() {
-			a.setSleepTimerMinutes(0)
-		}
-		for _, mins := range []int{15, 30, 45, 60} {
-			active := a.playerExtra.sleepMode == sleepDuration && a.playerExtra.sleepMinutes == mins
-			if m.Item(fmt.Sprintf("定时关闭 · %d 分钟", mins)).ID(fmt.Sprintf("sleep-%d", mins)).Radio(active).Chosen() {
-				if active {
-					a.setSleepTimerMinutes(0)
-				} else {
-					a.setSleepTimerMinutes(mins)
+		m.Submenu("定时关闭", func(sub *ui.Menu) {
+			offLabel := "关闭"
+			if badge := a.sleepTimerBadge(c.Now()); badge != "" {
+				offLabel = "取消（" + badge + "）"
+			}
+			if sub.Item(offLabel).ID("sleep-0").Radio(a.playerExtra.sleepMode == sleepOff).Chosen() {
+				a.setSleepTimerMinutes(0)
+			}
+			for _, mins := range []int{15, 30, 45, 60} {
+				active := a.playerExtra.sleepMode == sleepDuration && a.playerExtra.sleepMinutes == mins
+				if sub.Item(fmt.Sprintf("%d 分钟", mins)).ID(fmt.Sprintf("sleep-%d", mins)).Radio(active).Chosen() {
+					if active {
+						a.setSleepTimerMinutes(0)
+					} else {
+						a.setSleepTimerMinutes(mins)
+					}
 				}
 			}
-		}
-		if !a.isLiveStream() {
-			afterLabel := "定时关闭 · 播完本集"
-			if a.isSingleVideo() {
-				afterLabel = "定时关闭 · 播完本片"
-			}
-			active := a.playerExtra.sleepMode == sleepAfterEpisode
-			if m.Item(afterLabel).ID("sleep-ep").Radio(active).Chosen() {
-				if active {
-					a.setSleepTimerMinutes(0)
-				} else {
-					a.setSleepAfterEpisode()
+			if !a.isLiveStream() {
+				afterLabel := "播完本集"
+				if a.isSingleVideo() {
+					afterLabel = "播完本片"
+				}
+				active := a.playerExtra.sleepMode == sleepAfterEpisode
+				if sub.Item(afterLabel).ID("sleep-ep").Radio(active).Chosen() {
+					if active {
+						a.setSleepTimerMinutes(0)
+					} else {
+						a.setSleepAfterEpisode()
+					}
 				}
 			}
-		}
+		}).Trailing(sleepTrailing)
 		m.Separator()
 		if m.Item("一键截图 (S)").ID("capture-screenshot").Chosen() {
 			a.capturePlayerScreenshot()
@@ -1422,5 +1526,6 @@ func (a *app) morePlayerControls(c *ui.Context, p mediaPlayer) {
 		if m.Item("播放信息 (I)").ID("toggle-stats").Checked(a.playerExtra.statsOpen).Chosen() {
 			a.toggleStatsOverlay()
 		}
-	}).Label("更多播放控制").Tooltip("画面比例、旋转 (R)、循环 (L)、定时关闭、截图 (S)、播放信息 (I)")
+	}, playerPopoverMenuOpts(&a.playerPopovers.more))
+	a.syncMenuPopoverOpen(a.playerPopovers.more)
 }

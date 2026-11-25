@@ -133,7 +133,7 @@ func TestPlayerPointerLeavesControlsAndDialogsAlone(t *testing.T) {
 	if a.player.Playing() {
 		t.Fatal("pause button also clicked the picture underneath")
 	}
-	for _, control := range []string{"调节音量", "播放进度", "换源与选集"} {
+	for _, control := range []string{"调节音量", "播放进度", "选集"} {
 		if err := tt.Click(control); err != nil {
 			t.Fatal(err)
 		}

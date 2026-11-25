@@ -34,6 +34,10 @@ func (a *app) handleKeyboard(c *ui.Context) {
 		a.clearArmed()
 		return
 	}
+	if a.player != nil && a.playerPopovers.anyOpen() && c.Shortcut(0, ui.KeyEscape) && !c.ShortcutRepeated() {
+		a.closePlayerPopovers()
+		return
+	}
 	if a.fullScreen && c.Shortcut(0, ui.KeyEscape) && !c.ShortcutRepeated() {
 		a.setFullScreen(false)
 		if a.window != nil {

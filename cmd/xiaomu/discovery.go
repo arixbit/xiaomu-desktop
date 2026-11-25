@@ -305,10 +305,12 @@ func (a *app) homeView(c *ui.Context) {
 	// for its own virtual scrolling.
 	width, height := c.Size()
 	d := &a.discovery
-	compactHeader := width < 1300 && d.tab != "sites"
+	list := d.current()
+	hasMeta := d.tab != "sites" && !list.feed.Updated.IsZero()
 	wrapTabs := width < 1100
+	separateMetaRow := d.tab != "sites" && ((width < 1300 && hasMeta) || (wrapTabs && hasMeta))
 	headerReserve := float32(180)
-	if compactHeader {
+	if separateMetaRow {
 		headerReserve = 224
 	}
 	if wrapTabs {
@@ -322,26 +324,36 @@ func (a *app) homeView(c *ui.Context) {
 		}
 	}
 	p := paletteFor(c)
+	renderRefreshButton := func() {
+		if d.tab == "sites" || list.message != "" {
+			return
+		}
+		tip := "刷新榜单"
+		iconColor := p.text
+		if list.loading {
+			tip = "刷新中…"
+			iconColor = p.textMuted
+		}
+		btn := glassButton(c.Key("discovery-refresh"), "").Size(34, 34).Radius(17).Padding(0).Center().
+			Label("刷新榜单").Tooltip(tip).Disabled(list.loading)
+		btn.Children(func() {
+			ui.Icon(c, iconRefresh).Size(16, 16).TextColor(iconColor).PassThrough()
+		})
+		if btn.Clicked() {
+			a.loadDiscoveryTab(true)
+		}
+	}
 	renderDiscoveryMeta := func(separateRow bool) {
 		if d.tab == "sites" {
 			return
 		}
-		list := d.current()
-		if !list.feed.Updated.IsZero() {
+		if hasMeta {
 			ui.Text(c, "豆瓣榜单 · 更新于 "+list.feed.Updated.Local().Format("01-02 15:04")).FontSize(13).TextColor(p.textMuted)
 		}
 		if separateRow {
 			ui.Spacer(c)
 		}
-		if list.message == "" {
-			refreshLabel := "刷新榜单"
-			if list.loading {
-				refreshLabel = "刷新中…"
-			}
-			if glassButton(c, refreshLabel).Disabled(list.loading).Clicked() {
-				a.loadDiscoveryTab(true)
-			}
-		}
+		renderRefreshButton()
 	}
 	ui.Scroll(c).Key("home-scroll").Label("首页内容").Fill().Gap(14).Children(func() {
 		a.continueWatchingStrip(c)
@@ -364,7 +376,7 @@ func (a *app) homeView(c *ui.Context) {
 			return
 		}
 		if wrapTabs {
-			ui.Row(c).Label("榜单").FillWidth().Wrap().Gap(8).Children(func() {
+			ui.Row(c).Label("榜单").FillWidth().Wrap().Gap(8).AlignItems(ui.Center).Children(func() {
 				for i, spec := range homeTabs {
 					if chip(c.Key("home-tab-"+spec.key), spec.label, tab == i).Clicked() {
 						if d.tab != spec.key {
@@ -373,6 +385,9 @@ func (a *app) homeView(c *ui.Context) {
 						}
 					}
 				}
+				if !separateMetaRow {
+					renderRefreshButton()
+				}
 			})
 		} else {
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
@@ -380,13 +395,13 @@ func (a *app) homeView(c *ui.Context) {
 					d.tab = homeTabs[tab].key
 					a.loadDiscoveryTab(false)
 				}
-				if !compactHeader {
+				if !separateMetaRow {
 					ui.Spacer(c)
 					renderDiscoveryMeta(false)
 				}
 			})
 		}
-		if compactHeader {
+		if separateMetaRow {
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 				renderDiscoveryMeta(true)
 			})

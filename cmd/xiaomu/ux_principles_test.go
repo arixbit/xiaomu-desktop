@@ -15,6 +15,7 @@ import (
 	mpvplayer "github.com/arixbit/mygo-player"
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/danmaku"
 	"github.com/arixbit/xiaomu-desktop/internal/iptv"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/arixbit/xiaomu-desktop/internal/pan"
@@ -123,17 +124,17 @@ func TestSingleMovieHidesUselessSidePanelAndFullscreenHidesPin(t *testing.T) {
 	a.panelOpen = true
 	tt := ui.NewTester(a.view, 1120, 760)
 
-	if tt.HasText("换源与选集") || tt.HasText("收起选集") || tt.HasText("线路") {
+	if tt.HasText("选集") || tt.HasText("线路") {
 		t.Fatalf("single-source single-episode movie should not show empty side panel: %v", tt.Texts())
 	}
-	if !tt.HasText("置顶") {
+	if _, ok := tt.Find("窗口置顶"); !ok {
 		t.Fatalf("windowed player should show pin button: %v", tt.Texts())
 	}
 
 	// Fullscreen hides the meaningless pin button and ignores P shortcut.
 	a.setFullScreen(true)
 	tt.Frame()
-	if tt.HasText("置顶") || tt.HasText("已置顶") {
+	if _, ok := tt.Find("窗口置顶"); ok {
 		t.Fatalf("fullscreen player should hide pin button: %v", tt.Texts())
 	}
 	tt.Key(0, ui.KeyP)
@@ -153,7 +154,7 @@ func TestSubtitleAndDanmakuTimeOffsetShareSameDirectionAndLabels(t *testing.T) {
 		t.Fatalf("formatSubtitleDelay(0) = %q, want 0.0s", got)
 	}
 
-	// Without active subtitle tracks, subtitle menu hides useless offset/disable items
+	// Without active subtitle tracks, subtitle popover hides useless offset controls
 	// and bracket shortcuts report clearly instead of mutating delay silently.
 	fp := newFakeTrackPlayer(t)
 	fp.subs = nil
@@ -164,10 +165,8 @@ func TestSubtitleAndDanmakuTimeOffsetShareSameDirectionAndLabels(t *testing.T) {
 	if err := tt.Click("切换字幕"); err != nil {
 		t.Fatal(err)
 	}
-	for _, item := range tt.Menu() {
-		if strings.Contains(item, "关闭字幕") || strings.Contains(item, "提前") || strings.Contains(item, "推迟") {
-			t.Fatalf("empty subtitle track menu should not offer disable/delay: %v", tt.Menu())
-		}
+	if !tt.HasText("当前视频无可用字幕轨") || tt.HasText("−0.5s") || tt.HasText("+0.5s") {
+		t.Fatalf("empty subtitle popover should hide delay controls: %v", tt.Texts())
 	}
 	tt.Key(0, ui.KeyEscape)
 	tt.Key(0, ui.KeyBracketRight)
@@ -210,22 +209,23 @@ func TestTrackSwitchOSDAndSleepTimerRadioAndRotationReset(t *testing.T) {
 		t.Fatalf("audio switch missing OSD feedback: %q", a.playerOSD.text)
 	}
 
-	// Disabling subtitle gives immediate OSD feedback.
+	// Disabling subtitle via popover switch gives immediate OSD feedback.
 	if err := tt.Click("切换字幕"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.ChooseMenuItem("关闭字幕"); err != nil {
-		t.Fatalf("disable sub failed: %v (menu=%v)", err, tt.Menu())
+	if err := tt.Click("字幕开关"); err != nil {
+		t.Fatalf("disable sub switch failed: %v (texts=%v)", err, tt.Texts())
 	}
 	if a.playerOSD.text != "字幕已关" {
 		t.Fatalf("disable subtitle missing OSD: %q", a.playerOSD.text)
 	}
+	tt.Key(0, ui.KeyEscape)
 
 	// Sleep timer selection toggles off when clicked a second time, and rotated video offers 1-click reset.
 	if err := tt.Click("更多播放控制"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.ChooseMenuItem("定时关闭 · 30 分钟"); err != nil {
+	if err := tt.ChooseMenuItem("定时关闭", "30 分钟"); err != nil {
 		t.Fatalf("choose sleep 30m failed: %v", err)
 	}
 	if a.playerExtra.sleepMode != sleepDuration || a.playerExtra.sleepMinutes != 30 {
@@ -234,7 +234,7 @@ func TestTrackSwitchOSDAndSleepTimerRadioAndRotationReset(t *testing.T) {
 	if err := tt.Click("更多播放控制"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.ChooseMenuItem("定时关闭 · 30 分钟"); err != nil {
+	if err := tt.ChooseMenuItem("定时关闭", "30 分钟"); err != nil {
 		t.Fatalf("toggle sleep 30m off failed: %v", err)
 	}
 	if a.playerExtra.sleepMode != sleepOff {
@@ -547,6 +547,102 @@ func TestSubtitleDialogLayoutClearanceAndUXSnapshots(t *testing.T) {
 	mintt.Frame()
 	mintt.Advance(500 * time.Millisecond)
 	save("link-dialog-640x420.png", mintt)
+
+	// Plan B player control bar + Danmaku / Subtitle / Speed popovers + 640x420 narrow bar.
+	vp4k, err := ui.NewVideoPlayer(&sizedTimedVideo{w: 3840, h: 2160})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pbPlayer := newFakeTrackPlayer(t)
+	pbPlayer.systemMediaPlayer.p.Close()
+	pbPlayer.systemMediaPlayer = &systemMediaPlayer{p: vp4k}
+	pbApp := &app{
+		player:         pbPlayer,
+		autoNext:       true,
+		playingSource:  "线路",
+		playingEpisode: "第01集",
+		preferences:    defaultPlayerPreferences(),
+	}
+	pbApp.title = &titlePage{
+		name:   "示例影片",
+		failed: map[string]string{},
+		detail: &catalog.Detail{
+			Name: "示例影片",
+			Sources: []catalog.Source{{
+				Name: "线路",
+				Episodes: []catalog.Episode{
+					{Name: "第01集", ID: "1"},
+					{Name: "第02集", ID: "2"},
+				},
+			}},
+		},
+	}
+	pbApp.preferences.Danmaku.Enabled = true
+	pbComments := make([]danmaku.Comment, 0, 120)
+	for i := range 120 {
+		pbComments = append(pbComments, danmaku.Comment{
+			Time:  time.Duration(i*500) * time.Millisecond,
+			Mode:  1,
+			Color: 0xffffff,
+			Text:  fmt.Sprintf("高能名场面 #%d", i+1),
+		})
+	}
+	pbApp.applyDanmaku(danmaku.Episode{ID: "101", Anime: "示例影片", Name: "第01集"}, pbComments)
+	pbPlayer.Seek(18 * time.Second)
+	t.Cleanup(pbApp.close)
+
+	pbtt := ui.NewTester(pbApp.view, 1120, 760)
+	pbtt.Advance(240 * time.Millisecond)
+	if err := pbtt.Click("弹幕"); err != nil {
+		t.Fatalf("snapshot click danmaku: %v", err)
+	}
+	pbtt.Advance(220 * time.Millisecond)
+	save("player-plan-b-danmaku-popover.png", pbtt)
+
+	if err := pbtt.Click("切换字幕"); err != nil {
+		t.Fatalf("snapshot click subtitle: %v", err)
+	}
+	pbtt.Advance(220 * time.Millisecond)
+	save("player-plan-b-subtitle-popover.png", pbtt)
+
+	if err := pbtt.Click("播放速度"); err != nil {
+		t.Fatalf("snapshot click speed: %v", err)
+	}
+	pbtt.Advance(220 * time.Millisecond)
+	save("player-plan-b-speed-popover.png", pbtt)
+
+	pbApp.closePlayerPopovers()
+	pbApp.title.seeds = []library.Item{
+		{Entry: library.Entry{Config: &config.Config{URL: "https://example.com/a"}, Site: config.Site{Key: "a", Name: "示例站点 A"}}},
+		{Entry: library.Entry{Config: &config.Config{URL: "https://example.com/b"}, Site: config.Site{Key: "b", Name: "示例站点 B"}}},
+	}
+	pbApp.title.item = pbApp.title.seeds[0]
+	pbApp.title.detail.Sources = []catalog.Source{
+		{Name: "夸克网盘", Episodes: []catalog.Episode{
+			{Name: "01｜4K", ID: "1"}, {Name: "02~4K", ID: "2"}, {Name: "03~4K", ID: "3"},
+			{Name: "04~4K", ID: "4"}, {Name: "05~4K", ID: "5"}, {Name: "06~4K", ID: "6"},
+			{Name: "07~4K", ID: "7"}, {Name: "08~4K", ID: "8"}, {Name: "09~4K", ID: "9"},
+			{Name: "10~4K", ID: "10"}, {Name: "11~4K", ID: "11"}, {Name: "12~4K", ID: "12"},
+		}},
+		{Name: "夸克网盘 · 2", Episodes: []catalog.Episode{{Name: "第01集", ID: "21"}}},
+		{Name: "百度网盘", Episodes: []catalog.Episode{{Name: "第01集", ID: "31"}}},
+		{Name: "百度网盘 · 2", Episodes: []catalog.Episode{{Name: "第01集", ID: "41"}}},
+		{Name: "百度网盘 · 3", Episodes: []catalog.Episode{{Name: "第01集", ID: "51"}}},
+		{Name: "百度网盘 · 4", Episodes: []catalog.Episode{{Name: "第01集", ID: "61"}}},
+	}
+	pbApp.playingSource = "夸克网盘"
+	pbApp.playingEpisode = "12~4K"
+	pbApp.panelOpen = true
+	pbApp.panelTouched = true
+	pbtt.Frame()
+	pbtt.Advance(260 * time.Millisecond)
+	save("player-panel-episodes.png", pbtt)
+
+	pbApp.panelOpen = false
+	pbApp.panelTouched = false
+	pbtt.SetSize(640, 420)
+	pbtt.Advance(220 * time.Millisecond)
+	save("player-plan-b-640x420.png", pbtt)
 }
 
 func TestPanCleanupRequiresTwoStepConfirmationAndShowsCustomTempDir(t *testing.T) {

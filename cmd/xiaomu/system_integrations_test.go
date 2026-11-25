@@ -59,8 +59,11 @@ func TestSystemIntegrationNowPlayingMustFollowSpeedButton(t *testing.T) {
 	if err := tt.Click("播放速度"); err != nil {
 		t.Fatal(err)
 	}
+	if err := tt.Click("1.5×"); err != nil {
+		t.Fatal(err)
+	}
 	published := fake.info.Rate
-	if published != a.player.Rate() {
+	if a.player.Rate() != 1.5 || published != a.player.Rate() {
 		t.Fatalf("actual rate=%v, published rate=%v", a.player.Rate(), published)
 	}
 }

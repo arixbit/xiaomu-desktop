@@ -1074,12 +1074,9 @@ func (a *app) sourceRow(c *ui.Context, item library.Item) {
 		targetBg := p.surface
 		if row.Hovered() {
 			targetBg = p.surfaceHover
-			if !p.dark {
-				targetBg = ui.RGB(255, 255, 255)
-			}
 		}
 		row.Radius(16).Background(row.AnimateColor("src-bg", targetBg, animColor))
-		if !p.dark || p.highContrast || p.reduceTransparency {
+		if p.highContrast || p.reduceTransparency {
 			row.Border(1, p.border)
 		}
 		applyPressPose(row)

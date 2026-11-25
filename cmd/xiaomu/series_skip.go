@@ -163,55 +163,60 @@ func (a *app) panelSeriesSkips(c *ui.Context) {
 	name := a.title.name
 	rule := a.seriesSkips.get(name)
 	changed := false
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "本剧跳过片头片尾").Grow(1).FontSize(13)
-		changed = ui.Switch(c, &rule.Enabled).Label("启用本剧跳过").Changed()
-	})
 	canStamp := a.player != nil && a.player.Duration() > 0
 	stampedOpening := false
-	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "片头 / 秒").FontSize(12).Grow(1)
-		opening := float64(rule.Opening)
-		if ui.NumberInput(c, &opening, 0, maxSeriesSkipSeconds, 1).Label("跳过片头秒数").Width(116).Changed() {
-			rule.Opening, changed = int(math.Round(opening)), true
-			if rule.Opening > 0 {
-				rule.Enabled = true
-			}
-		}
-		if canStamp {
-			if glassButton(c, "片头到这").Label("将当前进度设为片头").Tooltip("将当前播放位置设为跳过片头时长").Padding(4, 8).Clicked() {
-				pos := min(int(a.player.Position().Seconds()), maxSeriesSkipSeconds)
-				if pos > 0 {
-					rule.Opening, rule.Enabled, changed, stampedOpening = pos, true, true, true
-					a.showPlayerOSD(fmt.Sprintf("已设片头 %d 秒", pos))
+	ui.Column(c).FillWidth().Padding(12).Gap(10).Radius(12).
+		Background(ui.RGBA(255, 255, 255, 0.05)).
+		Border(1, ui.RGBA(255, 255, 255, 0.08)).Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "本剧跳过片头片尾").Grow(1).FontSize(13).Bold()
+			changed = ui.Switch(c, &rule.Enabled).Label("启用本剧跳过").Changed()
+		})
+		ui.Box(c).FillWidth().Height(1).Background(ui.RGBA(255, 255, 255, 0.08)).PassThrough()
+		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "片头 / 秒").FontSize(12).TextColor(playerMutedText).Grow(1)
+			opening := float64(rule.Opening)
+			if ui.NumberInput(c, &opening, 0, maxSeriesSkipSeconds, 1).Label("跳过片头秒数").Width(104).Changed() {
+				rule.Opening, changed = int(math.Round(opening)), true
+				if rule.Opening > 0 {
+					rule.Enabled = true
 				}
 			}
-		}
-	})
-	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "片尾 / 秒").FontSize(12).Grow(1)
-		ending := float64(rule.Ending)
-		if ui.NumberInput(c, &ending, 0, maxSeriesSkipSeconds, 1).Label("跳过片尾秒数").Width(116).Changed() {
-			rule.Ending, changed = int(math.Round(ending)), true
-			if rule.Ending > 0 {
-				rule.Enabled = true
-			}
-		}
-		if canStamp {
-			if glassButton(c, "片尾从这").Label("将剩余时长设为片尾").Tooltip("将当前位置到片尾的剩余时长设为跳过片尾").Padding(4, 8).Clicked() {
-				rem := min(int(math.Round((a.player.Duration() - a.player.Position()).Seconds())), maxSeriesSkipSeconds)
-				if rem > 0 {
-					rule.Ending, rule.Enabled, changed = rem, true, true
-					a.showPlayerOSD(fmt.Sprintf("已设片尾 %d 秒", rem))
+			if canStamp {
+				if playerPopoverSmallChip(c, "片头到这", "将当前进度设为片头", "将当前播放位置设为跳过片头时长").Clicked() {
+					pos := min(int(a.player.Position().Seconds()), maxSeriesSkipSeconds)
+					if pos > 0 {
+						rule.Opening, rule.Enabled, changed, stampedOpening = pos, true, true, true
+						a.showPlayerOSD(fmt.Sprintf("已设片头 %d 秒", pos))
+					}
 				}
 			}
-		}
+		})
+		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "片尾 / 秒").FontSize(12).TextColor(playerMutedText).Grow(1)
+			ending := float64(rule.Ending)
+			if ui.NumberInput(c, &ending, 0, maxSeriesSkipSeconds, 1).Label("跳过片尾秒数").Width(104).Changed() {
+				rule.Ending, changed = int(math.Round(ending)), true
+				if rule.Ending > 0 {
+					rule.Enabled = true
+				}
+			}
+			if canStamp {
+				if playerPopoverSmallChip(c, "片尾从这", "将剩余时长设为片尾", "将当前位置到片尾的剩余时长设为跳过片尾").Clicked() {
+					rem := min(int(math.Round((a.player.Duration() - a.player.Position()).Seconds())), maxSeriesSkipSeconds)
+					if rem > 0 {
+						rule.Ending, rule.Enabled, changed = rem, true, true
+						a.showPlayerOSD(fmt.Sprintf("已设片尾 %d 秒", rem))
+					}
+				}
+			}
+		})
 	})
 	hint := "本剧分集沿用；片尾随自动下一集跳过"
 	if rule.Enabled && rule.Ending > 0 && !a.autoNext {
 		hint = "已关闭「自动下一集」，片尾暂不会自动跳过"
 	}
-	ui.Text(c, hint).FontSize(11).TextColor(paletteFor(c).textMuted)
+	ui.Text(c, hint).FontSize(11).TextColor(playerMutedText)
 	if changed {
 		if err := a.seriesSkips.set(name, rule); err != nil {
 			a.status = "保存本剧跳过设置失败：" + err.Error()

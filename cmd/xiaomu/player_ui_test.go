@@ -50,7 +50,7 @@ func newPlayerTestApp(t *testing.T) *app {
 func TestPlayerScreenReturnsToLibrary(t *testing.T) {
 	a := newPlayerTestApp(t)
 	tt := ui.NewTester(a.view, 1120, 760)
-	if err := tt.Click("换源与选集"); err != nil {
+	if err := tt.Click("选集"); err != nil {
 		t.Fatal(err)
 	}
 	if !tt.HasText("跳过") || !tt.HasText("2") || tt.HasText("第2集") || !tt.HasText("播完自动下一集") {
@@ -69,7 +69,7 @@ func TestFullscreenPlayerOverlays(t *testing.T) {
 	a.panelOpen = true
 	tt := ui.NewTester(a.view, 1120, 760)
 	tt.Advance(4 * time.Second)
-	if !tt.HasText("返回") || !tt.HasText("播完自动下一集") {
+	if _, ok := tt.Find("返回"); !ok || !tt.HasText("播完自动下一集") {
 		t.Fatal("windowed controls should stay visible")
 	}
 	a.setFullScreen(true)
@@ -83,17 +83,23 @@ func TestFullscreenPlayerOverlays(t *testing.T) {
 	}
 	tt.Move(500, 300)
 	tt.Advance(3 * time.Second)
-	if tt.HasText("返回") || tt.HasText("音量") || tt.Cursor() != ui.CursorNone {
+	if _, ok := tt.Find("返回"); ok {
+		t.Fatalf("idle fullscreen did not hide controls: %v", tt.Texts())
+	}
+	if _, ok := tt.Find("静音切换"); ok || tt.Cursor() != ui.CursorNone {
 		t.Fatalf("idle fullscreen did not hide controls and cursor: %v", tt.Texts())
 	}
 	if _, ok := tt.Find("播放进度"); ok {
 		t.Fatal("hidden controls remain interactive")
 	}
 	tt.Move(501, 300)
-	if !tt.HasText("返回") || !tt.HasText("音量") || tt.Cursor() == ui.CursorNone {
+	if _, ok := tt.Find("返回"); !ok {
+		t.Fatalf("pointer movement did not restore back button: %v", tt.Texts())
+	}
+	if _, ok := tt.Find("静音切换"); !ok || tt.Cursor() == ui.CursorNone {
 		t.Fatalf("pointer movement did not restore controls: %v", tt.Texts())
 	}
-	if err := tt.Click("换源与选集"); err != nil {
+	if err := tt.Click("选集"); err != nil {
 		t.Fatal(err)
 	}
 	if !tt.HasText("2") || tt.HasText("第2集") {
@@ -109,7 +115,7 @@ func TestFullscreenPlayerOverlays(t *testing.T) {
 	}
 	tt.Move(500, 300)
 	tt.Advance(3 * time.Second)
-	if tt.HasText("返回") || tt.HasText("播完自动下一集") {
+	if _, ok := tt.Find("返回"); ok || tt.HasText("播完自动下一集") {
 		t.Fatal("idle controls and episode panel did not hide")
 	}
 	a.open = func(string) (*ui.VideoPlayer, error) { return ui.NewVideoPlayer(&stillVideo{}) }
@@ -121,7 +127,10 @@ func TestFullscreenPlayerOverlays(t *testing.T) {
 	a.setFullScreen(false)
 	tt.Frame()
 	tt.Advance(4 * time.Second)
-	if !tt.HasText("返回") || !tt.HasText("音量") || tt.Cursor() == ui.CursorNone {
+	if _, ok := tt.Find("返回"); !ok {
+		t.Fatalf("leaving fullscreen did not restore back button: %v", tt.Texts())
+	}
+	if _, ok := tt.Find("静音切换"); !ok || tt.Cursor() == ui.CursorNone {
 		t.Fatalf("leaving fullscreen did not restore controls: %v", tt.Texts())
 	}
 }
@@ -137,12 +146,12 @@ func TestFullscreenKeepsControlsWhileDragging(t *testing.T) {
 	x, y := volume.X+volume.W/2, volume.Y+volume.H/2
 	tt.Press(x, y)
 	tt.Advance(7 * time.Second)
-	if !tt.HasText("返回") {
+	if _, ok := tt.Find("返回"); !ok {
 		t.Fatal("controls hid during a slider drag")
 	}
 	tt.Release(x, y)
 	tt.Advance(3 * time.Second)
-	if tt.HasText("返回") {
+	if _, ok := tt.Find("返回"); ok {
 		t.Fatal("controls did not hide after the slider was released")
 	}
 }
@@ -169,8 +178,9 @@ func TestPlayerShowsNetworkSpeed(t *testing.T) {
 	a := newPlayerTestApp(t)
 	tt := ui.NewTester(a.view, 1120, 760)
 	tt.Frame()
-	if !tt.HasText("网速 —") {
-		t.Fatalf("speed missing before any flow: %v", tt.Texts())
+	// Idle speed ("—") stays hidden until real throughput flows.
+	if tt.HasText("网速") || tt.HasText("↓") {
+		t.Fatalf("idle speed should be hidden before any flow: %v", tt.Texts())
 	}
 	// 2 MiB through the proxy, then one second later the player
 	// shows the rate for it.
@@ -197,7 +207,7 @@ func TestPlayerShowsNetworkSpeed(t *testing.T) {
 	resp.Body.Close()
 	tt.Advance(time.Second)
 	tt.Frame()
-	if !tt.HasText("2.0 MB/s") {
+	if !tt.HasText("↓ 2.0 MB/s") {
 		t.Fatalf("speed did not show the rate: %v", tt.Texts())
 	}
 }

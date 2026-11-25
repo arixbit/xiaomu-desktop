@@ -28,7 +28,7 @@ var tabs = []struct {
 }{
 	{routeHome, "首页"},
 	{routeLive, "直播"},
-	{routeHistory, "播放历史"},
+	{routeHistory, "历史"},
 	{routeFavorites, "追剧"},
 	{routeSources, "片源"},
 }
@@ -54,7 +54,7 @@ func glassButton(c *ui.Context, label string) ui.Element {
 		btn.Background(btn.AnimateColor("glass-bg", bg, animColor)).Border(1, p.border)
 	} else {
 		btn.Material(p.controlMat)
-		if !p.dark || p.highContrast {
+		if p.highContrast {
 			btn.Border(1, p.border)
 		}
 	}
@@ -191,46 +191,48 @@ func activeSidebarWidth(windowWidth float32) (width float32, rail bool) {
 // shell is every page but the player: the adaptive backdrop, floating sidebar,
 // toolbar and the active page.
 func (a *app) shell(c *ui.Context) {
-	p := paletteFor(c)
-	ui.Box(c).Fill().LinearGradient(p.backdrop).TextColor(p.text).Children(func() {
-		ui.Row(c).Fill().Padding(10).Gap(10).Children(func() {
-			a.sidebar(c)
-			ui.Column(c).Grow(1).FillHeight().MinWidth(0).Padding(4, 8, 8, 8).Gap(14).Children(func() {
-				a.toolbar(c)
-				rt := routeTransition(a.navDir)
-				pageHost := ui.Box(c).Grow(1).FillWidth().MinHeight(0)
-				if rt.Exit != nil {
-					pageHost.ChildExit(*rt.Exit)
-				}
-				pageHost.Children(func() {
-					ui.Box(c.Key(a.route())).Fill().Transition(rt).Children(func() {
-						switch a.route() {
-						case routeLive:
-							a.liveView(c)
-						case routeHistory:
-							a.historyView(c)
-						case routeFavorites:
-							a.favoritesView(c)
-						case routeSources:
-							a.sourcesView(c)
-						case routeSearch:
-							a.searchView(c)
-						case routeDetail:
-							a.detailView(c)
-						case routeSite:
-							a.siteView(c)
-						default:
-							a.homeView(c)
-						}
+	ui.Themed(c.Key("app-shell"), appDarkTheme(c)).Fill().Background(ui.Transparent).Children(func() {
+		p := paletteFor(c)
+		ui.Box(c).Fill().LinearGradient(p.backdrop).TextColor(p.text).Children(func() {
+			ui.Row(c).Fill().Padding(10).Gap(10).Children(func() {
+				a.sidebar(c)
+				ui.Column(c).Grow(1).FillHeight().MinWidth(0).Padding(4, 8, 8, 8).Gap(14).Children(func() {
+					a.toolbar(c)
+					rt := routeTransition(a.navDir)
+					pageHost := ui.Box(c).Grow(1).FillWidth().MinHeight(0)
+					if rt.Exit != nil {
+						pageHost.ChildExit(*rt.Exit)
+					}
+					pageHost.Children(func() {
+						ui.Box(c.Key(a.route())).Fill().Transition(rt).Children(func() {
+							switch a.route() {
+							case routeLive:
+								a.liveView(c)
+							case routeHistory:
+								a.historyView(c)
+							case routeFavorites:
+								a.favoritesView(c)
+							case routeSources:
+								a.sourcesView(c)
+							case routeSearch:
+								a.searchView(c)
+							case routeDetail:
+								a.detailView(c)
+							case routeSite:
+								a.siteView(c)
+							default:
+								a.homeView(c)
+							}
+						})
 					})
 				})
 			})
+			a.statusView(c)
+			a.importDialog(c)
+			a.liveDialog(c)
+			a.linkDialog(c)
+			a.panAuthPromptDialog(c)
 		})
-		a.statusView(c)
-		a.importDialog(c)
-		a.liveDialog(c)
-		a.linkDialog(c)
-		a.panAuthPromptDialog(c)
 	})
 }
 
@@ -295,7 +297,7 @@ func (a *app) sidebar(c *ui.Context) {
 		ui.Text(c, "小幕").FontSize(20).Bold().Padding(0, 12, titleBottom, 12)
 		hasNewFollow := a.hasAnyFollowingNew()
 		for _, tab := range tabs {
-			row := navTabRow(c, tab.label, a.root() == tab.kind, tab.kind == routeFavorites && hasNewFollow)
+			row := navTabRow(c, tab.kind, tab.label, a.root() == tab.kind, tab.kind == routeFavorites && hasNewFollow)
 			if shortWin {
 				row.Height(32)
 			}
@@ -304,8 +306,8 @@ func (a *app) sidebar(c *ui.Context) {
 			}
 		}
 		ui.Spacer(c)
-		openFileBtn := glassButton(c, "打开文件").FillWidth().Tooltip("打开本地视频 (" + openFileShortcutHint() + ")")
-		openLinkBtn := glassButton(c, "打开链接").FillWidth().Tooltip("粘贴视频直链或网盘分享链接")
+		openFileBtn := sidebarActionButton(c, navIconFile, "打开文件", "打开本地视频 ("+openFileShortcutHint()+")")
+		openLinkBtn := sidebarActionButton(c, navIconLink, "打开链接", "粘贴视频直链或网盘分享链接")
 		updBtn := updateButton(c, a.availableUpdate)
 		if shortWin {
 			openFileBtn.Padding(6, 12)
@@ -325,13 +327,23 @@ func (a *app) sidebar(c *ui.Context) {
 	})
 }
 
-func navTabRow(c *ui.Context, label string, selected, hasBadge bool) ui.Element {
-	if !hasBadge {
-		return listRow(c, label, selected)
-	}
+func sidebarActionButton(c *ui.Context, icon *ui.SVG, label, tooltip string) ui.Element {
 	p := paletteFor(c)
-	row := ui.Row(c.Key(label)).FillWidth().Height(38).Padding(0, 12).Gap(8).Radius(11).
-		AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(label).Tooltip("追剧有新集更新")
+	btn := glassButton(c, "").FillWidth().Gap(8).Label(label).Tooltip(tooltip)
+	btn.Children(func() {
+		ui.Icon(c, icon).Size(16, 16).TextColor(p.text).PassThrough()
+		ui.Text(c, label).SingleLine()
+	})
+	return btn
+}
+
+func navTabRow(c *ui.Context, kind routeKind, label string, selected, hasBadge bool) ui.Element {
+	p := paletteFor(c)
+	row := ui.Row(c.Key(label)).FillWidth().Height(38).Padding(0, 12).Gap(10).Radius(11).
+		AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(label)
+	if hasBadge {
+		row.Tooltip("追剧有新集更新")
+	}
 	targetBg := ui.Transparent
 	targetFg := p.textMuted
 	if selected {
@@ -345,11 +357,14 @@ func navTabRow(c *ui.Context, label string, selected, hasBadge bool) ui.Element 
 	applyPressPose(row)
 	fg := row.AnimateColor("row-fg", targetFg, animColor)
 	row.Children(func() {
+		ui.Icon(c, tabIcon(kind)).Size(17, 17).TextColor(fg).PassThrough()
 		text := ui.Text(c, label).SingleLine().TextColor(fg).Grow(1)
 		if selected {
 			text.Bold()
 		}
-		ui.Box(c).Size(7, 7).Radius(4).Background(p.accent).Label("追剧有新集").PassThrough()
+		if hasBadge {
+			ui.Box(c).Size(7, 7).Radius(4).Background(p.accent).Label("追剧有新集").PassThrough()
+		}
 	})
 	return row
 }
@@ -398,7 +413,7 @@ func railIconButton(c *ui.Context, icon *ui.SVG, label, tooltip string, height f
 		btn.Background(btn.AnimateColor("rail-btn-bg", bg, animColor)).Border(1, p.border)
 	} else {
 		btn.Material(p.controlMat)
-		if !p.dark || p.highContrast {
+		if p.highContrast {
 			btn.Border(1, p.border)
 		}
 	}
@@ -434,7 +449,13 @@ func (a *app) toolbar(c *ui.Context) {
 		bar.Children(func() {
 			ui.Row(c).Width(navWidth).MinWidth(0).Gap(10).AlignItems(ui.Center).Children(func() {
 				if len(a.nav) > 1 {
-					if glassButton(c.Key("toolbar-back"), "返回").Transition(transBackButton).Clicked() {
+					p := paletteFor(c)
+					backBtn := glassButton(c.Key("toolbar-back"), "").Size(36, 36).Radius(18).Padding(0).Center().
+						Label("返回").Tooltip("返回上一页 (Esc)").Transition(transBackButton)
+					backBtn.Children(func() {
+						ui.Icon(c, iconBack).Size(18, 18).TextColor(p.text).PassThrough()
+					})
+					if backBtn.Clicked() {
 						a.pop()
 					}
 				}
@@ -476,7 +497,7 @@ func (a *app) librarySearch(c *ui.Context) ui.Element {
 			field.Background(p.surface).Border(1, p.border)
 		} else {
 			field.Material(p.controlMat)
-			if !p.dark || p.highContrast {
+			if p.highContrast {
 				field.Border(1, p.border)
 			}
 		}

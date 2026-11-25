@@ -153,7 +153,7 @@ func TestSkipSettingsCanBeEditedAndDisabledInSmallPlayer(t *testing.T) {
 			a := newKeyboardTestApp(t)
 			a.setFullScreen(full)
 			tt := ui.NewTester(a.view, 640, 420)
-			if err := tt.Click("换源与选集"); err != nil {
+			if err := tt.Click("选集"); err != nil {
 				t.Fatal(err)
 			}
 			if r, ok := tt.Find("自动下一集"); !ok || r.H <= 0 {

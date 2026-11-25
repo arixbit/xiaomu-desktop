@@ -55,6 +55,9 @@ func TestDanmakuDefaultServiceWithoutSourceTrack(t *testing.T) {
 	if len(requestedAddresses) != 1 || requestedAddresses[0] != "" || a.preferences.Danmaku.API != "" || len(a.danmaku.comments) != 2 {
 		t.Fatalf("default service was not used automatically: addresses=%v comments=%d", requestedAddresses, len(a.danmaku.comments))
 	}
+	if err := tt.Click("换集/搜片"); err != nil {
+		t.Fatal(err)
+	}
 	for _, label := range []string{"弹幕片名", "弹幕集数", "搜索弹幕"} {
 		if _, ok := tt.Find(label); !ok {
 			t.Fatalf("manual search is hidden: %s", label)
@@ -122,8 +125,8 @@ func TestDanmakuPreservesCandidatesAndShowsFailureStatus(t *testing.T) {
 	if err := tt.Click("弹幕"); err != nil {
 		t.Fatal(err)
 	}
-	if !tt.HasText("弹幕已关闭，开启上方开关即可自动匹配，也可在下方手动搜索") {
-		t.Fatalf("disabled dialog did not explain status: %v", tt.Texts())
+	if !tt.HasText("已关闭") {
+		t.Fatalf("disabled popover did not explain status: %v", tt.Texts())
 	}
 	if err := tt.Click("弹幕开关"); err != nil {
 		t.Fatal(err)

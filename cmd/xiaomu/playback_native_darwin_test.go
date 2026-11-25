@@ -47,7 +47,7 @@ func TestNativePlayerSwitchesSiteAtCurrentPosition(t *testing.T) {
 	}
 	waitForPlayback(3 * time.Second)
 	before := a.playbackPosition()
-	if err := tt.Click("换源与选集"); err != nil {
+	if err := tt.Click("选集"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Advance(350 * time.Millisecond)

@@ -159,20 +159,16 @@ func TestPlayerTrackAndSubtitleControls(t *testing.T) {
 	}
 
 	if err := tt.Click("切换字幕"); err != nil {
-		t.Fatalf("subtitle menu button missing: %v", err)
+		t.Fatalf("subtitle popover button missing: %v", err)
 	}
-	if err := tt.ChooseMenuItem("关闭字幕"); err != nil {
-		t.Fatalf("disable subtitle failed: %v (menu=%v)", err, tt.Menu())
+	if err := tt.Click("字幕开关"); err != nil {
+		t.Fatalf("disable subtitle switch failed: %v (texts=%v)", err, tt.Texts())
 	}
 	if fp.subVisible || fp.activeSub != 0 {
 		t.Fatalf("subtitle not disabled: visible=%v id=%d", fp.subVisible, fp.activeSub)
 	}
-
-	if err := tt.Click("切换字幕"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tt.ChooseMenuItem("加载外挂字幕…"); err != nil {
-		t.Fatalf("load external subtitle failed: %v (menu=%v)", err, tt.Menu())
+	if err := tt.Click("加载本地外挂字幕…"); err != nil {
+		t.Fatalf("load external subtitle failed: %v (texts=%v)", err, tt.Texts())
 	}
 	if len(fp.addedSubs) != 1 || fp.addedSubs[0] != "/tmp/custom.ass" || !fp.subVisible {
 		t.Fatalf("external subtitle not added: subs=%v visible=%v status=%q", fp.addedSubs, fp.subVisible, a.status)

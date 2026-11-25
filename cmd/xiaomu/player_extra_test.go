@@ -176,7 +176,7 @@ func TestMiniWindowDragStripAndSliderAutoHide(t *testing.T) {
 	tt.Move(sx+40, sy)
 	tt.Release(sx+40, sy)
 	tt.Move(-10, -10)
-	if tt.HasText("还原") || a.playerOverlay.keepVisible {
+	if _, ok := tt.Find("退出迷你小窗"); ok || a.playerOverlay.keepVisible {
 		t.Fatalf("mini controls stayed pinned after slider drag: keepVisible=%v texts=%v", a.playerOverlay.keepVisible, tt.Texts())
 	}
 
@@ -190,11 +190,11 @@ func TestMiniWindowDragStripAndSliderAutoHide(t *testing.T) {
 	sx, sy = sl.X+sl.W/3, sl.Y+sl.H/2
 	tt.Press(sx, sy)
 	tt.Move(sx+30, miniWindowHeight+40)
-	if !tt.HasText("还原") {
+	if _, ok := tt.Find("退出迷你小窗"); !ok {
 		t.Fatal("mini controls hid while still dragging slider outside window")
 	}
 	tt.Release(sx+30, miniWindowHeight+40)
-	if tt.HasText("还原") || a.playerOverlay.keepVisible {
+	if _, ok := tt.Find("退出迷你小窗"); ok || a.playerOverlay.keepVisible {
 		t.Fatalf("mini controls stayed visible after releasing slider outside window: keepVisible=%v texts=%v", a.playerOverlay.keepVisible, tt.Texts())
 	}
 
@@ -255,8 +255,11 @@ func TestMiniWindowAndAlwaysOnTop(t *testing.T) {
 
 	// Toggle always-on-top via P shortcut.
 	tt.Key(0, ui.KeyP)
-	if !a.playerExtra.pinned || !tt.HasText("已置顶") {
+	if !a.playerExtra.pinned || !tt.HasText("窗口已置顶") {
 		t.Fatalf("P shortcut did not pin window: pinned=%v texts=%v", a.playerExtra.pinned, tt.Texts())
+	}
+	if _, ok := tt.Find("窗口置顶"); !ok {
+		t.Fatalf("pin button missing: %v", tt.Texts())
 	}
 	tt.Key(0, ui.KeyP)
 	if a.playerExtra.pinned {
@@ -269,8 +272,14 @@ func TestMiniWindowAndAlwaysOnTop(t *testing.T) {
 	if !a.playerExtra.miniMode || !a.playerExtra.pinned {
 		t.Fatalf("T did not enter pinned mini mode: mini=%v pinned=%v", a.playerExtra.miniMode, a.playerExtra.pinned)
 	}
-	if !tt.HasText("还原") || tt.HasText("换源与选集") {
-		t.Fatalf("mini HUD mismatch: %v", tt.Texts())
+	if _, ok := tt.Find("退出迷你小窗"); !ok {
+		t.Fatalf("mini restore icon button missing: %v", tt.Texts())
+	}
+	if _, ok := tt.Find("关闭播放"); !ok {
+		t.Fatalf("mini close icon button missing: %v", tt.Texts())
+	}
+	if tt.HasText("选集") {
+		t.Fatalf("mini HUD should hide full header: %v", tt.Texts())
 	}
 
 	// Exit mini mode via clicking 还原 button.
@@ -307,7 +316,7 @@ func TestPlayerAspectRotationLoopStatsAndScreenshot(t *testing.T) {
 	if err := tt.Click("更多播放控制"); err != nil {
 		t.Fatalf("more menu missing: %v", err)
 	}
-	if err := tt.ChooseMenuItem("画面 · 铺满裁切"); err != nil {
+	if err := tt.ChooseMenuItem("画面比例", "铺满裁切"); err != nil {
 		t.Fatalf("choose fill aspect failed: %v (menu=%v)", err, tt.Menu())
 	}
 	if fp.panscan != 1 || fp.props["video-aspect-override"] != "-1" || a.playerVideoFit() != ui.Cover {
