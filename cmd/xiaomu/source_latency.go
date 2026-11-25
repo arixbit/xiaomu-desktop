@@ -237,7 +237,7 @@ func (a *app) startSourceSpeedTest() {
 		return
 	}
 	a.cancelSourceSpeedTest()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(a.libraryContext())
 	a.speedTest.cancel = cancel
 	generation := a.speedTest.generation
 	a.speedTest.running, a.speedTest.done, a.speedTest.total = true, 0, len(entries)
