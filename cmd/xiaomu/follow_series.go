@@ -154,7 +154,7 @@ func (a *app) refreshFollowingMode(manual bool) {
 	}
 	a.cancelFollowingRefresh()
 	f := &a.favorites
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(a.libraryContext())
 	f.refreshCancel, f.refreshing = cancel, true
 	f.refreshErrors = map[string]string{}
 	generation, started := f.refreshGeneration, time.Now()

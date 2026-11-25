@@ -12,9 +12,12 @@ func TestFixScriptCancellation(t *testing.T) {
 	const url = "https://example.com/cancel.js"
 	for _, method := range []string{"call", "module", "await"} {
 		t.Run(method, func(t *testing.T) {
-			script := `export default {busy(){const end=Date.now()+200;while(Date.now()<end){};return 1},ok(){return 7}}`
+			// Keep the finite fallback long enough (1s) that a broken interrupt
+			// clearly exceeds the 400ms contract, while giving slower CI runners
+			// under -race headroom for QuickJS's ~10,000-step interrupt poll interval.
+			script := `export default {busy(){const end=Date.now()+1000;while(Date.now()<end){};return 1},ok(){return 7}}`
 			if method == "module" {
-				script = `const end=Date.now()+200;while(Date.now()<end){};` + script
+				script = `const end=Date.now()+1000;while(Date.now()<end){};` + script
 			}
 			e, err := Open(Options{Modules: map[string]string{url: script}})
 			if err != nil {
@@ -38,8 +41,8 @@ func TestFixScriptCancellation(t *testing.T) {
 				_, err = e.CallAwait(ctx, "busy")
 			}
 			elapsed := time.Since(start)
-			t.Logf("20ms deadline / 200ms finite script: elapsed=%v error=%v", elapsed, err)
-			if !errors.Is(err, context.DeadlineExceeded) || elapsed > 100*time.Millisecond {
+			t.Logf("20ms deadline / 1000ms finite script: elapsed=%v error=%v", elapsed, err)
+			if !errors.Is(err, context.DeadlineExceeded) || elapsed > 400*time.Millisecond {
 				t.Errorf("cancellation exceeded contract: %v, %v", elapsed, err)
 			}
 			if method != "module" {

@@ -15,6 +15,7 @@ import (
 	"github.com/arixbit/xiaomu-desktop/internal/douban"
 	"github.com/arixbit/xiaomu-desktop/internal/iptv"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
+	"github.com/arixbit/xiaomu-desktop/internal/source"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -71,6 +72,27 @@ type libraryBrowser struct {
 	searchCache  *library.SearchCache
 	documents    []libraryDocument
 	feed, search libraryScan
+	ctx          context.Context
+	cancel       context.CancelFunc
+}
+
+// libraryContext returns a shared parent context for every background and
+// search task bound to the current library (feed scan, search scan, following
+// refresh, and source speed test). Canceling it tears down all four atomically
+// so a slot released by one cannot be grabbed by another targeting the old config.
+func (a *app) libraryContext() context.Context {
+	if a.library.ctx == nil {
+		a.library.ctx, a.library.cancel = source.WithCancelScope(context.Background())
+	}
+	return a.library.ctx
+}
+
+func (a *app) cancelLibraryWork() {
+	if a.library.cancel != nil {
+		a.library.cancel()
+		a.library.cancel = nil
+	}
+	a.library.ctx = nil
 }
 
 func (a *app) stopScan(s *libraryScan) {
@@ -88,6 +110,7 @@ func (a *app) resetLibrary(doc *config.Config) {
 }
 
 func (a *app) resetLibraryWithCache(doc *config.Config, cached map[string]*config.Config, liveChannels map[string][]iptv.Channel, liveEPG map[string]string) {
+	a.cancelLibraryWork()
 	a.cancelSourceSpeedTest()
 	a.cancelFollowingRefresh()
 	l := &a.library
@@ -203,7 +226,7 @@ func (a *app) startScanWithSkip(s *libraryScan, query string, more, skipFailed b
 	}
 	s.more, s.progress = nil, library.Event{}
 	s.query, s.running, s.stopped = query, true, false
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(a.libraryContext())
 	s.cancel = cancel
 	generation, root, dispatch := s.generation, l.root, a.dispatch
 	update := func(fn func()) {

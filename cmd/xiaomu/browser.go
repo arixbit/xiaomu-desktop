@@ -246,6 +246,7 @@ func (a *app) closeSession(s source.Session) {
 
 func (a *app) close() {
 	a.closed = true
+	a.cancelLibraryWork()
 	a.cancelSourceSpeedTest()
 	a.pending, a.pendingLibrary = nil, nil
 	a.cancelFollowingRefresh()

@@ -1,6 +1,9 @@
 package source
 
-import "context"
+import (
+	"context"
+	"sync/atomic"
+)
 
 const (
 	// BackgroundLimit bounds quiet background tasks (home feed scans, follow
@@ -20,13 +23,57 @@ var (
 	scriptSlots      = make(chan struct{}, ScriptLimit)
 )
 
-func acquireSlot(ctx context.Context, slots chan struct{}) (release func(), err error) {
+type cancelScopeKey struct{}
+
+type cancelScope struct {
+	parent   *cancelScope
+	canceled atomic.Bool
+}
+
+func (s *cancelScope) isCanceled() bool {
+	for cur := s; cur != nil; cur = cur.parent {
+		if cur.canceled.Load() {
+			return true
+		}
+	}
+	return false
+}
+
+// WithCancelScope returns a cancellable context that marks the scope canceled
+// atomically before propagating Go's per-child context cancellation. Workers
+// sharing a concurrency pool check this flag on acquire so a slot released by
+// one canceled worker cannot admit another worker in the same scope before its
+// deeper child context observes cancellation.
+func WithCancelScope(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	prev, _ := parent.Value(cancelScopeKey{}).(*cancelScope)
+	scope := &cancelScope{parent: prev}
+	ctx, cancel := context.WithCancel(context.WithValue(parent, cancelScopeKey{}, scope))
+	return ctx, func() {
+		scope.canceled.Store(true)
+		cancel()
+	}
+}
+
+func scopeErr(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if scope, _ := ctx.Value(cancelScopeKey{}).(*cancelScope); scope != nil && scope.isCanceled() {
+		return context.Canceled
+	}
+	return nil
+}
+
+func acquireSlot(ctx context.Context, slots chan struct{}) (release func(), err error) {
+	if err := scopeErr(ctx); err != nil {
 		return nil, err
 	}
 	select {
 	case slots <- struct{}{}:
-		if err := ctx.Err(); err != nil {
+		if err := scopeErr(ctx); err != nil {
 			<-slots
 			return nil, err
 		}
