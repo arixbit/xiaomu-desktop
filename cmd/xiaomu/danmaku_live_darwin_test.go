@@ -105,6 +105,9 @@ func TestNativeDanmakuLiveDefaultService(t *testing.T) {
 		if err := tt.Click("弹幕"); err != nil {
 			t.Fatal(err)
 		}
+		if err := tt.Click("换集/搜片"); err != nil {
+			t.Fatal(err)
+		}
 		for _, label := range []string{"弹幕滚动速度", "弹幕显示区域"} {
 			if _, ok := tt.Find(label); !ok {
 				t.Fatalf("display setting missing: %s", label)

@@ -62,15 +62,15 @@ func (a *app) continueWatchingStrip(c *ui.Context) {
 		ui.ScrollHorizontal(c).FillWidth().Gap(12).Children(func() {
 			for _, e := range entries {
 				available := a.historyAvailable(e)
-				card := ui.Row(c).Key("continue-" + e.dedupKey()).Width(268).Padding(10).Gap(10)
+				card := ui.Box(c).Key("continue-" + e.dedupKey()).Width(268)
 				applySurface(card, p, 14).Children(func() {
-					poster := ui.Box(c).Size(60, 90).Radius(8).Clip().Background(p.cardPlaceholder).
-						Cursor(ui.CursorPointer).Label("继续观看 " + e.Name).Disabled(!available)
-					poster.Children(func() {
-						applyPosterImage(c, poster, a.poster(c, e.Pic))
-					})
-					ui.Column(c).Grow(1).MinWidth(0).Gap(5).Children(func() {
-						info := ui.Column(c).FillWidth().Gap(5).Cursor(ui.CursorPointer).
+					ui.Row(c).FillWidth().Padding(10).Gap(10).AlignItems(ui.Center).Children(func() {
+						poster := ui.Box(c).Size(60, 90).Radius(8).Clip().Background(p.cardPlaceholder).
+							Cursor(ui.CursorPointer).Label("继续观看 " + e.Name).Disabled(!available)
+						poster.Children(func() {
+							applyPosterImage(c, poster, a.poster(c, e.Pic))
+						})
+						info := ui.Column(c).Grow(1).MinWidth(0).Gap(5).Padding(0, 22, 0, 0).Cursor(ui.CursorPointer).
 							Label("续播 " + e.Name).Disabled(!available)
 						info.Children(func() {
 							ui.Text(c, e.Name).FontSize(13).Bold().SingleLine()
@@ -90,17 +90,32 @@ func (a *app) continueWatchingStrip(c *ui.Context) {
 						if info.Clicked() {
 							a.resume(e)
 						}
-						if glassButton(c, "隐藏").Padding(4, 10).AlignSelf(ui.Start).Label("从继续观看移除 " + e.Name).Clicked() {
-							key := e.dedupKey()
-							name := e.Name
-							a.setContinueWatchingHidden(key, true)
-							a.setUndoNotice("已隐藏「"+name+"」", "撤销", func() {
-								a.setContinueWatchingHidden(key, false)
-							})
+						if poster.Clicked() {
+							a.resume(e)
 						}
 					})
-					if poster.Clicked() {
-						a.resume(e)
+					dismissBtn := ui.ButtonBase(c.Key("dismiss-"+e.dedupKey())).
+						Absolute().Top(6).Right(6).Size(24, 24).Radius(12).Center().
+						Cursor(ui.CursorPointer).
+						Label("从继续观看移除 " + e.Name).Tooltip("从继续观看隐藏")
+					dismissBg := ui.Transparent
+					dismissFg := p.textMuted
+					if dismissBtn.Hovered() {
+						dismissBg = p.surfaceHover
+						dismissFg = p.text
+					}
+					dismissBtn.Background(dismissBtn.AnimateColor("dismiss-bg", dismissBg, animColor))
+					applyPressPose(dismissBtn)
+					dismissBtn.Children(func() {
+						ui.Icon(c, iconClose).Size(13, 13).TextColor(dismissBtn.AnimateColor("dismiss-fg", dismissFg, animColor)).PassThrough()
+					})
+					if dismissBtn.Clicked() {
+						key := e.dedupKey()
+						name := e.Name
+						a.setContinueWatchingHidden(key, true)
+						a.setUndoNotice("已隐藏「"+name+"」", "撤销", func() {
+							a.setContinueWatchingHidden(key, false)
+						})
 					}
 				})
 				applyCardPose(card)

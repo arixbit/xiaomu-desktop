@@ -17,6 +17,9 @@ func TestPlaybackPreferencesSurviveRestartAndLivePlayback(t *testing.T) {
 	if err := tt.Click("播放速度"); err != nil {
 		t.Fatal(err)
 	}
+	if err := tt.Click("1.25×"); err != nil {
+		t.Fatal(err)
+	}
 	if err := tt.Click("自动下一集"); err != nil {
 		t.Fatal(err)
 	}

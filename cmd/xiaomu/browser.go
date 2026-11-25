@@ -555,7 +555,7 @@ func chip(c *ui.Context, label string, selected bool) ui.Element {
 		return applyPressPose(button.Background(button.AnimateColor("chip-bg", bg, animColor)).Border(1, p.border).TextColor(p.text))
 	}
 	button.Material(p.controlMat).TextColor(p.text)
-	if !p.dark || p.highContrast {
+	if p.highContrast {
 		button.Border(1, p.border)
 	}
 	return applyPressPose(button)

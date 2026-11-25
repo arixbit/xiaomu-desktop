@@ -47,6 +47,9 @@ func TestDanmakuPlayerSettingsAndEpisodeTransition(t *testing.T) {
 	if err := tt.Click("弹幕"); err != nil {
 		t.Fatal(err)
 	}
+	if err := tt.Click("屏蔽词与高级弹幕服务…"); err != nil {
+		t.Fatal(err)
+	}
 	if err := tt.Click("服务设置（可选）"); err != nil {
 		t.Fatal(err)
 	}
@@ -135,6 +138,9 @@ func TestDanmakuRejectsStaleJobResults(t *testing.T) {
 			case "edit episode", "edit title":
 				tt := ui.NewTester(a.view, 1120, 760)
 				if err := tt.Click("弹幕"); err != nil {
+					t.Fatal(err)
+				}
+				if err := tt.Click("换集/搜片"); err != nil {
 					t.Fatal(err)
 				}
 				label, text := "弹幕集数", "2"
@@ -230,6 +236,9 @@ func TestDanmakuManualEpisodeSearch(t *testing.T) {
 	if err := tt.Click("弹幕"); err != nil {
 		t.Fatal(err)
 	}
+	if err := tt.Click("屏蔽词与高级弹幕服务…"); err != nil {
+		t.Fatal(err)
+	}
 	if err := tt.Click("服务设置（可选）"); err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +299,7 @@ func TestDanmakuEpisodeSearchValidation(t *testing.T) {
 			a.preferences.Danmaku.API = server.URL
 			a.startDanmaku()
 			tt := ui.NewTester(a.view, 1120, 760)
-			for _, label := range []string{"弹幕", "弹幕集数"} {
+			for _, label := range []string{"弹幕", "换集/搜片", "弹幕集数"} {
 				if err := tt.Click(label); err != nil {
 					t.Fatal(err)
 				}
@@ -346,6 +355,9 @@ func TestDanmakuDialogFitsMinimumWindow(t *testing.T) {
 	if err := tt.Click("弹幕"); err != nil {
 		t.Fatal(err)
 	}
+	if err := tt.Click("换集/搜片"); err != nil {
+		t.Fatal(err)
+	}
 	for _, label := range []string{"弹幕开关", "弹幕字号", "弹幕滚动速度", "弹幕显示区域", "完成"} {
 		r, ok := tt.Find(label)
 		if !ok || r.H < 12 || r.Y < 0 || r.Y+r.H > 420 {
@@ -386,6 +398,9 @@ func TestDanmakuManualSelectionEnablesOverlayAndPersists(t *testing.T) {
 	a.startDanmaku()
 	tt := ui.NewTester(a.view, 1120, 760)
 	if err := tt.Click("弹幕"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("换集/搜片"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tt.Click("搜索弹幕"); err != nil {
@@ -543,7 +558,7 @@ func TestLocalFileDanmakuSearchAndToggle(t *testing.T) {
 	}
 
 	tt := ui.NewTester(a.view, 1120, 760)
-	if !tt.HasText("弹幕") {
+	if _, ok := tt.Find("弹幕"); !ok {
 		t.Fatalf("local file playback missing danmaku button: texts=%v", tt.Texts())
 	}
 	// Press D to enable and automatically match danmaku from the cleaned filename.
@@ -552,9 +567,15 @@ func TestLocalFileDanmakuSearchAndToggle(t *testing.T) {
 		t.Fatalf("local file D toggle did not load danmaku: enabled=%v comments=%d calls=%d msg=%q",
 			a.preferences.Danmaku.Enabled, len(a.danmaku.comments), calls.Load(), a.danmaku.message)
 	}
-	// Opening the danmaku dialog should work cleanly with a.title == nil.
+	// Opening the danmaku popover and navigating to full dialog should work cleanly with a.title == nil.
 	if err := tt.Click("弹幕"); err != nil {
 		t.Fatalf("click local danmaku button failed: %v", err)
+	}
+	if !a.playerPopovers.danmaku {
+		t.Fatalf("danmaku popover did not open for local file: texts=%v", tt.Texts())
+	}
+	if err := tt.Click("换集/搜片"); err != nil {
+		t.Fatalf("open full danmaku dialog for local file failed: %v", err)
 	}
 	if !a.danmaku.open || !tt.HasText("弹幕设置") {
 		t.Fatalf("danmaku dialog did not open for local file: open=%v texts=%v", a.danmaku.open, tt.Texts())
@@ -570,7 +591,7 @@ func TestDanmakuOffsetControlsAndResetOnEpisodeChange(t *testing.T) {
 	if err := tt.Click("弹幕"); err != nil {
 		t.Fatal(err)
 	}
-	for _, label := range []string{"弹幕时间偏移 提前 5s", "弹幕时间偏移 推迟 1s"} {
+	for _, label := range []string{"弹幕提前 5s", "弹幕推迟 1s"} {
 		if err := tt.Click(label); err != nil {
 			t.Fatal(err)
 		}
@@ -578,7 +599,7 @@ func TestDanmakuOffsetControlsAndResetOnEpisodeChange(t *testing.T) {
 	if a.danmaku.offset != 4*time.Second || !tt.HasText("提前 4s") {
 		t.Fatalf("offset = %s, texts=%v", a.danmaku.offset, tt.Texts())
 	}
-	if err := tt.Click("弹幕时间偏移 推迟 5s"); err != nil {
+	if err := tt.Click("弹幕推迟 5s"); err != nil {
 		t.Fatal(err)
 	}
 	if a.danmaku.offset != -time.Second || !tt.HasText("推迟 1s") {
@@ -625,6 +646,9 @@ func TestDanmakuFiltersDensityAndHighlightCurve(t *testing.T) {
 	if err := tt.Click("稀疏"); err != nil {
 		t.Fatal(err)
 	}
+	if err := tt.Click("屏蔽词与高级弹幕服务…"); err != nil {
+		t.Fatal(err)
+	}
 	if err := tt.Click("弹幕屏蔽词"); err != nil {
 		t.Fatal(err)
 	}
@@ -669,6 +693,9 @@ func TestDanmakuEnterSubmitsSearchAndButtonShowsStatus(t *testing.T) {
 		t.Fatalf("disabled label = %q", a.danmakuButtonLabel())
 	}
 	if err := tt.Click("弹幕"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("换集/搜片"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tt.Click("弹幕集数"); err != nil {

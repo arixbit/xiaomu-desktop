@@ -55,7 +55,7 @@ func TestPlayerSwitchesKnownSourcesAndRecoversOnChosenLine(t *testing.T) {
 			t.Fatalf("click %s: %v; screen: %v", label, err, tt.Texts())
 		}
 	}
-	click("换源与选集")
+	click("选集")
 	if !tt.HasText("甲站") || !tt.HasText("线路") || tt.HasText("查找其他来源") || tt.HasText("换来源") {
 		t.Fatalf("unexpected single-source panel: %v", tt.Texts())
 	}
@@ -78,7 +78,7 @@ func TestPlayerSwitchesKnownSourcesAndRecoversOnChosenLine(t *testing.T) {
 	if a.player == old || a.player == nil || a.title.item.Entry.Site.Key != "乙站" || a.playingSource != "备用线" || a.playingEpisode != "2" || a.playbackPosition() < 24*time.Second {
 		t.Fatalf("failed to resume the requested episode: site=%s line=%q episode=%q position=%s", a.title.item.Entry.Site.Key, a.playingSource, a.playingEpisode, a.playbackPosition())
 	}
-	if a.playFailure != nil || !tt.HasText("乙站") || !tt.HasText("收起选集") || a.library.search.query != "示例" || a.route() != routeDetail {
+	if a.playFailure != nil || !tt.HasText("乙站") || !a.panelOpen || a.library.search.query != "示例" || a.route() != routeDetail {
 		t.Fatalf("panel or original search changed after switching: %v", tt.Texts())
 	}
 }

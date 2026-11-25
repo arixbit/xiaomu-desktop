@@ -622,7 +622,7 @@ func (a *app) liveView(c *ui.Context) {
 						sf.Background(p.surface).Border(1, p.border)
 					} else {
 						sf.Material(p.controlMat)
-						if !p.dark || p.highContrast {
+						if p.highContrast {
 							sf.Border(1, p.border)
 						}
 					}
@@ -701,12 +701,9 @@ func (a *app) liveView(c *ui.Context) {
 				targetBg := p.surface
 				if row.Hovered() {
 					targetBg = p.surfaceHover
-					if !p.dark {
-						targetBg = ui.RGB(255, 255, 255)
-					}
 				}
 				row.Radius(16).Background(row.AnimateColor("ch-bg", targetBg, animColor))
-				if !p.dark || p.highContrast || p.reduceTransparency {
+				if p.highContrast || p.reduceTransparency {
 					row.Border(1, p.border)
 				}
 				applyPressPose(row)
@@ -714,7 +711,7 @@ func (a *app) liveView(c *ui.Context) {
 					mainArea := ui.Row(c).Grow(1).MinWidth(0).Gap(12).AlignItems(ui.Center).
 						Cursor(ui.CursorPointer).Label("播放 " + channel.Name)
 					mainArea.Children(func() {
-						a.renderChannelLogo(c, channel, 36, p.dark)
+						a.renderChannelLogo(c, channel, 36)
 						ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 							ui.Text(c, channel.Name).Bold().SingleLine()
 							meta := channel.Group

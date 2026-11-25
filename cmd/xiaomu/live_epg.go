@@ -12,7 +12,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/arixbit/xiaomu-desktop/internal/iptv"
-	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -314,13 +313,9 @@ func channelMonogram(name string) string {
 	return b.String()
 }
 
-func (a *app) renderChannelLogo(c *ui.Context, ch iptv.Channel, size float32, dark bool) {
+func (a *app) renderChannelLogo(c *ui.Context, ch iptv.Channel, size float32) {
 	bg := ui.RGBA(255, 255, 255, 0.10)
 	fg := ui.RGBA(240, 244, 255, 0.85)
-	if !dark {
-		bg = ui.RGBA(18, 24, 38, 0.08)
-		fg = ui.RGBA(32, 42, 64, 0.78)
-	}
 	box := ui.Box(c).Size(size, size).Radius(8).Clip().Background(bg).Center()
 	box.Children(func() {
 		if src := a.poster(c, ch.Logo); src != nil {
@@ -544,7 +539,7 @@ func (a *app) panelChannelEPG(c *ui.Context) {
 		return
 	}
 	now := a.liveNow()
-	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Gap(6).Children(func() {
+	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Gap(6).ScrollbarStyle(danmakuScrollbar).Children(func() {
 		for i, prog := range progs {
 			isLive := prog.LiveAt(now)
 			isCatchup := live.catchupProgram != nil && live.catchupProgram.Start.Equal(prog.Start) && live.catchupProgram.Title == prog.Title
@@ -552,33 +547,31 @@ func (a *app) panelChannelEPG(c *ui.Context) {
 			if canReplay {
 				_, canReplay = iptv.CatchupURL(ch, live.playingStream, prog, now)
 			}
-			tint := ui.RGBA(55, 50, 92, 0.32)
+			bg := ui.RGBA(255, 255, 255, 0.05)
+			border := ui.RGBA(255, 255, 255, 0.08)
 			if isLive || isCatchup {
-				tint = ui.RGBA(255, 90, 64, 0.35)
+				bg = playerCoralSoft
+				border = playerCoralBorder
 			}
-			ui.Row(c.Key(fmt.Sprintf("epg-%d", i))).FillWidth().Padding(8, 10).Gap(8).Radius(12).
+			ui.Row(c.Key(fmt.Sprintf("epg-%d", i))).FillWidth().Padding(8, 10).Gap(8).Radius(11).
 				AlignItems(ui.Center).
-				Material(glass.Glass{Style: glass.Clear, Tint: tint}).Children(func() {
+				Background(bg).Border(1, border).Children(func() {
 				ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 					ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, prog.TimeRange()).FontSize(11).TextColor(ui.RGBA(248, 249, 255, 0.72)).SingleLine()
+						ui.Text(c, prog.TimeRange()).FontSize(11).TextColor(playerMutedText).SingleLine()
 						if isCatchup {
 							ui.Text(c, "回看中").FontSize(10).Bold().TextColor(ui.RGB(255, 198, 130)).SingleLine()
 						} else if isLive {
 							ui.Text(c, "播出中").FontSize(10).Bold().TextColor(ui.RGB(142, 230, 178)).SingleLine()
 						}
 					})
-					title := ui.Text(c, prog.Title).FontSize(13).SingleLine()
+					title := ui.Text(c, prog.Title).FontSize(12.5).SingleLine()
 					if isLive || isCatchup {
 						title.Bold()
 					}
 				})
 				if canReplay {
-					btn := ui.Button(c, "回看").Label("回看 "+prog.Title).Padding(4, 9).Radius(10).
-						Material(glass.Glass{Style: glass.Clear, Tint: ui.RGBA(255, 255, 255, 0.14), Interactive: true}).
-						TextColor(playerText)
-					applyPressPose(btn)
-					if btn.Clicked() {
+					if playerPopoverSmallChip(c, "回看", "回看 "+prog.Title, "回看 "+prog.Title).Clicked() {
 						a.playCatchupProgram(live.playingChannel, live.playingStream, prog)
 					}
 				}
@@ -598,7 +591,7 @@ func (a *app) liveLastResumeBar(c *ui.Context) {
 	p := paletteFor(c)
 	bar := ui.Row(c).Key("live-last-resume").FillWidth().Padding(10, 14).Gap(12).AlignItems(ui.Center)
 	applySurface(bar, p, 16).Children(func() {
-		a.renderChannelLogo(c, iptv.Channel{Name: last.ChannelName, Logo: last.Logo}, 32, p.dark)
+		a.renderChannelLogo(c, iptv.Channel{Name: last.ChannelName, Logo: last.Logo}, 32)
 		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 			ui.Text(c, "上次观看 · "+last.ChannelName).Bold().SingleLine()
 			sub := last.Group

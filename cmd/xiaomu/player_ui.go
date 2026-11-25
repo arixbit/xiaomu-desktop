@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -13,8 +14,17 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-var playerInk = ui.RGB(9, 15, 31)
-var playerText = ui.RGB(248, 249, 255)
+var (
+	playerInk           = ui.RGB(9, 15, 31)
+	playerText          = ui.RGB(248, 249, 255)
+	playerMutedText     = ui.RGBA(248, 249, 255, 0.70)
+	playerCoral         = ui.RGBA(255, 90, 64, 0.94)
+	playerCoralSoft     = ui.RGBA(255, 90, 64, 0.18)
+	playerCoralBorder   = ui.RGBA(255, 90, 64, 0.55)
+	playerDividerColor  = ui.RGBA(255, 255, 255, 0.16)
+	playerPopoverBg     = ui.RGBA(18, 22, 34, 0.94)
+	playerPopoverBorder = ui.RGBA(255, 255, 255, 0.14)
+)
 
 const playerOverlayIdle = 3 * time.Second
 
@@ -25,9 +35,37 @@ type playerOverlayState struct {
 	keepVisible        bool
 }
 
+type playerPopoverState struct {
+	stream   bool
+	speed    bool
+	audio    bool
+	subtitle bool
+	danmaku  bool
+	more     bool
+}
+
+func (s *playerPopoverState) anyOpen() bool {
+	return s.stream || s.speed || s.audio || s.subtitle || s.danmaku || s.more
+}
+
+func (s *playerPopoverState) closeAll() {
+	*s = playerPopoverState{}
+}
+
+func (a *app) closePlayerPopovers() {
+	a.playerPopovers.closeAll()
+}
+
+func (a *app) togglePlayerPopover(target *bool) {
+	was := *target
+	a.playerPopovers.closeAll()
+	*target = !was
+}
+
 func (a *app) setFullScreen(full bool) {
 	a.fullScreen = full
 	a.playerOverlay = playerOverlayState{}
+	a.closePlayerPopovers()
 	a.playerPointer.clickAt = time.Time{}
 	if full {
 		a.panelOpen, a.panelTouched = false, false
@@ -45,7 +83,7 @@ func (a *app) playerOverlaysVisible(c *ui.Context, screen ui.Element) bool {
 	s := &a.playerOverlay
 	x, y, over := screen.PointerPosition()
 	now := c.Now()
-	if s.hideAt.IsZero() || s.keepVisible || over && (!s.pointerOver || x != s.pointerX || y != s.pointerY) {
+	if s.hideAt.IsZero() || s.keepVisible || a.playerPopovers.anyOpen() || over && (!s.pointerOver || x != s.pointerX || y != s.pointerY) {
 		s.hideAt = now.Add(playerOverlayIdle)
 	}
 	s.pointerX, s.pointerY, s.pointerOver = x, y, over
@@ -87,7 +125,7 @@ func (a *app) playerScreen(c *ui.Context) {
 	// multiple episodes/sources/lines, an active source-switch preview, live channels/EPG,
 	// or sibling local video files.
 	hasEpisodes := a.hasUsefulPlayerPanel()
-	ui.Themed(c, ui.DarkTheme()).Fill().Background(playerInk).Children(func() {
+	ui.Themed(c.Key("app-player"), appDarkTheme(c)).Fill().Background(playerInk).Children(func() {
 		screen := ui.Box(c).Fill().Background(playerInk).ObserveInput(func(ev ui.InputEvent) {
 			a.playerOverlay.hideAt = ev.Time.Add(playerOverlayIdle)
 			if ev.Kind == ui.InputKeyDown {
@@ -182,8 +220,97 @@ func playerGlassButton(c *ui.Context, label string) ui.Element {
 	return stylePlayerGlassControl(ui.Button(c, label))
 }
 
-func playerGlassMenuButton(c *ui.Context, label string, build func(m *ui.Menu)) ui.Element {
-	return stylePlayerGlassControl(ui.MenuButton(c, label, build))
+func playerBarDivider(c *ui.Context) {
+	ui.Box(c).Size(1, 16).Margin(0, 3).Background(playerDividerColor).PassThrough()
+}
+
+func playerIconButton(c *ui.Context, key string, icon *ui.SVG, size float32, label, tooltip string, active, disabled bool) ui.Element {
+	btn := ui.ButtonBase(c.Key(key)).Size(34, 34).Radius(10).Center().
+		Cursor(ui.CursorPointer).Label(label).Tooltip(tooltip).Disabled(disabled)
+	bg := ui.Transparent
+	fg := playerText
+	if disabled {
+		fg = ui.RGBA(248, 249, 255, 0.32)
+	} else if active {
+		bg = ui.RGBA(255, 255, 255, 0.14)
+	} else if btn.Hovered() {
+		bg = ui.RGBA(255, 255, 255, 0.12)
+	}
+	btn.Background(btn.AnimateColor("picon-bg", bg, animColor))
+	applyPressPose(btn)
+	btn.Children(func() {
+		ui.Icon(c, icon).Size(size, size).TextColor(fg).PassThrough()
+	})
+	return btn
+}
+
+func stylePlayerPopoverPanel(panel ui.Element, width float32) ui.Element {
+	return panel.Width(width).Padding(14).Gap(10).Radius(16).
+		Background(playerPopoverBg).
+		Border(1, playerPopoverBorder).
+		Shadow(0, 14, 36, 0, ui.RGBA(0, 0, 0, 0.48)).
+		TextColor(playerText)
+}
+
+func playerPopoverMenuOpts(open *bool) ui.PopoverMenuButtonOptions {
+	return ui.PopoverMenuButtonOptions{
+		At:   ui.AnchorTopEnd,
+		Self: ui.AnchorBottomEnd,
+		Open: open,
+		Panel: func(panel ui.Element) {
+			panel.Background(playerPopoverBg).
+				Border(1, playerPopoverBorder).
+				Radius(14).
+				Padding(6).
+				NoShadow().
+				Shadow(0, 14, 36, 0, ui.RGBA(0, 0, 0, 0.48))
+		},
+		Item: func(item ui.Element) {
+			item.Padding(6, 10).Radius(8)
+		},
+	}
+}
+
+func (a *app) syncMenuPopoverOpen(open bool) {
+	if !open {
+		return
+	}
+	a.playerPopovers.speed = false
+	a.playerPopovers.subtitle = false
+	a.playerPopovers.danmaku = false
+	a.playerOverlay.keepVisible = true
+}
+
+func playerPopoverSmallChip(c *ui.Context, text, label, tooltip string) ui.Element {
+	btn := ui.ButtonBase(c.Key("pop-chip-"+label)).Padding(4, 7).Radius(8).Center().
+		Cursor(ui.CursorPointer).Label(label).Tooltip(tooltip).
+		Border(1, ui.RGBA(255, 255, 255, 0.12))
+	bg := ui.RGBA(255, 255, 255, 0.08)
+	if btn.Hovered() {
+		bg = ui.RGBA(255, 255, 255, 0.16)
+	}
+	btn.Background(btn.AnimateColor("pchip-bg", bg, animColor))
+	applyPressPose(btn)
+	btn.Children(func() {
+		ui.Text(c, text).FontSize(11).TextColor(playerText).SingleLine().PassThrough()
+	})
+	return btn
+}
+
+func playerPopoverFooterLink(c *ui.Context, text, tooltip string) ui.Element {
+	btn := ui.ButtonBase(c.Key("pop-footer-"+text)).FillWidth().Padding(7, 8).Gap(6).Radius(9).
+		AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(text).Tooltip(tooltip)
+	bg := ui.Transparent
+	if btn.Hovered() {
+		bg = ui.RGBA(255, 255, 255, 0.09)
+	}
+	btn.Background(btn.AnimateColor("pfoot-bg", bg, animColor))
+	applyPressPose(btn)
+	btn.Children(func() {
+		ui.Text(c, text).FontSize(12).TextColor(ui.RGBA(248, 249, 255, 0.84)).SingleLine().Grow(1).PassThrough()
+		ui.Icon(c, iconChevronRight).Size(14, 14).TextColor(playerMutedText).PassThrough()
+	})
+	return btn
 }
 
 func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
@@ -215,11 +342,17 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 	left := max(float32(88), c.TitleBar().Left+14)
 	ui.Row(c).Key("hud-top").Absolute().Top(top).Left(left).Right(16).Gap(10).AlignItems(ui.Center).
 		Transition(transHUDTop).Children(func() {
-		ui.Row(c).Padding(5).Radius(18).Material(glass.Glass{Style: glass.Regular}).Children(func() {
-			if playerGlassButton(c, "返回").Tooltip("返回上一页").Clicked() {
-				a.leavePlayer()
-			}
+		backBtn := ui.ButtonBase(c.Key("player-back")).Size(36, 36).Radius(18).Center().
+			Material(glass.Glass{Style: glass.Regular, Interactive: true}).
+			Border(1, ui.RGBA(255, 255, 255, 0.14)).
+			Cursor(ui.CursorPointer).Label("返回").Tooltip("返回上一页")
+		applyPressPose(backBtn)
+		backBtn.Children(func() {
+			ui.Icon(c, iconBack).Size(18, 18).TextColor(playerText).PassThrough()
 		})
+		if backBtn.Clicked() {
+			a.leavePlayer()
+		}
 		title := ui.Row(c).Padding(8, 14).Radius(20).Material(glass.Glass{Style: glass.Clear}).Grow(1)
 		if dragStripHeight(c) > 0 {
 			title.DragWindow().Label("拖动窗口")
@@ -233,48 +366,85 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool) {
 				ui.Text(c, " · 循环").FontSize(12).SingleLine().TextColor(ui.RGB(142, 230, 178))
 			}
 		})
-		ui.Row(c).Padding(5).Gap(4).Radius(18).Material(glass.Glass{Style: glass.Regular}).Children(func() {
+		ui.Row(c).Padding(3).Gap(2).Radius(18).Material(glass.Glass{Style: glass.Regular}).
+			Border(1, ui.RGBA(255, 255, 255, 0.12)).Children(func() {
 			if !a.fullScreen {
-				pinLabel := "置顶"
+				pinIcon := iconPin
+				pinFg := playerText
+				pinBg := ui.Transparent
+				pinTip := "切换窗口置顶 (P)"
+				pinBtn := ui.ButtonBase(c.Key("player-pin")).Size(30, 30).Radius(14).Center().
+					Cursor(ui.CursorPointer).Label("窗口置顶")
 				if a.playerExtra.pinned {
-					pinLabel = "已置顶"
+					pinIcon = iconPinFilled
+					pinFg = playerCoral
+					pinBg = ui.RGBA(255, 90, 64, 0.22)
+					pinTip = "窗口已置顶 · 点击取消 (P)"
+					pinBtn.Border(1, playerCoralBorder)
+				} else if pinBtn.Hovered() {
+					pinBg = ui.RGBA(255, 255, 255, 0.14)
 				}
-				if playerGlassButton(c, pinLabel).Padding(5, 10).Label("窗口置顶").Tooltip("切换窗口置顶 (P)").Clicked() {
+				pinBtn.Tooltip(pinTip).Background(pinBtn.AnimateColor("pin-bg", pinBg, animColor))
+				applyPressPose(pinBtn)
+				pinBtn.Children(func() {
+					ui.Icon(c, pinIcon).Size(16, 16).TextColor(pinFg).PassThrough()
+				})
+				if pinBtn.Clicked() {
 					a.toggleAlwaysOnTop()
 				}
 			}
-			if playerGlassButton(c, "小窗").Padding(5, 10).Label("迷你小窗").Tooltip("置顶迷你小窗 (T)").Clicked() {
+			pipBtn := ui.ButtonBase(c.Key("player-pip")).Size(30, 30).Radius(14).Center().
+				Cursor(ui.CursorPointer).Label("迷你小窗").Tooltip("置顶迷你小窗 (T)")
+			pipBg := ui.Transparent
+			if pipBtn.Hovered() {
+				pipBg = ui.RGBA(255, 255, 255, 0.14)
+			}
+			pipBtn.Background(pipBtn.AnimateColor("pip-bg", pipBg, animColor))
+			applyPressPose(pipBtn)
+			pipBtn.Children(func() {
+				ui.Icon(c, iconMiniPiP).Size(16, 16).TextColor(playerText).PassThrough()
+			})
+			if pipBtn.Clicked() {
 				a.toggleMiniMode()
 			}
 		})
 		if hasEpisodes {
-			panelLabel, closeLabel := "换源与选集", "收起选集"
+			shortLabel := "选集"
 			if a.playingLive {
 				if len(a.live.channels) <= 1 && a.activeEPGURL() != "" {
-					panelLabel, closeLabel = "节目单", "收起节目单"
+					shortLabel = "节目单"
 				} else {
-					panelLabel, closeLabel = "频道列表", "收起频道"
+					shortLabel = "频道"
 				}
 			} else if a.hasLocalPlaylist() {
-				panelLabel, closeLabel = "目录列表", "收起列表"
+				shortLabel = "列表"
 			}
-			if a.panelOpen && (!compact || a.panelTouched) {
-				panelLabel = closeLabel
+			panelShown := a.panelOpen && (!compact || a.panelTouched)
+			tip := "展开" + shortLabel + " (Esc 收起)"
+			if panelShown {
+				tip = "收起" + shortLabel + " (Esc 收起)"
 			}
-			ui.Row(c).Padding(5).Radius(18).Material(glass.Glass{Style: glass.Regular}).Children(func() {
-				btn := playerGlassButton(c, "").Label(panelLabel).Tooltip(panelLabel + " (Esc 收起)")
-				btn.Children(func() {
-					ui.Text(c, panelLabel).SingleLine().ContentTransition(ctReplace)
-				})
-				if btn.Clicked() {
-					if compact && !a.panelTouched {
-						a.panelOpen = true
-					} else {
-						a.panelOpen = !a.panelOpen
-					}
-					a.panelTouched = true
-				}
+			panelBtn := ui.ButtonBase(c.Key("player-panel-toggle")).Height(36).Padding(0, 12).Gap(6).Radius(18).
+				Center().Cursor(ui.CursorPointer).Label(shortLabel).Tooltip(tip).
+				Material(glass.Glass{Style: glass.Regular, Interactive: true})
+			if panelShown {
+				panelBtn.Background(ui.RGBA(255, 255, 255, 0.18)).Border(1, ui.RGBA(255, 255, 255, 0.28))
+			} else {
+				panelBtn.Border(1, ui.RGBA(255, 255, 255, 0.12))
+			}
+			applyPressPose(panelBtn)
+			panelBtn.Children(func() {
+				ui.Icon(c, iconPanelList).Size(15, 15).TextColor(playerText).PassThrough()
+				ui.Text(c, shortLabel).FontSize(13).TextColor(playerText).SingleLine().PassThrough()
 			})
+			if panelBtn.Clicked() {
+				if compact && !a.panelTouched {
+					a.panelOpen = true
+				} else {
+					a.panelOpen = !a.panelOpen
+				}
+				a.panelTouched = true
+			}
 		}
 	})
 }
@@ -347,19 +517,127 @@ func (a *app) hasMultipleEpisodes() bool {
 	return false
 }
 
+type resolutionTier int
+
+const (
+	resTierNone resolutionTier = iota
+	resTierSD
+	resTier360P
+	resTier480P
+	resTier720P
+	resTier1080P
+	resTier2K
+	resTier4K
+	resTier8K
+)
+
+// formatResolutionBadge classifies decoded video dimensions into a concise
+// resolution tier using both long and short edges so scope-cropped movies
+// (e.g. 3840x1600, 1920x800) and portrait videos keep their true tier.
+func formatResolutionBadge(w, h int) (string, resolutionTier) {
+	if w <= 0 || h <= 0 {
+		return "", resTierNone
+	}
+	long, short := max(w, h), min(w, h)
+	switch {
+	case long >= 7600 || short >= 4000:
+		return "8K", resTier8K
+	case long >= 3800 || short >= 2000:
+		return "4K", resTier4K
+	case long >= 2500 || short >= 1400:
+		return "2K", resTier2K
+	case long >= 1860 || short >= 1040:
+		return "1080P", resTier1080P
+	case long >= 1240 || short >= 700:
+		return "720P", resTier720P
+	case long >= 700 || short >= 460:
+		return "480P", resTier480P
+	case long >= 520 || short >= 340:
+		return "360P", resTier360P
+	default:
+		return "SD", resTierSD
+	}
+}
+
+func (a *app) resolutionBadgeButton(c *ui.Context, w, h int) {
+	label, tier := formatResolutionBadge(w, h)
+	if label == "" {
+		return
+	}
+	var fg, bg, border ui.Color
+	bold := false
+	switch tier {
+	case resTier8K:
+		fg = ui.RGB(252, 211, 107)
+		bg = ui.RGBA(252, 211, 107, 0.14)
+		border = ui.RGBA(252, 211, 107, 0.55)
+		bold = true
+	case resTier4K:
+		fg = ui.RGB(248, 250, 255)
+		bg = ui.RGBA(255, 255, 255, 0.12)
+		border = ui.RGBA(255, 255, 255, 0.36)
+		bold = true
+	case resTier2K:
+		fg = ui.RGBA(248, 249, 255, 0.90)
+		bg = ui.RGBA(255, 255, 255, 0.08)
+		border = ui.RGBA(255, 255, 255, 0.24)
+		bold = true
+	case resTier1080P:
+		fg = ui.RGBA(248, 249, 255, 0.80)
+		bg = ui.RGBA(255, 255, 255, 0.05)
+		border = ui.RGBA(255, 255, 255, 0.20)
+	case resTier720P:
+		fg = ui.RGBA(248, 249, 255, 0.64)
+		bg = ui.Transparent
+		border = ui.RGBA(255, 255, 255, 0.14)
+	case resTier480P:
+		fg = ui.RGBA(248, 249, 255, 0.52)
+		bg = ui.Transparent
+		border = ui.RGBA(255, 255, 255, 0.10)
+	default:
+		fg = ui.RGBA(248, 249, 255, 0.44)
+		bg = ui.Transparent
+		border = ui.RGBA(255, 255, 255, 0.08)
+	}
+	if a.playerExtra.statsOpen {
+		border = playerCoralBorder
+	}
+	tip := fmt.Sprintf("真实画面 %d×%d · 点击查看播放信息 (I)", w, h)
+	btn := ui.ButtonBase(c.Key("res-badge")).Padding(2, 6).Radius(5).Center().
+		Cursor(ui.CursorPointer).Label("视频分辨率").Tooltip(tip).Border(1, border)
+	if btn.Hovered() {
+		bg = ui.RGBA(255, 255, 255, 0.16)
+	}
+	btn.Background(btn.AnimateColor("res-bg", bg, animColor))
+	applyPressPose(btn)
+	btn.Children(func() {
+		t := ui.Text(c, label).FontSize(10).TextColor(fg).SingleLine().PassThrough()
+		if bold {
+			t.Bold()
+		}
+	})
+	if btn.Clicked() {
+		a.toggleStatsOverlay()
+	}
+}
+
 func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact bool) {
 	ui.Row(c).Key("hud-bottom").Absolute().Left(18).Right(18).Bottom(18).Justify(ui.Center).
 		Transition(transHUDBottom).Children(func() {
-		ui.Column(c).FillWidth().MaxWidth(900).Padding(10, 15).Gap(8).
-			Radius(24).Material(glass.Glass{Style: glass.Clear, Tint: ui.RGBA(9, 15, 31, 0.62)}).
+		ui.Column(c).FillWidth().MaxWidth(920).Padding(10, 14).Gap(6).
+			Radius(22).Material(glass.Glass{Style: glass.Clear, Tint: ui.RGBA(9, 15, 31, 0.66)}).
+			Border(1, ui.RGBA(255, 255, 255, 0.10)).
 			TextColor(playerText).Children(func() {
 			duration := p.Duration()
-			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				switch {
 				case a.isLiveStream():
-					ui.Text(c, "直播").FontSize(12).Grow(1)
+					ui.Row(c).Grow(1).Gap(6).AlignItems(ui.Center).Children(func() {
+						ui.Box(c).Size(7, 7).Radius(4).Background(ui.RGB(239, 68, 68)).PassThrough()
+						ui.Text(c, "直播").FontSize(12).SingleLine()
+					})
 				case duration > 0:
-					ui.Text(c, playerClock(p.Position())).FontSize(12).ContentTransition(ctNumeric)
+					ui.Text(c, playerClock(p.Position())).FontSize(12).TextColor(ui.RGBA(248, 249, 255, 0.88)).ContentTransition(ctNumeric)
 					position := p.Position().Seconds()
 					ui.Column(c).Grow(1).Gap(2).Children(func() {
 						a.danmakuHighlightCurve(c, p, duration)
@@ -372,67 +650,109 @@ func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact 
 							a.syncNowPlayingState()
 						}
 					})
-					ui.Text(c, playerClock(duration)).FontSize(12).ContentTransition(ctNumeric)
+					ui.Text(c, playerClock(duration)).FontSize(12).TextColor(ui.RGBA(248, 249, 255, 0.78)).ContentTransition(ctNumeric)
 				default:
 					ui.Text(c, "加载中…").FontSize(12).TextColor(ui.RGBA(248, 249, 255, 0.72)).Grow(1)
 				}
 				w, h := p.Size()
 				if w > 0 && h > 0 {
-					ui.Text(c, fmt.Sprintf("%d×%d", w, h)).FontSize(12).TextColor(ui.RGBA(248, 249, 255, 0.78)).SingleLine()
+					a.resolutionBadgeButton(c, w, h)
 				}
 				if !a.playingFile && !a.playingDirectMPV {
-					ui.Text(c, "网速 "+a.playbackSpeed(c)).FontSize(12).TextColor(ui.RGBA(248, 249, 255, 0.78)).SingleLine().ContentTransition(ctNumeric)
+					if speed := a.playbackSpeed(c); speed != "" && speed != "—" {
+						ui.Text(c, "↓ "+speed).FontSize(11).TextColor(ui.RGBA(248, 249, 255, 0.68)).SingleLine().ContentTransition(ctNumeric)
+					}
 				}
 			})
-			ui.Row(c).FillWidth().Wrap().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).FillWidth().Wrap().Gap(4).AlignItems(ui.Center).Children(func() {
+				// Left zone: transport + divider + volume
 				if a.playingLive {
-					a.livePlayerControls(c)
+					live := &a.live
+					if live.catchupProgram != nil && live.playingChannel >= 0 && live.playingChannel < len(live.channels) {
+						retBtn := ui.ButtonBase(c.Key("live-return")).Height(28).Padding(0, 10).Radius(14).Center().
+							Cursor(ui.CursorPointer).Label("返回直播").Tooltip("返回实时直播").
+							Background(playerCoralSoft).Border(1, playerCoralBorder)
+						applyPressPose(retBtn)
+						retBtn.Children(func() {
+							ui.Text(c, "返回直播").FontSize(12).TextColor(ui.RGB(255, 168, 146)).SingleLine().PassThrough()
+						})
+						if retBtn.Clicked() {
+							a.playLiveChannel(live.playingChannel, live.playingStream)
+						}
+					}
+					if len(live.channels) > 1 {
+						if playerIconButton(c, "live-prev", iconPrev, 17, "上一频道", "上一频道", false, live.playingChannel <= 0).Clicked() {
+							a.playLiveChannel(live.playingChannel-1, 0)
+						}
+					}
 				}
 				multiEp := a.hasMultipleEpisodes()
 				localMulti := a.hasLocalPlaylist()
 				source, episode, current := a.currentEpisode()
-				if multiEp && playerGlassButton(c, "上一集").Tooltip("播放上一集").
-					Disabled(!current || episode == 0).Clicked() {
-					a.playEpisode(a.title.detail.Sources[source].Name, a.title.detail.Sources[source].Episodes[episode-1])
-				} else if localMulti && playerGlassButton(c, "上一集").Tooltip("播放上一集").
-					Disabled(a.localPlaylistIdx <= 0).Clicked() {
-					a.playLocalPlaylistIndex(a.localPlaylistIdx - 1)
+				if !a.playingLive {
+					if multiEp {
+						if playerIconButton(c, "ep-prev", iconPrev, 17, "上一集", "播放上一集", false, !current || episode == 0).Clicked() {
+							a.playEpisode(a.title.detail.Sources[source].Name, a.title.detail.Sources[source].Episodes[episode-1])
+						}
+					} else if localMulti {
+						if playerIconButton(c, "local-prev", iconPrev, 17, "上一集", "播放上一集", false, a.localPlaylistIdx <= 0).Clicked() {
+							a.playLocalPlaylistIndex(a.localPlaylistIdx - 1)
+						}
+					}
 				}
 				playLabel := "暂停"
+				playIcon := iconPause
 				if !p.Playing() {
 					playLabel = "播放"
+					playIcon = iconPlay
 				}
-				playBtn := playerGlassButton(c, "").Label(playLabel).Tooltip("播放 / 暂停 (Space)")
+				playBtn := ui.ButtonBase(c.Key("player-play-toggle")).Size(36, 36).Radius(18).Center().
+					Cursor(ui.CursorPointer).Label(playLabel).Tooltip("播放 / 暂停 (Space)").
+					Border(1, ui.RGBA(255, 255, 255, 0.14))
+				playBg := ui.RGBA(255, 255, 255, 0.18)
+				if playBtn.Hovered() {
+					playBg = ui.RGBA(255, 255, 255, 0.28)
+				}
+				playBtn.Background(playBtn.AnimateColor("play-bg", playBg, animColor))
+				applyPressPose(playBtn)
 				playBtn.Children(func() {
-					ui.Text(c, playLabel).SingleLine().ContentTransition(ctReplace)
+					ui.Icon(c, playIcon).Size(17, 17).TextColor(playerText).PassThrough()
 				})
 				if playBtn.Clicked() {
 					togglePlayback(p)
 					a.syncNowPlayingState()
 				}
-				if multiEp && playerGlassButton(c, "下一集").Tooltip("播放下一集").
-					Disabled(!current || episode+1 >= len(a.title.detail.Sources[source].Episodes)).Clicked() {
-					a.playEpisode(a.title.detail.Sources[source].Name, a.title.detail.Sources[source].Episodes[episode+1])
-				} else if localMulti && playerGlassButton(c, "下一集").Tooltip("播放下一集").
-					Disabled(a.localPlaylistIdx+1 >= len(a.localPlaylist)).Clicked() {
-					a.playLocalPlaylistIndex(a.localPlaylistIdx + 1)
+				if a.playingLive {
+					live := &a.live
+					if len(live.channels) > 1 {
+						if playerIconButton(c, "live-next", iconNext, 17, "下一频道", "下一频道", false, live.playingChannel+1 >= len(live.channels)).Clicked() {
+							a.playLiveChannel(live.playingChannel+1, 0)
+						}
+					}
+				} else {
+					if multiEp {
+						if playerIconButton(c, "ep-next", iconNext, 17, "下一集", "播放下一集", false, !current || episode+1 >= len(a.title.detail.Sources[source].Episodes)).Clicked() {
+							a.playEpisode(a.title.detail.Sources[source].Name, a.title.detail.Sources[source].Episodes[episode+1])
+						}
+					} else if localMulti {
+						if playerIconButton(c, "local-next", iconNext, 17, "下一集", "播放下一集", false, a.localPlaylistIdx+1 >= len(a.localPlaylist)).Clicked() {
+							a.playLocalPlaylistIndex(a.localPlaylistIdx + 1)
+						}
+					}
 				}
-				volLabel := "音量"
-				if a.muted {
-					volLabel = "已静音"
+				playerBarDivider(c)
+				volIcon := iconVolumeHigh
+				if a.muted || p.Volume() <= 0 {
+					volIcon = iconVolumeMute
 				}
-				muteBtn := playerGlassButton(c, "").Padding(5, 10).Label("静音切换").Tooltip("静音 / 取消静音 (M)")
-				muteBtn.Children(func() {
-					ui.Text(c, volLabel).FontSize(12).SingleLine().ContentTransition(ctReplace)
-				})
-				if muteBtn.Clicked() {
+				if playerIconButton(c, "player-mute", volIcon, 17, "静音切换", "静音 / 取消静音 (M)", false, false).Clicked() {
 					a.toggleMute(p)
 				}
 				volume := p.Volume()
 				if a.muted {
 					volume = 0
 				}
-				volumeControl := ui.Slider(c, &volume, 0, 1).Label("调节音量").Width(88)
+				volumeControl := ui.Slider(c, &volume, 0, 1).Label("调节音量").Width(78)
 				if volumeControl.Pressed() {
 					a.playerOverlay.keepVisible = true
 				}
@@ -448,39 +768,25 @@ func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact 
 					a.savePreferences()
 				}
 				ui.Spacer(c)
+				// Right zone: Plan B unified popover icon flow + fullscreen
+				if a.playingLive {
+					a.livePlayerRightControls(c)
+				}
 				a.streamControls(c)
+				a.speedControls(c, p)
 				a.audioTrackControls(c, p)
 				a.subtitleTrackControls(c, p)
 				a.danmakuButton(c)
 				a.morePlayerControls(c, p)
-				rate := p.Rate()
-				if rate <= 0 {
-					rate = 1
-				}
-				if !a.isLiveStream() {
-					rateLabel := strconv.FormatFloat(rate, 'f', -1, 64) + "×"
-					rateBtn := playerGlassButton(c, "").Label("播放速度").Tooltip("点击切换倍速，长按 → 键临时加速")
-					rateBtn.Children(func() {
-						ui.Text(c, rateLabel).SingleLine().ContentTransition(ctNumeric)
-					})
-					if rateBtn.Clicked() {
-						a.ensurePreferences()
-						a.preferences.Rate = nextPlayerRate(rate)
-						p.SetRate(a.preferences.Rate)
-						a.savePreferences()
-						a.showPlayerOSD(strconv.FormatFloat(a.preferences.Rate, 'f', -1, 64) + "× 倍速")
-					}
-				}
 				if a.window != nil {
+					playerBarDivider(c)
 					fullLabel := "全屏"
+					fullIcon := iconFullscreenEnter
 					if a.fullScreen {
 						fullLabel = "退出全屏"
+						fullIcon = iconFullscreenExit
 					}
-					fullBtn := playerGlassButton(c, "").Label(fullLabel).Tooltip("全屏切换 (F)")
-					fullBtn.Children(func() {
-						ui.Text(c, fullLabel).SingleLine().ContentTransition(ctReplace)
-					})
-					if fullBtn.Clicked() {
+					if playerIconButton(c, "player-fullscreen", fullIcon, 17, fullLabel, "全屏切换 (F)", false, false).Clicked() {
 						a.togglePlayerFullScreen()
 						a.playerFocus.Focus(c)
 					}
@@ -493,8 +799,9 @@ func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact 
 // playerPanel floats beside the picture: a title's episodes and sources, or
 // a live list's channels.
 func (a *app) playerPanel(c *ui.Context, key string) ui.Element {
-	panel := ui.Themed(c, ui.DarkTheme()).Key(key).Padding(16).Gap(12).Radius(24).
-		Material(glass.Glass{Style: glass.Clear, Tint: ui.RGBA(40, 35, 70, 0.67)}).
+	panel := ui.Themed(c, appDarkTheme(c)).Key(key).Padding(14).Gap(12).Radius(20).
+		Material(glass.Glass{Style: glass.Clear, Tint: ui.RGBA(13, 17, 28, 0.84)}).
+		Border(1, ui.RGBA(255, 255, 255, 0.10)).
 		TextColor(playerText)
 	if panel.Hovered() {
 		a.playerOverlay.keepVisible = true
@@ -515,10 +822,18 @@ func (a *app) playerPanel(c *ui.Context, key string) ui.Element {
 		if !multiEp {
 			a.panelTab = 0
 		} else {
-			ui.Segmented(c, &a.panelTab, "选集", "跳过").Label("面板内容")
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Box(c).Grow(1).Children(func() {
+					ui.Segmented(c, &a.panelTab, "选集", "跳过").FillEqually().Label("面板内容")
+				})
+				if playerIconButton(c, "panel-close", iconClose, 15, "收起面板", "收起面板 (Esc)", false, false).Size(28, 28).Radius(9).Clicked() {
+					a.panelOpen = false
+					a.panelTouched = true
+				}
+			})
 		}
 		if a.panelTab == 1 {
-			ui.Scroll(c).FillWidth().Grow(1).Gap(10).Children(func() {
+			ui.Scroll(c).FillWidth().Grow(1).Gap(10).ScrollbarStyle(danmakuScrollbar).Children(func() {
 				a.panelSeriesSkips(c)
 			})
 			return
@@ -528,26 +843,81 @@ func (a *app) playerPanel(c *ui.Context, key string) ui.Element {
 	return panel
 }
 
-func stylePanelGlassControl(el ui.Element, selected bool) ui.Element {
-	tint := ui.RGBA(55, 50, 92, 0.39)
-	if selected {
-		tint = ui.RGBA(102, 98, 143, 0.57)
-	}
-	return applyPressPose(el.FillWidth().Padding(10, 12).Radius(14).
-		Material(glass.Glass{Style: glass.Clear, Tint: tint, Interactive: true}).TextColor(playerText))
+func panelSectionHeader(c *ui.Context, title, count string) {
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, title).FontSize(12).Bold().TextColor(playerMutedText).Grow(1).SingleLine()
+		if count != "" {
+			ui.Text(c, count).FontSize(11).TextColor(ui.RGBA(248, 249, 255, 0.48)).SingleLine().ContentTransition(ctNumeric)
+		}
+	})
 }
 
-func panelButton(c *ui.Context, label string, selected bool) ui.Element {
-	return stylePanelGlassControl(ui.Button(c, label), selected)
+func panelListRowButton(c *ui.Context, key, label, a11yLabel string, selected bool) ui.Element {
+	if a11yLabel == "" {
+		a11yLabel = label
+	}
+	btn := ui.ButtonBase(c.Key(key)).FillWidth().Padding(9, 12).Gap(8).Radius(10).
+		AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(a11yLabel)
+	bg := ui.RGBA(255, 255, 255, 0.05)
+	border := ui.RGBA(255, 255, 255, 0.08)
+	fg := ui.RGBA(248, 249, 255, 0.88)
+	if selected {
+		bg = playerCoralSoft
+		border = playerCoralBorder
+		fg = playerText
+	} else if btn.Hovered() {
+		bg = ui.RGBA(255, 255, 255, 0.10)
+		fg = playerText
+	}
+	btn.Background(btn.AnimateColor("prow-bg", bg, animColor)).Border(1, border)
+	applyPressPose(btn)
+	btn.Children(func() {
+		if selected {
+			ui.Box(c).Size(6, 6).Radius(3).Background(playerCoral).PassThrough()
+		}
+		t := ui.Text(c, label).FontSize(12.5).TextColor(fg).SingleLine().Grow(1).PassThrough()
+		if selected {
+			t.Bold()
+		}
+	})
+	return btn
+}
+
+func panelLineChip(c *ui.Context, key, label string, selected bool) ui.Element {
+	btn := ui.ButtonBase(c.Key(key)).Padding(6, 10).Gap(6).Radius(10).
+		AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(label)
+	bg := ui.RGBA(255, 255, 255, 0.06)
+	border := ui.RGBA(255, 255, 255, 0.10)
+	fg := ui.RGBA(248, 249, 255, 0.84)
+	if selected {
+		bg = playerCoralSoft
+		border = playerCoralBorder
+		fg = ui.RGB(255, 178, 158)
+	} else if btn.Hovered() {
+		bg = ui.RGBA(255, 255, 255, 0.13)
+		fg = playerText
+	}
+	btn.Background(btn.AnimateColor("pline-bg", bg, animColor)).Border(1, border)
+	applyPressPose(btn)
+	btn.Children(func() {
+		if selected {
+			ui.Box(c).Size(5, 5).Radius(3).Background(playerCoral).PassThrough()
+		}
+		t := ui.Text(c, label).FontSize(12).TextColor(fg).SingleLine().PassThrough()
+		if selected {
+			t.Bold()
+		}
+	})
+	return btn
 }
 
 func (a *app) panelEpisodes(c *ui.Context) {
-	ui.Scroll(c).FillWidth().Grow(1).Gap(8).Children(func() {
+	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Gap(12).ScrollbarStyle(danmakuScrollbar).Children(func() {
 		a.panelSources(c, a.candidates())
 		detail := a.title.detail
 		if choice := a.panelChoice; choice != nil {
 			if choice.message != "" {
-				ui.Text(c, choice.message).FontSize(12)
+				ui.Text(c, choice.message).FontSize(12).TextColor(playerMutedText)
 			}
 			detail = choice.detail
 		}
@@ -559,43 +929,68 @@ func (a *app) panelEpisodes(c *ui.Context) {
 		}
 		selectedLine := a.panelSource
 		if len(detail.Sources) > 1 {
-			ui.Text(c, "线路").Bold()
-			for i, source := range detail.Sources {
-				name := source.Name
-				if name == "" {
-					name = fmt.Sprintf("线路 %d", i+1)
-				}
-				if panelButton(c.Key(fmt.Sprintf("player-source-%d", i)), name, i == a.panelSource).Clicked() {
-					selectedLine = i
-					a.selectPanelLine(detail, i)
-				}
-			}
+			ui.Column(c).FillWidth().Gap(7).Children(func() {
+				panelSectionHeader(c, "线路", fmt.Sprintf("%d 条", len(detail.Sources)))
+				ui.Row(c).FillWidth().Wrap().Gap(6).Children(func() {
+					for i, source := range detail.Sources {
+						name := source.Name
+						if name == "" {
+							name = fmt.Sprintf("线路 %d", i+1)
+						}
+						if panelLineChip(c, fmt.Sprintf("player-source-%d", i), name, i == a.panelSource).Clicked() {
+							selectedLine = i
+							a.selectPanelLine(detail, i)
+						}
+					}
+				})
+			})
 		}
 		selected := detail.Sources[selectedLine]
 		solePlaying := len(selected.Episodes) == 1 && a.panelChoice == nil &&
 			selected.Name == a.playingSource && selected.Episodes[0].Name == a.playingEpisode
 		if len(selected.Episodes) > 0 && !solePlaying {
-			ui.Text(c, "选集").Bold()
-			ui.Row(c).FillWidth().Wrap().Gap(6).Children(func() {
-				for i, episode := range selected.Episodes {
-					active := a.panelChoice == nil && selected.Name == a.playingSource && episode.Name == a.playingEpisode
-					button := ui.Button(c, episodeButtonLabel(episode.Name)).Key(fmt.Sprintf("player-episode-%d", i)).MinWidth(52).Radius(12)
-					if active {
-						button.Background(ui.RGB(255, 255, 255)).TextColor(playerInk)
-					} else {
-						button.Material(glass.Glass{Style: glass.Clear, Tint: ui.RGBA(55, 50, 92, 0.51), Interactive: true}).TextColor(playerText)
+			ui.Box(c).FillWidth().Height(1).Background(ui.RGBA(255, 255, 255, 0.08)).PassThrough()
+			ui.Column(c).FillWidth().Gap(8).Children(func() {
+				panelSectionHeader(c, "选集", fmt.Sprintf("共 %d 集", len(selected.Episodes)))
+				ui.Row(c).FillWidth().Wrap().Gap(6).Children(func() {
+					for i, episode := range selected.Episodes {
+						active := a.panelChoice == nil && selected.Name == a.playingSource && episode.Name == a.playingEpisode
+						epLabel := episodeButtonLabel(episode.Name)
+						btn := ui.ButtonBase(c.Key(fmt.Sprintf("player-episode-%d", i))).
+							MinWidth(52).Height(32).Padding(0, 10).Radius(9).Center().
+							Cursor(ui.CursorPointer).Label(epLabel)
+						bg := ui.RGBA(255, 255, 255, 0.07)
+						border := ui.RGBA(255, 255, 255, 0.09)
+						fg := ui.RGBA(248, 249, 255, 0.88)
+						if active {
+							bg = playerCoral
+							border = playerCoral
+							fg = ui.RGB(255, 255, 255)
+						} else if btn.Hovered() {
+							bg = ui.RGBA(255, 255, 255, 0.15)
+							border = ui.RGBA(255, 255, 255, 0.18)
+							fg = playerText
+						}
+						btn.Background(btn.AnimateColor("ep-bg", bg, animColor)).Border(1, border)
+						applyPressPose(btn)
+						btn.Children(func() {
+							t := ui.Text(c, epLabel).FontSize(12).TextColor(fg).SingleLine().PassThrough()
+							if active {
+								t.Bold()
+							}
+						})
+						if btn.Clicked() {
+							a.playPanelEpisode(selectedLine, episode, 0)
+						}
 					}
-					applyPressPose(button)
-					if button.Clicked() {
-						a.playPanelEpisode(selectedLine, episode, 0)
-					}
-				}
+				})
 			})
 		}
 	})
 	if a.hasMultipleEpisodes() {
+		ui.Box(c).FillWidth().Height(1).Background(ui.RGBA(255, 255, 255, 0.08)).PassThrough()
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "播完自动下一集").Grow(1)
+			ui.Text(c, "播完自动下一集").FontSize(12.5).TextColor(ui.RGBA(248, 249, 255, 0.86)).Grow(1)
 			if ui.Switch(c, &a.autoNext).Label("自动下一集").Changed() {
 				a.savePreferences()
 			}
@@ -613,21 +1008,57 @@ func (a *app) panelSources(c *ui.Context, candidates []library.Item) {
 	if len(candidates) <= 1 && label == "" {
 		return
 	}
-	ui.Text(c, "来源").Bold()
-	if len(candidates) > 1 {
-		retry := a.panelChoice != nil && a.panelChoice.detail == nil && !a.running(jobPlay)
-		stylePanelGlassControl(ui.MenuButton(c, label, func(m *ui.Menu) {
-			for _, candidate := range candidates {
-				key := itemKey(candidate)
-				selected := item.Entry.Config != nil && itemKey(item) == key
-				if m.Item(candidate.Entry.Label()).ID(key).Radio(selected).Disabled(selected && !retry).Chosen() {
-					a.switchSource(candidate)
-				}
+	ui.Column(c).FillWidth().Gap(7).Children(func() {
+		count := ""
+		if len(candidates) > 1 {
+			count = fmt.Sprintf("%d 个来源", len(candidates))
+		}
+		panelSectionHeader(c, "来源", count)
+		if len(candidates) > 1 {
+			retry := a.panelChoice != nil && a.panelChoice.detail == nil && !a.running(jobPlay)
+			srcBtn := ui.ButtonBase(c.Key("panel-source-select")).FillWidth().Padding(8, 12).Gap(8).Radius(10).
+				AlignItems(ui.Center).Cursor(ui.CursorPointer).Label("选择来源").
+				Border(1, ui.RGBA(255, 255, 255, 0.12))
+			bg := ui.RGBA(255, 255, 255, 0.06)
+			if srcBtn.Hovered() {
+				bg = ui.RGBA(255, 255, 255, 0.12)
 			}
-		}), false).Label("选择来源")
-	} else {
-		ui.Text(c, label)
-	}
+			srcBtn.Background(srcBtn.AnimateColor("psrc-bg", bg, animColor))
+			applyPressPose(srcBtn)
+			srcBtn.Children(func() {
+				ui.Text(c, label).FontSize(12.5).TextColor(playerText).SingleLine().Grow(1).PassThrough()
+				ui.Icon(c, iconChevronDown).Size(15, 15).TextColor(playerMutedText).PassThrough()
+			})
+			srcBtn.PopoverMenuButton(func(m *ui.Menu) {
+				for _, candidate := range candidates {
+					key := itemKey(candidate)
+					selected := item.Entry.Config != nil && itemKey(item) == key
+					if m.Item(candidate.Entry.Label()).ID(key).Radio(selected).Disabled(selected && !retry).Chosen() {
+						a.switchSource(candidate)
+					}
+				}
+			}, ui.PopoverMenuButtonOptions{
+				At:   ui.AnchorBottomStart,
+				Self: ui.AnchorTopStart,
+				Panel: func(panel ui.Element) {
+					panel.Background(playerPopoverBg).
+						Border(1, playerPopoverBorder).
+						Radius(12).
+						Padding(6).
+						NoShadow().
+						Shadow(0, 14, 36, 0, ui.RGBA(0, 0, 0, 0.48))
+				},
+				Item: func(item ui.Element) {
+					item.Padding(6, 10).Radius(8)
+				},
+			})
+		} else {
+			ui.Row(c).FillWidth().Padding(8, 12).Radius(10).Background(ui.RGBA(255, 255, 255, 0.04)).
+				Border(1, ui.RGBA(255, 255, 255, 0.07)).Children(func() {
+				ui.Text(c, label).FontSize(12.5).TextColor(ui.RGBA(248, 249, 255, 0.85)).SingleLine()
+			})
+		}
+	})
 }
 
 // panelChannels changes the channel or browses today's EPG schedule & catchup without leaving the player.
@@ -635,15 +1066,35 @@ func (a *app) panelChannels(c *ui.Context) {
 	live := &a.live
 	hasEPG := a.activeEPGURL() != ""
 	if len(live.channels) <= 1 && hasEPG {
-		ui.Text(c, "节目单").FontSize(18).Bold()
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "节目单").FontSize(15).Bold().Grow(1)
+			if playerIconButton(c, "panel-close", iconClose, 15, "收起面板", "收起面板 (Esc)", false, false).Size(28, 28).Radius(9).Clicked() {
+				a.panelOpen = false
+				a.panelTouched = true
+			}
+		})
 		a.panelChannelEPG(c)
 		return
 	}
 	if !hasEPG {
 		live.panelTab = 0
-		ui.Text(c, "频道").FontSize(18).Bold()
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "频道").FontSize(15).Bold().Grow(1)
+			if playerIconButton(c, "panel-close", iconClose, 15, "收起面板", "收起面板 (Esc)", false, false).Size(28, 28).Radius(9).Clicked() {
+				a.panelOpen = false
+				a.panelTouched = true
+			}
+		})
 	} else {
-		ui.Segmented(c, &live.panelTab, "频道", "节目单").Label("直播面板")
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Box(c).Grow(1).Children(func() {
+				ui.Segmented(c, &live.panelTab, "频道", "节目单").FillEqually().Label("直播面板")
+			})
+			if playerIconButton(c, "panel-close", iconClose, 15, "收起面板", "收起面板 (Esc)", false, false).Size(28, 28).Radius(9).Clicked() {
+				a.panelOpen = false
+				a.panelTouched = true
+			}
+		})
 	}
 	if live.panelTab == 1 && hasEPG {
 		a.panelChannelEPG(c)
@@ -665,49 +1116,66 @@ func (a *app) panelChannels(c *ui.Context) {
 		channel := live.channels[i]
 		current := i == live.playingChannel
 		fav := live.state.isFavorite(channel.Name)
-		tint := ui.RGBA(55, 50, 92, 0.39)
-		if current {
-			tint = ui.RGBA(102, 98, 143, 0.57)
-		}
+		bg := ui.RGBA(255, 255, 255, 0.05)
+		border := ui.RGBA(255, 255, 255, 0.08)
 		btn := ui.Row(c.Key(fmt.Sprintf("panel-channel-%d", i))).FillWidth().Padding(8, 10).Gap(8).
-			Radius(14).AlignItems(ui.Center).Cursor(ui.CursorPointer).
-			Material(glass.Glass{Style: glass.Clear, Tint: tint, Interactive: true}).
+			Radius(11).AlignItems(ui.Center).Cursor(ui.CursorPointer).
 			TextColor(playerText).Label("切换到 " + channel.Name)
+		if current {
+			bg = playerCoralSoft
+			border = playerCoralBorder
+		} else if btn.Hovered() {
+			bg = ui.RGBA(255, 255, 255, 0.10)
+		}
+		btn.Background(btn.AnimateColor("pch-bg", bg, animColor)).Border(1, border)
 		applyPressPose(btn)
 		btn.Children(func() {
-			a.renderChannelLogo(c, channel, 26, true)
+			a.renderChannelLogo(c, channel, 26)
 			ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
 				label := channel.Name
 				if fav {
 					label = "★ " + label
 				}
-				ui.Text(c, label).FontSize(13).SingleLine()
+				t := ui.Text(c, label).FontSize(13).SingleLine()
+				if current {
+					t.Bold()
+				}
 				if cur, _ := a.channelEPGCurrent(channel); cur != nil {
-					ui.Text(c, cur.Title).FontSize(11).TextColor(ui.RGBA(248, 249, 255, 0.70)).SingleLine()
+					ui.Text(c, cur.Title).FontSize(11).TextColor(playerMutedText).SingleLine()
 				}
 			})
+			if current {
+				ui.Box(c).Size(6, 6).Radius(3).Background(playerCoral).PassThrough()
+			}
 		})
 		if btn.Clicked() && !current {
 			a.playLiveChannel(i, 0)
 		}
-	}).FillWidth().Grow(1).MinHeight(0).Gap(6)
+	}).FillWidth().Grow(1).MinHeight(0).Gap(6).ScrollbarStyle(danmakuScrollbar)
 }
 
 // panelLocalPlaylist lists sibling videos in the same directory so a viewer
 // watching a local season can jump between files or toggle auto-next.
 func (a *app) panelLocalPlaylist(c *ui.Context) {
-	ui.Text(c, "同目录视频").FontSize(18).Bold()
-	ui.Scroll(c).FillWidth().Grow(1).Gap(6).Children(func() {
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "同目录视频").FontSize(15).Bold().Grow(1)
+		if playerIconButton(c, "panel-close", iconClose, 15, "收起面板", "收起面板 (Esc)", false, false).Size(28, 28).Radius(9).Clicked() {
+			a.panelOpen = false
+			a.panelTouched = true
+		}
+	})
+	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Gap(6).ScrollbarStyle(danmakuScrollbar).Children(func() {
 		for i, path := range a.localPlaylist {
 			name := filepath.Base(path)
 			current := i == a.localPlaylistIdx
-			if panelButton(c.Key(fmt.Sprintf("panel-local-%d", i)), name, current).Label("播放 "+name).Clicked() && !current {
+			if panelListRowButton(c, fmt.Sprintf("panel-local-%d", i), name, "播放 "+name, current).Clicked() && !current {
 				a.playLocalPlaylistIndex(i)
 			}
 		}
 	})
+	ui.Box(c).FillWidth().Height(1).Background(ui.RGBA(255, 255, 255, 0.08)).PassThrough()
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "播完自动下一集").Grow(1)
+		ui.Text(c, "播完自动下一集").FontSize(12.5).TextColor(ui.RGBA(248, 249, 255, 0.86)).Grow(1)
 		if ui.Switch(c, &a.autoNext).Label("自动下一集").Changed() {
 			a.savePreferences()
 		}
@@ -878,6 +1346,7 @@ func (a *app) leavePlayer() {
 	a.localPlaylist = nil
 	a.localPlaylistIdx = -1
 	a.playerOverlay = playerOverlayState{}
+	a.closePlayerPopovers()
 	a.playerPointer = playerPointerState{}
 	a.playbackWait = playbackWait{}
 	a.playFailure = nil
@@ -959,17 +1428,33 @@ func trimNumericLabel(digits, original string) string {
 	return trimmed
 }
 
+func formatPlayerRate(rate float64) string {
+	return strconv.FormatFloat(rate, 'f', -1, 64) + "×"
+}
+
 func (a *app) streamControls(c *ui.Context) {
 	if len(a.playingStreams) <= 1 {
 		return
 	}
-	currentLabel := "清晰度"
+	currentLabel := "画质"
 	if a.playingStreamIdx >= 0 && a.playingStreamIdx < len(a.playingStreams) {
 		if l := a.playingStreams[a.playingStreamIdx].Label; l != "" {
 			currentLabel = l
 		}
 	}
-	playerGlassMenuButton(c, currentLabel, func(m *ui.Menu) {
+	btn := ui.ButtonBase(c.Key("player-stream-btn")).Height(30).Padding(0, 9).Radius(8).Center().
+		Cursor(ui.CursorPointer).Label("切换画质").Tooltip("切换清晰度").
+		Border(1, ui.RGBA(255, 255, 255, 0.16))
+	bg := ui.RGBA(255, 255, 255, 0.06)
+	if a.playerPopovers.stream || btn.Hovered() {
+		bg = ui.RGBA(255, 255, 255, 0.14)
+	}
+	btn.Background(btn.AnimateColor("stream-bg", bg, animColor))
+	applyPressPose(btn)
+	btn.Children(func() {
+		ui.Text(c, currentLabel).FontSize(12).TextColor(playerText).SingleLine().PassThrough()
+	})
+	btn.PopoverMenuButton(func(m *ui.Menu) {
 		for i, s := range a.playingStreams {
 			label := s.Label
 			if label == "" {
@@ -980,7 +1465,95 @@ func (a *app) streamControls(c *ui.Context) {
 				a.switchPlayingStream(i)
 			}
 		}
-	}).Label("切换画质")
+	}, playerPopoverMenuOpts(&a.playerPopovers.stream))
+	a.syncMenuPopoverOpen(a.playerPopovers.stream)
+}
+
+var playerSpeedChoices = []float64{0.5, 0.75, 1, 1.25, 1.5, 2, 3}
+
+func (a *app) popoverDockOffset(p mediaPlayer) float32 {
+	if a.canUseDanmaku() && a.preferences.Danmaku.Enabled && len(a.danmaku.comments) > 0 && p != nil && p.Duration() > 0 && !a.isLiveStream() {
+		return 68
+	}
+	return 48
+}
+
+func (a *app) speedControls(c *ui.Context, p mediaPlayer) {
+	if a.isLiveStream() {
+		return
+	}
+	rate := p.Rate()
+	if rate <= 0 {
+		rate = 1
+	}
+	custom := math.Abs(rate-1) > 0.01
+	rateLabel := formatPlayerRate(rate)
+	btn := ui.ButtonBase(c.Key("player-speed-btn")).Height(30).MinWidth(38).Padding(0, 8).Radius(8).Center().
+		Cursor(ui.CursorPointer).Label("播放速度").Tooltip("播放倍速 · 长按 → 键临时 2× 加速")
+	bg := ui.Transparent
+	fg := playerText
+	if custom {
+		bg = playerCoralSoft
+		fg = ui.RGB(255, 168, 146)
+		btn.Border(1, playerCoralBorder)
+	} else if a.playerPopovers.speed {
+		bg = ui.RGBA(255, 255, 255, 0.14)
+	} else if btn.Hovered() {
+		bg = ui.RGBA(255, 255, 255, 0.12)
+	}
+	btn.Background(btn.AnimateColor("speed-bg", bg, animColor))
+	applyPressPose(btn)
+	btn.Children(func() {
+		t := ui.Text(c, rateLabel).FontSize(12).TextColor(fg).SingleLine().ContentTransition(ctNumeric).PassThrough()
+		if custom {
+			t.Bold()
+		}
+	})
+	if btn.Clicked() {
+		a.togglePlayerPopover(&a.playerPopovers.speed)
+	}
+	if a.playerPopovers.speed {
+		a.playerOverlay.keepVisible = true
+	}
+	ui.PopoverBase(c, btn, &a.playerPopovers.speed, func(panel ui.Element) {
+		stylePlayerPopoverPanel(panel, 240).
+			AttachTo(btn, ui.AnchorTopEnd, ui.AnchorBottomEnd).Margin(0, 0, a.popoverDockOffset(p), 0).AttachEdgeMargin(12)
+		ui.Text(c, "播放倍速").FontSize(13).Bold()
+		ui.Row(c).FillWidth().Wrap().Gap(6).Children(func() {
+			for _, choice := range playerSpeedChoices {
+				active := math.Abs(rate-choice) < 0.01
+				label := formatPlayerRate(choice)
+				item := ui.ButtonBase(c.Key("speed-opt-"+label)).Width(64).Height(32).Radius(9).Center().
+					Cursor(ui.CursorPointer).Label(label)
+				itemBg := ui.RGBA(255, 255, 255, 0.08)
+				itemFg := playerText
+				if active {
+					itemBg = playerCoral
+					itemFg = ui.RGB(255, 255, 255)
+				} else if item.Hovered() {
+					itemBg = ui.RGBA(255, 255, 255, 0.16)
+				}
+				item.Background(item.AnimateColor("spd-opt-bg", itemBg, animColor))
+				applyPressPose(item)
+				item.Children(func() {
+					t := ui.Text(c, label).FontSize(12).TextColor(itemFg).SingleLine().PassThrough()
+					if active {
+						t.Bold()
+					}
+				})
+				if item.Clicked() {
+					a.ensurePreferences()
+					a.preferences.Rate = choice
+					p.SetRate(choice)
+					a.savePreferences()
+					a.syncNowPlayingState()
+					a.showPlayerOSD(label + " 倍速")
+					a.playerPopovers.speed = false
+				}
+			}
+		})
+		ui.Text(c, "长按 → 键可临时 2× 加速").FontSize(11).TextColor(playerMutedText)
+	})
 }
 
 func (a *app) audioTrackControls(c *ui.Context, p mediaPlayer) {
@@ -992,7 +1565,8 @@ func (a *app) audioTrackControls(c *ui.Context, p mediaPlayer) {
 	if len(tracks) <= 1 {
 		return
 	}
-	playerGlassMenuButton(c, "音轨", func(m *ui.Menu) {
+	btn := playerIconButton(c, "player-audio-btn", iconAudioWave, 18, "切换音轨", "切换音轨", a.playerPopovers.audio, false)
+	btn.PopoverMenuButton(func(m *ui.Menu) {
 		for i, tr := range tracks {
 			label := formatAudioTrackLabel(tr, i)
 			if m.Item(label).ID(fmt.Sprintf("audio-%d", tr.ID)).Radio(tr.Selected).Chosen() {
@@ -1003,7 +1577,8 @@ func (a *app) audioTrackControls(c *ui.Context, p mediaPlayer) {
 				}
 			}
 		}
-	}).Label("切换音轨").Tooltip("切换音轨")
+	}, playerPopoverMenuOpts(&a.playerPopovers.audio))
+	a.syncMenuPopoverOpen(a.playerPopovers.audio)
 }
 
 func (a *app) subtitleTrackControls(c *ui.Context, p mediaPlayer) {
@@ -1017,49 +1592,124 @@ func (a *app) subtitleTrackControls(c *ui.Context, p mediaPlayer) {
 	tracks := tp.SubtitleTracks()
 	visible := tp.SubtitleVisible()
 	hasActive := hasActiveSubtitleTrack(p)
-	playerGlassMenuButton(c, "字幕", func(m *ui.Menu) {
-		if len(tracks) > 0 {
-			for i, tr := range tracks {
-				selected := tr.Selected && visible
-				label := formatSubtitleTrackLabel(tr, i)
-				if m.Item(label).ID(fmt.Sprintf("sub-%d", tr.ID)).Radio(selected).Chosen() {
-					if err := tp.SelectSubtitleTrack(tr.ID); err != nil {
-						a.status = "切换字幕失败：" + err.Error()
-					} else {
-						a.showPlayerOSD("字幕：" + label)
-					}
-				}
+	if hasActive {
+		for _, tr := range tracks {
+			if tr.Selected {
+				a.playerExtra.lastSubID = tr.ID
+				break
 			}
-			if m.Item("关闭字幕").ID("sub-off").Radio(!hasActive).Chosen() {
-				if err := tp.DisableSubtitleTrack(); err != nil {
-					a.status = "关闭字幕失败：" + err.Error()
-				} else {
-					a.showPlayerOSD("字幕已关")
-				}
-			}
-			if hasActive {
-				m.Separator()
-				if m.Item("字幕提前 0.5s ([)").ID("sub-delay-minus").Chosen() {
-					a.adjustSubtitleDelay(p, -500*time.Millisecond)
-				}
-				if m.Item("字幕推迟 0.5s (])").ID("sub-delay-plus").Chosen() {
-					a.adjustSubtitleDelay(p, 500*time.Millisecond)
-				}
-				if a.playerExtra.subDelay != 0 {
-					if m.Item("重置偏移 (" + formatSubtitleDelay(a.playerExtra.subDelay) + ")").ID("sub-delay-reset").Chosen() {
-						a.resetSubtitleDelay(p)
-					}
-				}
-			}
-			m.Separator()
 		}
-		if m.Item("加载外挂字幕…").ID("sub-load").Chosen() {
+	}
+	btn := ui.ButtonBase(c.Key("player-sub-btn")).Size(34, 34).Radius(10).Center().
+		Cursor(ui.CursorPointer).Label("切换字幕").Tooltip("字幕与在线匹配 ([ / ] 调偏移)")
+	bg := ui.Transparent
+	if a.playerPopovers.subtitle {
+		bg = ui.RGBA(255, 255, 255, 0.14)
+	} else if btn.Hovered() {
+		bg = ui.RGBA(255, 255, 255, 0.12)
+	}
+	btn.Background(btn.AnimateColor("sub-btn-bg", bg, animColor))
+	applyPressPose(btn)
+	btn.Children(func() {
+		badge := ui.Box(c).Size(22, 16).Radius(4).Center().PassThrough()
+		if hasActive {
+			badge.Background(playerText).Children(func() {
+				ui.Icon(c, iconCCLetters).Size(15, 9).TextColor(playerInk).PassThrough()
+			})
+			ui.Box(c).Size(4, 4).Radius(2).Absolute().Bottom(2).Left(15).Background(playerCoral).PassThrough()
+		} else {
+			badge.Border(1.4, ui.RGBA(248, 249, 255, 0.65)).Children(func() {
+				ui.Icon(c, iconCCLetters).Size(15, 9).TextColor(ui.RGBA(248, 249, 255, 0.78)).PassThrough()
+			})
+		}
+	})
+	if btn.Clicked() {
+		a.togglePlayerPopover(&a.playerPopovers.subtitle)
+	}
+	if a.playerPopovers.subtitle {
+		a.playerOverlay.keepVisible = true
+	}
+	ui.PopoverBase(c, btn, &a.playerPopovers.subtitle, func(panel ui.Element) {
+		stylePlayerPopoverPanel(panel, 288).
+			AttachTo(btn, ui.AnchorTopEnd, ui.AnchorBottomEnd).Margin(0, 0, a.popoverDockOffset(p), 0).AttachEdgeMargin(12)
+		ui.Text(c, "字幕").FontSize(14).Bold()
+		subOn := hasActive
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "显示字幕").FontSize(13).Grow(1)
+			if ui.Switch(c, &subOn).Label("字幕开关").Disabled(len(tracks) == 0).Changed() {
+				a.setSubtitleEnabled(p, subOn)
+			}
+		})
+		ui.Box(c).FillWidth().Height(1).Background(ui.RGBA(255, 255, 255, 0.08)).PassThrough()
+		if len(tracks) == 0 {
+			ui.Text(c, "当前视频无可用字幕轨").FontSize(12).TextColor(playerMutedText)
+		} else {
+			ui.Scroll(c).FillWidth().MaxHeight(168).Gap(4).ScrollbarStyle(danmakuScrollbar).Children(func() {
+				for i, tr := range tracks {
+					selected := tr.Selected && visible
+					label := formatSubtitleTrackLabel(tr, i)
+					row := ui.ButtonBase(c.Key(fmt.Sprintf("sub-pop-%d", tr.ID))).FillWidth().Padding(7, 10).Gap(8).
+						Radius(9).AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(label)
+					rowBg := ui.Transparent
+					if selected {
+						rowBg = playerCoralSoft
+						row.Border(1, playerCoralBorder)
+					} else if row.Hovered() {
+						rowBg = ui.RGBA(255, 255, 255, 0.08)
+					}
+					row.Background(row.AnimateColor("sub-row-bg", rowBg, animColor))
+					applyPressPose(row)
+					row.Children(func() {
+						dotColor := ui.Transparent
+						if selected {
+							dotColor = playerCoral
+						}
+						ui.Box(c).Size(6, 6).Radius(3).Background(dotColor).PassThrough()
+						t := ui.Text(c, label).FontSize(12).TextColor(playerText).SingleLine().Grow(1).PassThrough()
+						if selected {
+							t.Bold()
+						}
+					})
+					if row.Clicked() {
+						if err := tp.SelectSubtitleTrack(tr.ID); err != nil {
+							a.status = "切换字幕失败：" + err.Error()
+						} else {
+							a.playerExtra.lastSubID = tr.ID
+							a.showPlayerOSD("字幕：" + label)
+						}
+					}
+				}
+			})
+			if hasActive {
+				ui.Box(c).FillWidth().Height(1).Background(ui.RGBA(255, 255, 255, 0.08)).PassThrough()
+				ui.Row(c).FillWidth().Gap(5).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "偏移").FontSize(12).TextColor(playerMutedText)
+					if playerPopoverSmallChip(c, "−0.5s", "字幕提前 0.5s", "字幕提前 0.5 秒 ([)").Clicked() {
+						a.adjustSubtitleDelay(p, -500*time.Millisecond)
+					}
+					ui.Text(c, formatSubtitleDelay(a.playerExtra.subDelay)).FontSize(11).TextColor(playerText).
+						TextAlign(ui.Center).Grow(1).SingleLine().ContentTransition(ctNumeric)
+					if playerPopoverSmallChip(c, "+0.5s", "字幕推迟 0.5s", "字幕推迟 0.5 秒 (])").Clicked() {
+						a.adjustSubtitleDelay(p, 500*time.Millisecond)
+					}
+					if a.playerExtra.subDelay != 0 {
+						if playerPopoverSmallChip(c, "重置", "重置字幕偏移", "重置字幕偏移").Clicked() {
+							a.resetSubtitleDelay(p)
+						}
+					}
+					ui.Text(c, "[ / ]").FontSize(10).TextColor(ui.RGBA(248, 249, 255, 0.45)).SingleLine()
+				})
+			}
+		}
+		ui.Box(c).FillWidth().Height(1).Background(ui.RGBA(255, 255, 255, 0.08)).PassThrough()
+		if playerPopoverFooterLink(c, "加载本地外挂字幕…", "选择本地字幕文件").Clicked() {
+			a.closePlayerPopovers()
 			a.openSubtitleFileDialog()
 		}
-		if m.Item("字幕样式与在线匹配…").ID("sub-settings").Chosen() {
+		if playerPopoverFooterLink(c, "字号样式与在线匹配…", "调整字幕样式或在线搜索匹配").Clicked() {
 			a.openSubtitleDialog()
 		}
-	}).Label("切换字幕").Tooltip("字幕与在线匹配 ([ / ] 调偏移)")
+	})
 }
 
 func (a *app) switchPlayingStream(idx int) {
@@ -1088,44 +1738,54 @@ func (a *app) switchPlayingStream(idx int) {
 	}
 }
 
-func (a *app) livePlayerControls(c *ui.Context) {
+func (a *app) livePlayerRightControls(c *ui.Context) {
 	live := &a.live
-	if live.catchupProgram != nil && live.playingChannel >= 0 && live.playingChannel < len(live.channels) {
-		if playerGlassButton(c, "返回直播").Clicked() {
-			a.playLiveChannel(live.playingChannel, live.playingStream)
-		}
+	if live.playingChannel < 0 || live.playingChannel >= len(live.channels) {
+		return
 	}
-	if len(live.channels) > 1 {
-		if playerGlassButton(c, "上一频道").Disabled(live.playingChannel <= 0).Clicked() {
-			a.playLiveChannel(live.playingChannel-1, 0)
+	ch := live.channels[live.playingChannel]
+	if count := len(ch.Streams); count > 1 {
+		chipText := fmt.Sprintf("线路 %d/%d", live.playingStream+1, count)
+		chipLabel := fmt.Sprintf("切换线路 %d/%d", live.playingStream+1, count)
+		lineBtn := ui.ButtonBase(c.Key("live-stream-switch")).Height(30).Padding(0, 10).Radius(8).Center().
+			Cursor(ui.CursorPointer).Label(chipLabel).Tooltip("切换直播线路").
+			Border(1, ui.RGBA(255, 255, 255, 0.16))
+		bg := ui.RGBA(255, 255, 255, 0.06)
+		if lineBtn.Hovered() {
+			bg = ui.RGBA(255, 255, 255, 0.14)
 		}
-		if playerGlassButton(c, "下一频道").Disabled(live.playingChannel+1 >= len(live.channels)).Clicked() {
-			a.playLiveChannel(live.playingChannel+1, 0)
-		}
-	}
-	if live.playingChannel >= 0 && live.playingChannel < len(live.channels) {
-		ch := live.channels[live.playingChannel]
-		count := len(ch.Streams)
-		if count > 1 && playerGlassButton(c, fmt.Sprintf("切换线路 %d/%d", live.playingStream+1, count)).Clicked() {
+		lineBtn.Background(lineBtn.AnimateColor("line-bg", bg, animColor))
+		applyPressPose(lineBtn)
+		lineBtn.Children(func() {
+			ui.Text(c, chipText).FontSize(12).TextColor(playerText).SingleLine().PassThrough()
+		})
+		if lineBtn.Clicked() {
 			a.playLiveChannel(live.playingChannel, (live.playingStream+1)%count)
 		}
-		favLabel := "☆ 收藏"
-		if live.state.isFavorite(ch.Name) {
-			favLabel = "★ 已收藏"
-		}
-		if playerGlassButton(c, favLabel).Label("收藏当前频道").Clicked() {
-			a.toggleLiveChannelFavorite(ch)
-		}
 	}
-}
-
-func nextPlayerRate(current float64) float64 {
-	for _, rate := range []float64{1, 1.25, 1.5, 2} {
-		if rate > current+0.01 {
-			return rate
-		}
+	fav := live.state.isFavorite(ch.Name)
+	starIcon := iconStarOutline
+	starColor := playerMutedText
+	favTip := "收藏当前频道"
+	if fav {
+		starIcon = iconStarFilled
+		starColor = ui.RGB(251, 191, 36)
+		favTip = "已收藏 · 点击取消收藏"
 	}
-	return 1
+	favBtn := ui.ButtonBase(c.Key("live-fav-btn")).Size(34, 34).Radius(10).Center().
+		Cursor(ui.CursorPointer).Label("收藏当前频道").Tooltip(favTip)
+	favBg := ui.Transparent
+	if favBtn.Hovered() {
+		favBg = ui.RGBA(255, 255, 255, 0.12)
+	}
+	favBtn.Background(favBtn.AnimateColor("fav-bg", favBg, animColor))
+	applyPressPose(favBtn)
+	favBtn.Children(func() {
+		ui.Icon(c, starIcon).Size(17, 17).TextColor(starColor).PassThrough()
+	})
+	if favBtn.Clicked() {
+		a.toggleLiveChannelFavorite(ch)
+	}
 }
 
 // playbackSpeed is the proxy's current download rate, sampled about

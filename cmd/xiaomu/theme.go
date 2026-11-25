@@ -1,18 +1,13 @@
 package main
 
 import (
-	"runtime"
-
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 )
 
-// appPalette holds semantic colors and materials derived from the window's
-// current Light/Dark appearance and desktop accessibility preferences
-// (ReduceTransparency, HighContrast).
+// appPalette holds Xiaomu's cinema dark colors and materials, honoring desktop
+// accessibility preferences (ReduceTransparency, HighContrast).
 type appPalette struct {
-	dark               bool
 	reduceTransparency bool
 	highContrast       bool
 
@@ -45,107 +40,65 @@ type appPalette struct {
 }
 
 var (
+	brandAccentDark = ui.RGBA(255, 90, 64, 0.94)
+
 	darkBackdrop = ui.LinearGradient{Angle: 180, Stops: []ui.GradientStop{
 		{Color: ui.Hex("#0b1530"), At: 0},
 		{Color: ui.Hex("#1e2846"), At: 0.42},
 		{Color: ui.Hex("#4d3047"), At: 0.76},
 		{Color: ui.Hex("#1b1422"), At: 1},
 	}}
-	lightBackdrop = ui.LinearGradient{Angle: 180, Stops: []ui.GradientStop{
-		{Color: ui.Hex("#eef2f8"), At: 0},
-		{Color: ui.Hex("#f4f6fa"), At: 0.44},
-		{Color: ui.Hex("#f9eff1"), At: 0.78},
-		{Color: ui.Hex("#eff2f7"), At: 1},
-	}}
 )
+
+// appDarkTheme returns Xiaomu's always-dark cinema theme accented with warm
+// coral while preserving desktop accessibility preferences (HighContrast, TextScale).
+func appDarkTheme(c *ui.Context) *ui.Theme {
+	th := ui.DarkTheme()
+	if c != nil {
+		th = th.WithPreferences(c.Preferences())
+	}
+	return th.WithAccent(brandAccentDark)
+}
 
 func paletteFor(c *ui.Context) appPalette {
 	prefs := c.Preferences()
-	dark := true
-	if th := c.Theme(); th != nil {
-		dark = th.Dark
-	}
-	if dark {
-		p := appPalette{
-			dark:               true,
-			reduceTransparency: prefs.ReduceTransparency,
-			highContrast:       prefs.HighContrast,
-			backdrop:           darkBackdrop,
-			surface:            ui.RGBA(14, 16, 26, 0.58),
-			surfaceSubtle:      ui.RGBA(255, 255, 255, 0.06),
-			surfaceHover:       ui.RGBA(255, 255, 255, 0.10),
-			surfaceSelected:    ui.RGBA(255, 255, 255, 0.16),
-			cardPlaceholder:    ui.Hex("#24242c"),
-			border:             ui.RGBA(255, 255, 255, 0.10),
-			text:               ui.Hex("#f5f5f7"),
-			textMuted:          ui.RGBA(243, 239, 231, 0.78),
-			accent:             ui.RGBA(255, 90, 64, 0.94),
-			accentText:         ui.Hex("#1a0f0c"),
-			accentSoft:         ui.RGBA(255, 90, 64, 0.22),
-			danger:             ui.RGBA(232, 69, 69, 0.92),
-			dangerText:         ui.RGB(255, 255, 255),
-			success:            ui.Hex("#3fb96a"),
-			warning:            ui.RGB(255, 166, 130),
-			chipSelectedBg:     ui.RGB(243, 239, 231),
-			chipSelectedText:   ui.RGB(9, 15, 31),
-			dialogScrim:        ui.RGBA(2, 8, 22, 0.64),
-			paneMat:            glass.Glass{Clarity: 0.5},
-			controlMat:         glass.Glass{Style: glass.Clear, Interactive: true},
-			primaryMat:         glass.Glass{Tint: ui.RGBA(255, 90, 64, 0.92), Interactive: true},
-			dialogMat:          glass.Glass{Style: glass.Regular},
-		}
-		if prefs.ReduceTransparency {
-			p.surface = ui.Hex("#1a1c26")
-			p.surfaceSubtle = ui.Hex("#232634")
-			p.surfaceHover = ui.Hex("#2d3142")
-			p.surfaceSelected = ui.Hex("#383d52")
-			p.dialogScrim = ui.RGBA(2, 6, 16, 0.78)
-		}
-		if prefs.HighContrast {
-			p.border = ui.RGBA(255, 255, 255, 0.28)
-			p.textMuted = ui.RGBA(245, 245, 247, 0.90)
-		}
-		return p
-	}
-
 	p := appPalette{
-		dark:               false,
 		reduceTransparency: prefs.ReduceTransparency,
 		highContrast:       prefs.HighContrast,
-		backdrop:           lightBackdrop,
-		surface:            ui.RGBA(255, 255, 255, 0.80),
-		surfaceSubtle:      ui.RGBA(15, 23, 42, 0.05),
-		surfaceHover:       ui.RGBA(15, 23, 42, 0.07),
-		surfaceSelected:    ui.RGBA(15, 23, 42, 0.12),
-		cardPlaceholder:    ui.Hex("#e2e5ec"),
-		border:             ui.RGBA(15, 23, 42, 0.09),
-		text:               ui.Hex("#1d1d1f"),
-		textMuted:          ui.RGBA(29, 29, 31, 0.64),
-		accent:             ui.RGB(229, 72, 77),
-		accentText:         ui.RGB(255, 255, 255),
-		accentSoft:         ui.RGBA(229, 72, 77, 0.14),
-		danger:             ui.RGB(217, 45, 32),
+		backdrop:           darkBackdrop,
+		surface:            ui.RGBA(14, 16, 26, 0.58),
+		surfaceSubtle:      ui.RGBA(255, 255, 255, 0.06),
+		surfaceHover:       ui.RGBA(255, 255, 255, 0.10),
+		surfaceSelected:    ui.RGBA(255, 255, 255, 0.16),
+		cardPlaceholder:    ui.Hex("#24242c"),
+		border:             ui.RGBA(255, 255, 255, 0.10),
+		text:               ui.Hex("#f5f5f7"),
+		textMuted:          ui.RGBA(243, 239, 231, 0.78),
+		accent:             brandAccentDark,
+		accentText:         ui.Hex("#1a0f0c"),
+		accentSoft:         ui.RGBA(255, 90, 64, 0.22),
+		danger:             ui.RGBA(232, 69, 69, 0.92),
 		dangerText:         ui.RGB(255, 255, 255),
-		success:            ui.Hex("#1e8e4e"),
-		warning:            ui.Hex("#c2410c"),
-		chipSelectedBg:     ui.Hex("#1d1d1f"),
-		chipSelectedText:   ui.RGB(255, 255, 255),
-		dialogScrim:        ui.RGBA(15, 23, 42, 0.36),
-		paneMat:            glass.Glass{Clarity: 0.55},
+		success:            ui.Hex("#3fb96a"),
+		warning:            ui.RGB(255, 166, 130),
+		chipSelectedBg:     ui.RGB(243, 239, 231),
+		chipSelectedText:   ui.RGB(9, 15, 31),
+		dialogScrim:        ui.RGBA(2, 8, 22, 0.64),
+		paneMat:            glass.Glass{Clarity: 0.5},
 		controlMat:         glass.Glass{Style: glass.Clear, Interactive: true},
-		primaryMat:         glass.Glass{Tint: ui.RGBA(229, 72, 77, 0.94), Interactive: true},
+		primaryMat:         glass.Glass{Tint: ui.RGBA(255, 90, 64, 0.92), Interactive: true},
 		dialogMat:          glass.Glass{Style: glass.Regular},
 	}
 	if prefs.ReduceTransparency {
-		p.surface = ui.RGB(255, 255, 255)
-		p.surfaceSubtle = ui.Hex("#ebedf2")
-		p.surfaceHover = ui.Hex("#e0e4ec")
-		p.surfaceSelected = ui.Hex("#d4d9e4")
-		p.dialogScrim = ui.RGBA(15, 23, 42, 0.55)
+		p.surface = ui.Hex("#1a1c26")
+		p.surfaceSubtle = ui.Hex("#232634")
+		p.surfaceHover = ui.Hex("#2d3142")
+		p.surfaceSelected = ui.Hex("#383d52")
+		p.dialogScrim = ui.RGBA(2, 6, 16, 0.78)
 	}
 	if prefs.HighContrast {
-		p.border = ui.RGBA(15, 23, 42, 0.28)
-		p.textMuted = ui.RGBA(29, 29, 31, 0.84)
+		p.border = ui.RGBA(255, 255, 255, 0.28)
+		p.textMuted = ui.RGBA(245, 245, 247, 0.90)
 	}
 	return p
 }
@@ -153,7 +106,7 @@ func paletteFor(c *ui.Context) appPalette {
 // applySurface styles a card container with adaptive translucency and border.
 func applySurface(el ui.Element, p appPalette, radius float32) ui.Element {
 	el.Radius(radius).Background(p.surface)
-	if !p.dark || p.highContrast || p.reduceTransparency {
+	if p.highContrast || p.reduceTransparency {
 		el.Border(1, p.border)
 	}
 	return el
@@ -163,41 +116,13 @@ func applySurface(el ui.Element, p appPalette, radius float32) ui.Element {
 // opaque high-legibility fallback when ReduceTransparency is enabled.
 func applyPane(el ui.Element, p appPalette, mat glass.Glass) ui.Element {
 	if p.reduceTransparency {
-		bg := ui.Hex("#171923")
-		if !p.dark {
-			bg = ui.RGBA(255, 255, 255, 0.96)
-		}
-		return el.Background(bg).Border(1, p.border)
+		return el.Background(ui.Hex("#171923")).Border(1, p.border)
 	}
 	el.Material(mat)
 	if p.highContrast {
 		el.Border(1, p.border)
 	}
 	return el
-}
-
-func (a *app) syncWindowCaptionTheme(c *ui.Context) {
-	if runtime.GOOS != "windows" || a.window == nil {
-		return
-	}
-	dark := a.player != nil
-	if !dark {
-		if th := c.Theme(); th != nil {
-			dark = th.Dark
-		} else {
-			dark = true
-		}
-	}
-	if a.windowThemeKnown && a.windowDarkTheme == dark {
-		return
-	}
-	a.windowThemeKnown = true
-	a.windowDarkTheme = dark
-	if dark {
-		a.window.SetWindowButtonsTheme(mygo.ThemeDark)
-	} else {
-		a.window.SetWindowButtonsTheme(mygo.ThemeLight)
-	}
 }
 
 // Navigation icons for compact icon-rail sidebar (<820px width).

@@ -486,27 +486,30 @@ func TestSingleChannelLiveSourceOpensEPGPanel(t *testing.T) {
 
 	a.playLiveChannel(0, 0)
 	tt := ui.NewTester(a.view, 1120, 760)
-	if !tt.HasText("收起节目单") || !tt.HasText("晚间新闻") || !tt.HasText("新闻联播") {
-		t.Fatalf("single-channel live source with EPG did not open EPG panel: %v", tt.Texts())
+	if !a.panelOpen || !tt.HasText("节目单") || !tt.HasText("晚间新闻") || !tt.HasText("新闻联播") {
+		t.Fatalf("single-channel live source with EPG did not open EPG panel: open=%v texts=%v", a.panelOpen, tt.Texts())
 	}
-	if err := tt.Click("收起节目单"); err != nil {
+	if err := tt.Click("节目单"); err != nil {
 		t.Fatalf("collapse EPG panel failed: %v", err)
 	}
-	if tt.HasText("晚间新闻") || !tt.HasText("节目单") {
-		t.Fatalf("EPG panel did not collapse cleanly: %v", tt.Texts())
+	if a.panelOpen || tt.HasText("晚间新闻") || !tt.HasText("节目单") {
+		t.Fatalf("EPG panel did not collapse cleanly: open=%v texts=%v", a.panelOpen, tt.Texts())
 	}
 	if err := tt.Click("节目单"); err != nil {
 		t.Fatalf("reopen EPG panel failed: %v", err)
 	}
-	if !tt.HasText("晚间新闻") {
-		t.Fatalf("EPG panel did not reopen: %v", tt.Texts())
+	if !a.panelOpen || !tt.HasText("晚间新闻") {
+		t.Fatalf("EPG panel did not reopen: open=%v texts=%v", a.panelOpen, tt.Texts())
 	}
 
 	// Single-channel live source without EPG must not show the panel toggle.
 	a.live.epgURL = ""
 	a.live.sources[0].EPG = ""
 	tt.Frame()
-	if tt.HasText("节目单") || tt.HasText("收起节目单") || tt.HasText("频道列表") || tt.HasText("收起频道") {
-		t.Fatalf("single-channel live without EPG unexpectedly showed panel toggle: %v", tt.Texts())
+	if _, ok := tt.Find("节目单"); ok {
+		t.Fatalf("single-channel live without EPG unexpectedly showed EPG toggle: %v", tt.Texts())
+	}
+	if _, ok := tt.Find("频道"); ok {
+		t.Fatalf("single-channel live without EPG unexpectedly showed channel toggle: %v", tt.Texts())
 	}
 }
