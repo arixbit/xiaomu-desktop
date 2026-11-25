@@ -154,6 +154,10 @@ func (a *app) toggleLiveChannelFavorite(ch iptv.Channel) {
 			a.showPlayerOSD("已收藏频道")
 		}
 	} else {
+		if len(a.live.state.favorites) == 0 && a.live.group == liveGroupFavorites {
+			a.live.group = ""
+			a.live.resetLists = true
+		}
 		a.setNotice("已取消收藏：" + ch.Name)
 		if a.playingLive {
 			a.showPlayerOSD("已取消收藏")
@@ -196,6 +200,38 @@ func (a *app) findLiveChannelByName(name string) int {
 	return -1
 }
 
+func liveSourceMatches(src iptv.Source, last *liveLastChannel) bool {
+	if last == nil {
+		return false
+	}
+	if last.SourceURL != "" {
+		return src.URL == last.SourceURL
+	}
+	return src.URL == "" && last.SourceName != "" && src.Name == last.SourceName
+}
+
+func (a *app) canResumeLastLiveChannel() bool {
+	last := a.live.state.last
+	if last == nil || strings.TrimSpace(last.ChannelName) == "" {
+		return false
+	}
+	if a.findLiveChannelByName(last.ChannelName) >= 0 {
+		return true
+	}
+	currentLoaded := len(a.live.channels) > 0 && !a.running(jobLive)
+	for i, src := range a.live.sources {
+		// If this source is already loaded and the channel wasn't found above,
+		// the channel has been removed from this playlist.
+		if currentLoaded && i == a.live.selectedSource {
+			continue
+		}
+		if liveSourceMatches(src, last) {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *app) resumeLastLiveChannel() {
 	last := a.live.state.last
 	if last == nil || strings.TrimSpace(last.ChannelName) == "" {
@@ -211,8 +247,7 @@ func (a *app) resumeLastLiveChannel() {
 	}
 	// If the channel lives in another source, load that source and resume on arrival.
 	for i, src := range a.live.sources {
-		if (last.SourceURL != "" && src.URL == last.SourceURL) ||
-			(last.SourceName != "" && src.Name == last.SourceName) {
+		if liveSourceMatches(src, last) {
 			a.live.pendingResume = last.ChannelName
 			a.live.pendingResumeStream = last.StreamIndex
 			a.loadLiveSource(i)
@@ -235,6 +270,8 @@ func (a *app) tryPendingLiveResume() {
 			streamIdx = 0
 		}
 		a.playLiveChannel(idx, streamIdx)
+	} else {
+		a.setNotice("该直播源中已找不到频道：" + name)
 	}
 }
 
@@ -303,7 +340,10 @@ func (a *app) renderChannelLogo(c *ui.Context, ch iptv.Channel, size float32, da
 // isLiveStream reports whether playback is a real-time live broadcast
 // rather than a seekable catchup replay or on-demand video.
 func (a *app) isLiveStream() bool {
-	return a.playingLive && a.live.catchupProgram == nil
+	if a.playingLive {
+		return a.live.catchupProgram == nil
+	}
+	return a.playingDirectLive
 }
 
 func (a *app) liveNow() time.Time {
@@ -455,7 +495,7 @@ func (a *app) playCatchupProgram(channelIndex, streamIndex int, prog iptv.Progra
 	}
 	replayURL, ok := iptv.CatchupURL(ch, streamIndex, prog, a.liveNow())
 	if !ok {
-		a.status = "该频道暂不支持回看或节目已超出回看天数"
+		a.setNotice("该频道暂不支持回看或节目已超出回看天数")
 		return false
 	}
 	headers := ch.Streams[streamIndex].Headers
@@ -551,10 +591,10 @@ func (a *app) liveLastResumeBar(c *ui.Context) {
 	if (a.live.group != "" && a.live.group != liveGroupFavorites) || strings.TrimSpace(a.live.query) != "" {
 		return
 	}
-	last := a.live.state.last
-	if last == nil || strings.TrimSpace(last.ChannelName) == "" {
+	if !a.canResumeLastLiveChannel() {
 		return
 	}
+	last := a.live.state.last
 	p := paletteFor(c)
 	bar := ui.Row(c).Key("live-last-resume").FillWidth().Padding(10, 14).Gap(12).AlignItems(ui.Center)
 	applySurface(bar, p, 16).Children(func() {

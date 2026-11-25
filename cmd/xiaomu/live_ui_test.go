@@ -100,7 +100,7 @@ func TestLiveImportPlaybackAndChannelControls(t *testing.T) {
 	click("添加直播源")
 	click("直播地址")
 	tt.Type(srv.URL + "/channels.txt")
-	click("导入直播")
+	click("导入")
 	click("播放 演示频道")
 	if !a.playingLive || !tt.HasText("直播 · 演示频道") || tt.HasText("下一集") || tt.HasText("播完自动下一集") {
 		t.Fatalf("wrong live controls: %v", tt.Texts())

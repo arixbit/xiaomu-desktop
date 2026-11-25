@@ -375,7 +375,7 @@ func (a *app) watchPanLoginWindow(ctx context.Context, ls *panLoginSession, sess
 			return
 		case <-ticker.C:
 		}
-		if a.closed {
+		if ctx.Err() != nil {
 			return
 		}
 
@@ -487,7 +487,7 @@ func (a *app) watchPanLoginWindow(ctx context.Context, ls *panLoginSession, sess
 		}
 
 		finish := func() {
-			if a.closed {
+			if a.closed || a.panLogin != ls {
 				return
 			}
 			a.applyAuthorizedCredentials(ls.provider, updated)
@@ -513,7 +513,7 @@ func (a *app) applyAuthorizedCredentials(provider pan.Provider, updated pan.Cred
 		return
 	}
 	a.playFailure = nil
-	a.status = provider.Label() + "已授权登录"
+	a.setNotice(provider.Label() + "已授权登录")
 }
 
 func (a *app) closePanLoginWindow() {

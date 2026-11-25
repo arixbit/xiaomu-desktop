@@ -130,6 +130,8 @@ type sourceSpeedTest struct {
 	running    bool
 	done       int
 	total      int
+	okCount    int
+	failCount  int
 }
 
 // speedTestEntries is every supported site the sources page lists, each
@@ -222,6 +224,7 @@ func (a *app) startSourceSpeedTest() {
 	a.speedTest.cancel = cancel
 	generation := a.speedTest.generation
 	a.speedTest.running, a.speedTest.done, a.speedTest.total = true, 0, len(entries)
+	a.speedTest.okCount, a.speedTest.failCount = 0, 0
 	assets := strings.TrimSpace(a.browser.assets)
 	dispatch := a.dispatch
 	update := func(fn func()) {
@@ -283,13 +286,20 @@ func (a *app) startSourceSpeedTest() {
 				if r.d > 0 {
 					a.recordLatency(key, r.d)
 					a.markSiteHealthy(key)
+					a.speedTest.okCount++
 				} else {
 					a.markSiteFailed(key)
+					a.speedTest.failCount++
 				}
 				a.speedTest.done++
 				if a.speedTest.done >= a.speedTest.total {
 					a.speedTest.running = false
 					a.speedTest.cancel = nil
+					if a.speedTest.failCount == 0 {
+						a.setNotice(fmt.Sprintf("测速完成，%d 个站点均可用", a.speedTest.okCount))
+					} else {
+						a.setNotice(fmt.Sprintf("测速完成：%d 个可用，%d 个失效", a.speedTest.okCount, a.speedTest.failCount))
+					}
 				}
 			})
 		}

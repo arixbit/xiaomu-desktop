@@ -264,8 +264,10 @@ func (a *app) sidebar(c *ui.Context) {
 			if shortWin {
 				rowH = 32
 			}
+			hasNewFollow := a.hasAnyFollowingNew()
 			for _, tab := range tabs {
-				if railNavButton(c, tab.kind, tab.label, a.root() == tab.kind, rowH).Clicked() {
+				badge := tab.kind == routeFavorites && hasNewFollow
+				if railNavButton(c, tab.kind, tab.label, a.root() == tab.kind, badge, rowH).Clicked() {
 					a.switchTab(tab.kind)
 				}
 			}
@@ -274,10 +276,10 @@ func (a *app) sidebar(c *ui.Context) {
 			if shortWin {
 				btnH = 32
 			}
-			if railIconButton(c, navIconFile, "打开文件", btnH).Clicked() {
+			if railIconButton(c, navIconFile, "打开文件", "打开本地视频 ("+openFileShortcutHint()+")", btnH).Clicked() {
 				a.openLocalFileDialog()
 			}
-			if railIconButton(c, navIconLink, "打开链接", btnH).Clicked() {
+			if railIconButton(c, navIconLink, "打开链接", "粘贴视频直链或网盘分享链接", btnH).Clicked() {
 				a.linkErr = ""
 				a.linkOpen = true
 			}
@@ -291,8 +293,9 @@ func (a *app) sidebar(c *ui.Context) {
 			titleBottom = 6
 		}
 		ui.Text(c, "小幕").FontSize(20).Bold().Padding(0, 12, titleBottom, 12)
+		hasNewFollow := a.hasAnyFollowingNew()
 		for _, tab := range tabs {
-			row := listRow(c, tab.label, a.root() == tab.kind)
+			row := navTabRow(c, tab.label, a.root() == tab.kind, tab.kind == routeFavorites && hasNewFollow)
 			if shortWin {
 				row.Height(32)
 			}
@@ -301,8 +304,8 @@ func (a *app) sidebar(c *ui.Context) {
 			}
 		}
 		ui.Spacer(c)
-		openFileBtn := glassButton(c, "打开文件").FillWidth()
-		openLinkBtn := glassButton(c, "打开链接").FillWidth()
+		openFileBtn := glassButton(c, "打开文件").FillWidth().Tooltip("打开本地视频 (" + openFileShortcutHint() + ")")
+		openLinkBtn := glassButton(c, "打开链接").FillWidth().Tooltip("粘贴视频直链或网盘分享链接")
 		updBtn := updateButton(c, a.availableUpdate)
 		if shortWin {
 			openFileBtn.Padding(6, 12)
@@ -322,10 +325,43 @@ func (a *app) sidebar(c *ui.Context) {
 	})
 }
 
-func railNavButton(c *ui.Context, kind routeKind, label string, selected bool, height float32) ui.Element {
+func navTabRow(c *ui.Context, label string, selected, hasBadge bool) ui.Element {
+	if !hasBadge {
+		return listRow(c, label, selected)
+	}
 	p := paletteFor(c)
-	row := ui.Row(c.Key("rail-"+label)).FillWidth().Height(height).Radius(12).
-		Center().Cursor(ui.CursorPointer).Label(label).Tooltip(label)
+	row := ui.Row(c.Key(label)).FillWidth().Height(38).Padding(0, 12).Gap(8).Radius(11).
+		AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(label).Tooltip("追剧有新集更新")
+	targetBg := ui.Transparent
+	targetFg := p.textMuted
+	if selected {
+		targetBg = p.surfaceSelected
+		targetFg = p.text
+	} else if row.Hovered() {
+		targetBg = p.surfaceHover
+		targetFg = p.text
+	}
+	row.Background(row.AnimateColor("row-bg", targetBg, animColor))
+	applyPressPose(row)
+	fg := row.AnimateColor("row-fg", targetFg, animColor)
+	row.Children(func() {
+		text := ui.Text(c, label).SingleLine().TextColor(fg).Grow(1)
+		if selected {
+			text.Bold()
+		}
+		ui.Box(c).Size(7, 7).Radius(4).Background(p.accent).Label("追剧有新集").PassThrough()
+	})
+	return row
+}
+
+func railNavButton(c *ui.Context, kind routeKind, label string, selected, hasBadge bool, height float32) ui.Element {
+	p := paletteFor(c)
+	tip := label
+	if hasBadge {
+		tip = label + "（有新集）"
+	}
+	row := ui.Row(c.Key("rail-" + label)).FillWidth().Height(height).Radius(12).
+		Center().Cursor(ui.CursorPointer).Label(label).Tooltip(tip)
 	targetBg := ui.Transparent
 	targetFg := p.textMuted
 	if selected {
@@ -340,14 +376,20 @@ func railNavButton(c *ui.Context, kind routeKind, label string, selected bool, h
 	fg := row.AnimateColor("rail-fg", targetFg, animColor)
 	row.Children(func() {
 		ui.Icon(c, tabIcon(kind)).Size(19, 19).TextColor(fg).PassThrough()
+		if hasBadge {
+			ui.Box(c).Size(7, 7).Radius(4).Absolute().Right(10).Top(8).Background(p.accent).Label("追剧有新集").PassThrough()
+		}
 	})
 	return row
 }
 
-func railIconButton(c *ui.Context, icon *ui.SVG, label string, height float32) ui.Element {
+func railIconButton(c *ui.Context, icon *ui.SVG, label, tooltip string, height float32) ui.Element {
 	p := paletteFor(c)
+	if tooltip == "" {
+		tooltip = label
+	}
 	btn := ui.Button(c.Key("rail-action-"+label), "").FillWidth().Height(height).Radius(14).
-		Center().Label(label).Tooltip(label).TextColor(p.text)
+		Center().Label(label).Tooltip(tooltip).TextColor(p.text)
 	if p.reduceTransparency {
 		bg := p.surfaceSubtle
 		if btn.Hovered() {
@@ -417,6 +459,13 @@ func searchShortcutHint() string {
 	return "Ctrl+K"
 }
 
+func openFileShortcutHint() string {
+	if runtime.GOOS == "darwin" {
+		return "⌘O"
+	}
+	return "Ctrl+O"
+}
+
 func (a *app) librarySearch(c *ui.Context) ui.Element {
 	p := paletteFor(c)
 	return ui.Box(c).Key("library-search").Height(40).Children(func() {
@@ -438,7 +487,19 @@ func (a *app) librarySearch(c *ui.Context) ui.Element {
 			a.searchLibrary()
 		}
 		ui.Icon(c, librarySearchIcon).Size(18, 18).Absolute().Left(14).Top(11).TextColor(p.textMuted).PassThrough()
-		ui.Text(c, searchShortcutHint()).FontSize(12).TextColor(p.textMuted).Absolute().Right(14).Top(11).PassThrough()
+		if a.browser.query != "" {
+			clearBtn := ui.Button(c.Key("clear-search"), "×").Label("清空搜索").Tooltip("清空搜索").
+				Absolute().Right(10).Top(8).Size(24, 24).Radius(12).Padding(0).FontSize(15).
+				Background(p.surfaceSubtle).TextColor(p.textMuted)
+			applyPressPose(clearBtn)
+			if clearBtn.Clicked() {
+				a.browser.query = ""
+				a.focusSearchGrid = false
+				a.searchFocused = true
+			}
+		} else if !a.searchFocused {
+			ui.Text(c, searchShortcutHint()).FontSize(12).TextColor(p.textMuted).Absolute().Right(14).Top(11).PassThrough()
+		}
 	})
 }
 
@@ -482,24 +543,31 @@ func (a *app) statusView(c *ui.Context) {
 // linkDialog plays one address the user pastes, without a library.
 func (a *app) linkDialog(c *ui.Context) {
 	p := paletteFor(c)
+	_, winH := c.Size()
 	ui.DialogBase(c, &a.linkOpen, func(backdrop, panel ui.Element) {
 		backdrop.Background(p.dialogScrim).Transition(transDialogScrim)
-		panel.Width(520).MaxWidth(520).Padding(26).Gap(14).Radius(26).TextColor(p.text).Transition(transDialogPanel)
+		panel.Width(520).MaxWidth(520).MaxHeight(max(float32(260), winH-32)).Padding(24).Gap(12).Radius(26).TextColor(p.text).Transition(transDialogPanel)
 		applyPane(panel, p, p.dialogMat)
 		ui.Text(c, "打开链接").FontSize(24).Bold()
-		ui.Text(c, "粘贴视频直链（mp4 / m3u8）或夸克、UC、阿里云盘、百度网盘分享链接").TextColor(p.textMuted)
-		if ui.TextInput(c, &a.rawURL).Label("地址").Placeholder("https://example.com/video.mp4 或网盘分享链接").FillWidth().Submitted() {
-			a.play()
+		hint := "粘贴视频直链（mp4 / m3u8）或夸克、UC、阿里云盘、百度网盘分享链接"
+		if mpvBackendSupported() || a.openMPV != nil {
+			hint = "粘贴视频直链（mp4 / m3u8 / rtsp / rtmp）或夸克、UC、阿里云盘、百度网盘分享链接"
 		}
-		ui.Collapsible(c.Key("link-advanced"), "高级选项（请求头）", &a.linkAdvanced, func() {
-			ui.Column(c).FillWidth().Padding(6, 0, 2, 0).Gap(10).Children(func() {
-				ui.TextInput(c, &a.referer).Label("Referer").Placeholder("来源页地址（可选）").FillWidth()
-				ui.TextInput(c, &a.ua).Label("User-Agent").Placeholder("自定义客户端标识（可选）").FillWidth()
+		ui.Scroll(c).FillWidth().MaxHeight(max(float32(120), winH-176)).Gap(12).Children(func() {
+			ui.Text(c, hint).TextColor(p.textMuted)
+			if ui.TextInput(c, &a.rawURL).Label("地址").Placeholder("https://example.com/video.mp4 或网盘分享链接").FillWidth().AutoFocus().Submitted() {
+				a.play()
+			}
+			ui.Collapsible(c.Key("link-advanced"), "高级选项（防盗链请求头，通常留空）", &a.linkAdvanced, func() {
+				ui.Column(c).FillWidth().Padding(6, 0, 2, 0).Gap(10).Children(func() {
+					ui.TextInput(c, &a.referer).Label("Referer").Placeholder("来源页地址（防盗链时填写）").FillWidth()
+					ui.TextInput(c, &a.ua).Label("User-Agent").Placeholder("浏览器标识（通常留空）").FillWidth()
+				})
 			})
+			if a.linkErr != "" {
+				ui.Text(c, a.linkErr).FontSize(13).TextColor(p.warning)
+			}
 		})
-		if a.linkErr != "" {
-			ui.Text(c, a.linkErr).FontSize(13).TextColor(p.warning)
-		}
 		ui.Row(c).FillWidth().Gap(8).Justify(ui.End).Children(func() {
 			if glassButton(c, "取消").Clicked() {
 				a.linkOpen = false

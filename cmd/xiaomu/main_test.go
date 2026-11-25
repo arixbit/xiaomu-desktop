@@ -109,14 +109,14 @@ func TestViewPlay(t *testing.T) {
 	if err := tt.Click("播放"); err != nil {
 		t.Fatal(err)
 	}
-	if !tt.HasText("请输入 http 或 https 播放地址") {
+	if !tt.HasText("请输入有效的视频地址（http / https / rtsp / rtmp）或网盘分享链接") && !tt.HasText("请输入 http 或 https 播放地址") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
 	if err := tt.Click("地址"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Type("https://example.com/clip.m3u8")
-	if err := tt.Click("高级选项（请求头）"); err != nil {
+	if err := tt.Click("高级选项（防盗链请求头，通常留空）"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Advance(300 * time.Millisecond)

@@ -172,19 +172,65 @@ func (a *app) prepareExternalPlayback() {
 	a.sourceAttempt = sourcePlaybackAttempt{}
 }
 
+// cleanUserURL trims whitespace and accidentally copied surrounding quotes or
+// brackets around a pasted address.
+func cleanUserURL(raw string) string {
+	s := strings.TrimSpace(raw)
+	for len(s) >= 2 {
+		switch {
+		case strings.HasPrefix(s, `"`) && strings.HasSuffix(s, `"`),
+			strings.HasPrefix(s, `'`) && strings.HasSuffix(s, `'`),
+			strings.HasPrefix(s, "<") && strings.HasSuffix(s, ">"):
+			s = strings.TrimSpace(s[1 : len(s)-1])
+		case strings.HasPrefix(s, "“") && strings.HasSuffix(s, "”"):
+			s = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(s, "“"), "”"))
+		case strings.HasPrefix(s, "‘") && strings.HasSuffix(s, "’"):
+			s = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(s, "‘"), "’"))
+		case strings.HasPrefix(s, "【") && strings.HasSuffix(s, "】"):
+			s = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(s, "【"), "】"))
+		default:
+			return s
+		}
+	}
+	return s
+}
+
 func (a *app) playDirectURL(raw string, headers map[string]string) bool {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		a.status = "请输入 http 或 https 播放地址"
+	raw = cleanUserURL(raw)
+	u, err := url.Parse(raw)
+	scheme := ""
+	if err == nil {
+		scheme = strings.ToLower(u.Scheme)
+	}
+	switch {
+	case err == nil && u.Host != "" && (scheme == "http" || scheme == "https"):
+		a.prepareExternalPlayback()
+		if !a.playURL(raw, headers) {
+			return false
+		}
+		a.playingDirect = true
+		a.syncNowPlaying()
+		return true
+	case err == nil && u.Host != "" && (scheme == "rtsp" || scheme == "rtmp") && (mpvBackendSupported() || a.openMPV != nil):
+		a.prepareExternalPlayback()
+		if !a.playDirectMPVURL(raw, headers) {
+			return false
+		}
+		a.playingDirect = true
+		a.playingDirectLive = true
+		if a.player != nil {
+			a.player.SetRate(1)
+		}
+		a.syncNowPlaying()
+		return true
+	default:
+		if mpvBackendSupported() || a.openMPV != nil {
+			a.status = "请输入有效的视频地址（http / https / rtsp / rtmp）或网盘分享链接"
+		} else {
+			a.status = "请输入 http 或 https 播放地址"
+		}
 		return false
 	}
-	a.prepareExternalPlayback()
-	if !a.playURL(raw, headers) {
-		return false
-	}
-	a.playingDirect = true
-	a.syncNowPlaying()
-	return true
 }
 
 // discoverSiblingVideos scans the opened video's directory for playable video
@@ -557,7 +603,7 @@ func parseDeepLink(raw string) (deepLinkAction, bool) {
 func (a *app) handleDeepLink(raw string) {
 	action, ok := parseDeepLink(raw)
 	if !ok {
-		a.status = "无法识别的链接"
+		a.setNotice("无法识别的链接")
 		return
 	}
 	switch action.kind {

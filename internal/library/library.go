@@ -81,7 +81,7 @@ type Event struct {
 	Err                               error
 	Duration                          time.Duration
 	Completed, Total, Skipped, Failed int
-	Cooling                           int
+	Cooling, SkippedHealth            int
 }
 
 type task struct {
@@ -148,8 +148,13 @@ func Scan(ctx context.Context, root *config.Config, options Options, emit func(E
 				continue
 			}
 			seenSites[entry.Key()] = true
-			if site.Kind.Unsupported() || (options.Query != "" && (!site.SearchEnabled() || options.Skip[entry.Key()])) {
+			if site.Kind.Unsupported() || (options.Query != "" && !site.SearchEnabled()) {
 				progress.Skipped++
+				continue
+			}
+			if options.Query != "" && options.Skip[entry.Key()] {
+				progress.Skipped++
+				progress.SkippedHealth++
 				continue
 			}
 			target := Target{Entry: entry, Page: 1}

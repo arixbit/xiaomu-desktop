@@ -171,7 +171,7 @@ func (a *app) favoriteButton(c *ui.Context) {
 // library; removing or replacing a configuration never removes favorites.
 func (a *app) openFavorite(e favoriteEntry) {
 	if a.library.root == nil {
-		a.status = "请先添加片源，再打开追剧影片"
+		a.setNotice("请先添加片源，再打开追剧影片")
 		return
 	}
 	if !a.configAvailable(e.ConfigURL) || e.VideoID == "" {
@@ -248,20 +248,42 @@ func (a *app) favoritesView(c *ui.Context) {
 		return
 	}
 	if len(a.favorites.entries) == 0 {
-		emptyState(c, "还没有追剧", "在影片详情页点「加入追剧」，这里会显示观看进度和更新。")
+		if a.library.root == nil {
+			emptyStateWithAction(c, "还没有追剧", "在影片详情页点「加入追剧」，这里会显示观看进度和更新。", "添加片源", func() {
+				a.openImportDialog()
+			})
+		} else {
+			emptyStateWithAction(c, "还没有追剧", "在影片详情页点「加入追剧」，这里会显示观看进度和更新。", "去首页看看", func() {
+				a.switchTab(routeHome)
+			})
+		}
 		return
 	}
 	ui.Column(c).Fill().Gap(14).Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "追剧和进度 · 只保存在本机").FontSize(13).TextColor(p.textMuted).Grow(1)
-			a.followingRefreshButton(c)
+			note := "追剧和进度 · 只保存在本机"
+			if a.library.root == nil {
+				note = "当前未添加片源 · 你的追剧列表仍保存在本机"
+			}
+			ui.Text(c, note).FontSize(13).TextColor(p.textMuted).Grow(1)
+			if a.library.root == nil {
+				if primaryButton(c, "添加片源").Clicked() {
+					a.openImportDialog()
+				}
+			} else {
+				a.followingRefreshButton(c)
+			}
 		})
 		ui.Scroll(c).Grow(1).FillWidth().Gap(8).Children(func() {
 			for _, e := range a.favorites.entries {
 				action := a.followingAction(e)
+				hasLib := a.library.root != nil
 				row := ui.Row(c).Key(titleKey(e.Name)).FillWidth().Padding(10).Gap(12).AlignItems(ui.Center)
 				applySurface(row, p, 18).Children(func() {
-					mainArea := ui.Row(c).Grow(1).MinWidth(0).Gap(12).AlignItems(ui.Center).Cursor(ui.CursorPointer)
+					mainArea := ui.Row(c).Grow(1).MinWidth(0).Gap(12).AlignItems(ui.Center)
+					if hasLib {
+						mainArea.Cursor(ui.CursorPointer)
+					}
 					mainArea.Children(func() {
 						posterBox := ui.Box(c).Size(60, 90).Radius(10).Clip().Background(p.cardPlaceholder)
 						posterBox.Children(func() {
@@ -279,22 +301,25 @@ func (a *app) favoritesView(c *ui.Context) {
 							if message := a.favorites.refreshErrors[titleKey(e.Name)]; message != "" {
 								ui.Text(c, message).FontSize(11).TextColor(p.warning).SingleLine()
 							}
-							if a.library.root == nil {
+							if !hasLib {
 								ui.Text(c, "添加片源后可选集播放").FontSize(12).TextColor(p.textMuted)
 							}
 						})
 					})
-					if mainArea.Clicked() {
+					if hasLib && mainArea.Clicked() {
 						a.openFollowing(e)
 					}
 					ui.Column(c).Width(108).Gap(6).Children(func() {
-						if primaryButton(c, action).FillWidth().Label("打开追剧 " + e.Name).Clicked() {
-							a.openFollowing(e)
-						}
-						if action != "查看详情" {
-							if glassButton(c, "详情").FillWidth().Label("追剧详情 " + e.Name).Clicked() {
-								a.openFavorite(e)
+						if hasLib {
+							if primaryButton(c, action).FillWidth().Label("打开追剧 " + e.Name).Clicked() {
+								a.openFollowing(e)
 							}
+							if action != "查看详情" {
+								if glassButton(c, "详情").FillWidth().Label("追剧详情 " + e.Name).Clicked() {
+									a.openFavorite(e)
+								}
+							}
+							ui.Box(c).Height(2)
 						}
 						if glassButton(c, "移除").FillWidth().Label("移除追剧 " + e.Name).Clicked() {
 							a.removeFavorite(e.Name)

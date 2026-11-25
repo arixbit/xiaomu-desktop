@@ -77,10 +77,26 @@ func TestHistorySingleRemoveSupportsUndoAndBulkClearRequiresTwoSteps(t *testing.
 	if len(a.history.entries) != 0 || !tt.HasText("还没有播放记录") {
 		t.Fatalf("confirmed clear did not empty history: entries=%d", len(a.history.entries))
 	}
-	// Notice toast auto-dismisses.
-	tt.Advance(noticeDuration + 500*time.Millisecond)
+	// Bulk clear also offers a 5-second Undo button to restore all entries.
+	if !tt.HasText("撤销") {
+		t.Fatalf("bulk clear missing undo action: %v", tt.Texts())
+	}
+	if err := tt.Click("撤销"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.history.entries) != 2 {
+		t.Fatalf("bulk clear undo did not restore all entries: %+v", a.history.entries)
+	}
+	// Confirm clearing again and verify undo notice auto-dismisses cleanly.
+	if err := tt.Click("清空历史"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("确认清空？"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Advance(undoNoticeDuration + 500*time.Millisecond)
 	if a.status != "" {
-		t.Fatalf("transient notice did not auto-dismiss: %q", a.status)
+		t.Fatalf("transient undo notice did not auto-dismiss: %q", a.status)
 	}
 }
 

@@ -311,7 +311,7 @@ func readHistory(path string) ([]historyEntry, error) {
 	}
 	var entries []historyEntry
 	if err := json.Unmarshal(data, &entries); err != nil {
-		return nil, fmt.Errorf("读取播放历史: %w", err)
+		return nil, fmt.Errorf("读取播放历史：%w", err)
 	}
 	kept := entries[:0]
 	for _, entry := range entries {
@@ -666,17 +666,37 @@ func (a *app) historyView(c *ui.Context) {
 	h := &a.history
 	p := paletteFor(c)
 	if len(h.entries) == 0 {
-		emptyState(c, "还没有播放记录", "看过的影片会出现在这里，点一下从上次的进度继续。")
+		if a.library.root == nil {
+			emptyStateWithAction(c, "还没有播放记录", "看过的影片会出现在这里，点一下从上次的进度继续。", "添加片源", func() {
+				a.openImportDialog()
+			})
+		} else {
+			emptyStateWithAction(c, "还没有播放记录", "看过的影片会出现在这里，点一下从上次的进度继续。", "去首页看看", func() {
+				a.switchTab(routeHome)
+			})
+		}
 		return
 	}
 	ui.Column(c).Fill().Gap(14).Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "只保存在本机").FontSize(13).TextColor(p.textMuted).Grow(1)
 			if a.armedDangerButton(c, "clear-history", "清空历史", "确认清空？") {
+				snapshot := append([]historyEntry(nil), h.entries...)
 				h.entries, h.dirty = nil, true
 				h.byTitle, h.rowsCache, h.list = nil, nil, ui.ListState{}
 				a.flushHistory()
-				a.setNotice("已清空播放历史")
+				a.setUndoNotice("已清空播放历史", "撤销", func() {
+					if len(a.history.entries) == 0 {
+						a.history.entries = snapshot
+					} else {
+						for i := len(snapshot) - 1; i >= 0; i-- {
+							a.history.restore(0, snapshot[i])
+						}
+					}
+					a.history.byTitle, a.history.rowsCache, a.history.list = nil, nil, ui.ListState{}
+					a.history.dirty = true
+					a.flushHistory()
+				})
 			}
 		})
 		rows := h.listRows(c.Now())
@@ -730,14 +750,21 @@ func (a *app) historyRow(c *ui.Context, i int, e historyEntry) {
 		if available && mainArea.Clicked() {
 			a.resume(e)
 		}
-		if primaryButton(c, "继续播放").Label("继续播放 " + e.Name).Disabled(!available).Clicked() {
-			a.resume(e)
-		}
-		if !available && !e.isLocal() && a.library.root != nil {
-			if glassButton(c, "搜片库").Label("搜片库 " + e.Name).Clicked() {
+		switch {
+		case available:
+			if primaryButton(c, "继续播放").Label("继续播放 " + e.Name).Clicked() {
+				a.resume(e)
+			}
+		case !e.isLocal() && a.library.root != nil:
+			if primaryButton(c, "搜片库").Label("搜片库 " + e.Name).Clicked() {
 				a.openTitle(e.Name, e.Pic, nil)
 			}
+		case !e.isLocal():
+			if primaryButton(c, "添加片源").Label("添加片源以恢复 " + e.Name).Clicked() {
+				a.openImportDialog()
+			}
 		}
+		ui.Box(c).Width(4)
 		if glassButton(c, "移除").Label("移除 " + e.Name).Clicked() {
 			idx := i
 			if removed, ok := a.history.remove(idx); ok {

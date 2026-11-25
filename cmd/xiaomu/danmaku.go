@@ -741,17 +741,17 @@ func (a *app) danmakuOffsetControls(c *ui.Context) {
 			label string
 			delta time.Duration
 		}{
-			{"-5s", -5 * time.Second},
-			{"-1s", -time.Second},
-			{"+1s", time.Second},
-			{"+5s", 5 * time.Second},
+			{"提前 5s", 5 * time.Second},
+			{"提前 1s", time.Second},
+			{"推迟 1s", -time.Second},
+			{"推迟 5s", -5 * time.Second},
 		} {
-			if glassButton(c, step.label).Label("弹幕时间偏移 " + step.label).Padding(5, 10).Clicked() {
+			if glassButton(c, step.label).Label("弹幕时间偏移 "+step.label).FontSize(12).Padding(5, 7).Clicked() {
 				s.offset = clampDanmakuOffset(s.offset + step.delta)
 			}
 		}
-		ui.Text(c, formatDanmakuOffset(s.offset)).FontSize(13).TextColor(paletteFor(c).textMuted).TextAlign(ui.End).Grow(1).ContentTransition(ctNumeric)
-		if glassButton(c, "重置").Label("重置弹幕时间偏移").Padding(5, 10).Disabled(s.offset == 0).Clicked() {
+		ui.Text(c, formatDanmakuOffset(s.offset)).FontSize(12).TextColor(paletteFor(c).textMuted).TextAlign(ui.End).Grow(1).ContentTransition(ctNumeric)
+		if glassButton(c, "重置").Label("重置弹幕时间偏移").Padding(5, 9).Disabled(s.offset == 0).Clicked() {
 			s.offset = 0
 		}
 	})

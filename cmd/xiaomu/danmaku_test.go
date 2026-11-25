@@ -570,7 +570,7 @@ func TestDanmakuOffsetControlsAndResetOnEpisodeChange(t *testing.T) {
 	if err := tt.Click("弹幕"); err != nil {
 		t.Fatal(err)
 	}
-	for _, label := range []string{"弹幕时间偏移 +5s", "弹幕时间偏移 -1s"} {
+	for _, label := range []string{"弹幕时间偏移 提前 5s", "弹幕时间偏移 推迟 1s"} {
 		if err := tt.Click(label); err != nil {
 			t.Fatal(err)
 		}
@@ -578,7 +578,7 @@ func TestDanmakuOffsetControlsAndResetOnEpisodeChange(t *testing.T) {
 	if a.danmaku.offset != 4*time.Second || !tt.HasText("提前 4s") {
 		t.Fatalf("offset = %s, texts=%v", a.danmaku.offset, tt.Texts())
 	}
-	if err := tt.Click("弹幕时间偏移 -5s"); err != nil {
+	if err := tt.Click("弹幕时间偏移 推迟 5s"); err != nil {
 		t.Fatal(err)
 	}
 	if a.danmaku.offset != -time.Second || !tt.HasText("推迟 1s") {

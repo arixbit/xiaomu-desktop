@@ -698,17 +698,55 @@ func (c *quarkClient) deleteAndPurge(ctx context.Context, fids []string) error {
 	return nil
 }
 
+// findTempDirFresh resolves the configured temporary folder directly from the
+// drive root without trusting any cached fid, so renaming or moving a previous
+// folder can never cause CleanupTemp to delete files from a renamed folder.
+func (c *quarkClient) findTempDirFresh(ctx context.Context) (fid string, found bool, err error) {
+	creds := c.credsFn()
+	dirName := creds.EffectiveTempDir()
+	cookie, err := c.cookie()
+	if err != nil {
+		return "", false, err
+	}
+	cacheKey := cookie + "\x00" + dirName
+	var root struct {
+		List []struct {
+			Fid      string `json:"fid"`
+			FileName string `json:"file_name"`
+			Dir      bool   `json:"dir"`
+			FileType int    `json:"file_type"`
+		} `json:"list"`
+	}
+	if _, err := c.doJSON(ctx, http.MethodGet, "/file/sort?pdir_fid=0&_page=1&_size=100&_sort=file_type:asc", nil, true, &root); err != nil {
+		return "", false, err
+	}
+	for _, entry := range root.List {
+		if (entry.Dir || entry.FileType == 0) && entry.FileName == dirName && entry.Fid != "" {
+			c.mu.Lock()
+			c.tempDirKey, c.tempDirFid = cacheKey, entry.Fid
+			c.mu.Unlock()
+			return entry.Fid, true, nil
+		}
+	}
+	c.mu.Lock()
+	if c.tempDirKey == cacheKey {
+		c.tempDirKey, c.tempDirFid = "", ""
+	}
+	c.mu.Unlock()
+	return "", false, nil
+}
+
 // CleanupTemp removes all files saved inside Xiaomu's temporary playback folder
 // and permanently purges those deleted temp files from the recycle bin.
 func (c *quarkClient) CleanupTemp(ctx context.Context) (int, error) {
 	if !c.credsFn().Has(c.provider) {
 		return 0, nil
 	}
-	dirFid, createdNew, err := c.ensureTempDir(ctx)
+	dirFid, found, err := c.findTempDirFresh(ctx)
 	if err != nil {
 		return 0, err
 	}
-	if createdNew {
+	if !found {
 		return 0, nil
 	}
 	entries, err := c.listTempFiles(ctx, dirFid)

@@ -898,3 +898,76 @@ func TestBaiduExpiredAndPHPArrayErrorResponses(t *testing.T) {
 		t.Fatalf("expected quota error when transfer returns extra:[], got %v", err)
 	}
 }
+
+func TestQuarkCleanupDoesNotPurgeRenamedCachedFolder(t *testing.T) {
+	var mu sync.Mutex
+	folderName := "小幕临时播放"
+	deleteCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/file/sort":
+			mu.Lock()
+			name := folderName
+			mu.Unlock()
+			if r.URL.Query().Get("pdir_fid") == "0" {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"status": 200,
+					"code":   0,
+					"data": map[string]any{
+						"list": []map[string]any{
+							{"fid": "dir-1", "file_name": name, "dir": true, "file_type": 0},
+						},
+					},
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status": 200,
+				"code":   0,
+				"data": map[string]any{
+					"list": []map[string]any{
+						{"fid": "precious-file", "file_name": "important.mkv", "dir": false},
+					},
+				},
+			})
+		case "/file/delete":
+			mu.Lock()
+			deleteCalls++
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": 200, "code": 0})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	creds := Credentials{QuarkCookie: "k=v"}
+	client := NewQuarkClient(ClientOptions{
+		Provider:    ProviderQuark,
+		BaseURL:     srv.URL,
+		HTTPClient:  srv.Client(),
+		Credentials: &creds,
+	})
+
+	ctx := context.Background()
+	// Populate tempDirFid cache for "dir-1".
+	fid, _, err := client.ensureTempDir(ctx)
+	if err != nil || fid != "dir-1" {
+		t.Fatalf("ensureTempDir = %q, err=%v", fid, err)
+	}
+
+	// User renames "dir-1" to "重要资料": CleanupTemp MUST re-check root and delete nothing.
+	mu.Lock()
+	folderName = "重要资料"
+	mu.Unlock()
+	cleaned, err := client.CleanupTemp(ctx)
+	if err != nil || cleaned != 0 {
+		t.Fatalf("CleanupTemp on renamed folder = %d, err=%v", cleaned, err)
+	}
+	mu.Lock()
+	gotDeletes := deleteCalls
+	mu.Unlock()
+	if gotDeletes != 0 {
+		t.Fatalf("CleanupTemp issued %d delete calls against renamed cached folder", gotDeletes)
+	}
+}

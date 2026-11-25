@@ -216,7 +216,7 @@ func readSavedSource(path string) (savedSource, error) {
 	}
 	var source savedSource
 	if err := json.Unmarshal(data, &source); err != nil {
-		return savedSource{}, fmt.Errorf("读取已保存片源: %w", err)
+		return savedSource{}, fmt.Errorf("读取已保存片源：%w", err)
 	}
 	return source, nil
 }

@@ -20,12 +20,14 @@ const (
 )
 
 type toastFeedback struct {
-	seq       uint64
-	msg       string
-	ttl       time.Duration
-	expiresAt time.Time
-	undoLabel string
-	undoFn    func()
+	seq          uint64
+	msg          string
+	ttl          time.Duration
+	expiresAt    time.Time
+	undoLabel    string
+	undoFn       func()
+	queuedNotice string
+	queuedError  string
 }
 
 type armedConfirmState struct {
@@ -44,14 +46,35 @@ type skipUndoState struct {
 	until  time.Time
 }
 
+func (a *app) hasActiveUndo() bool {
+	return a.toast.undoFn != nil && a.toast.msg != "" && a.status == a.toast.msg
+}
+
 // setNotice shows a brief non-error status toast that auto-dismisses.
+// While an unexpired Undo toast is active, informational notices queue behind
+// it instead of erasing the user's only undo action.
 func (a *app) setNotice(msg string) {
+	if a.hasActiveUndo() {
+		a.toast.queuedNotice = msg
+		return
+	}
 	a.status = msg
 	a.toast = toastFeedback{
 		seq: a.toast.seq + 1,
 		msg: msg,
 		ttl: noticeDuration,
 	}
+}
+
+// setBackgroundError reports an async background failure without overwriting
+// an active Undo toast; once the Undo window ends, the error surfaces
+// persistently so it is never lost.
+func (a *app) setBackgroundError(msg string) {
+	if a.hasActiveUndo() {
+		a.toast.queuedError = msg
+		return
+	}
+	a.status = msg
 }
 
 // setUndoNotice shows an action-completed toast with a one-click Undo button.
@@ -90,7 +113,16 @@ func (a *app) syncToastState(c *ui.Context, busy bool) {
 			a.toast.expiresAt = now.Add(a.toast.ttl)
 		}
 		if !now.Before(a.toast.expiresAt) {
+			queuedErr := a.toast.queuedError
+			queuedNotice := a.toast.queuedNotice
 			a.clearStatus()
+			if queuedErr != "" {
+				a.status = queuedErr
+			} else if queuedNotice != "" {
+				a.setNotice(queuedNotice)
+				a.toast.expiresAt = now.Add(a.toast.ttl)
+				c.After(a.toast.ttl)
+			}
 		} else {
 			c.After(a.toast.expiresAt.Sub(now))
 		}
@@ -106,6 +138,10 @@ func (a *app) clearArmed() {
 // bulk actions (clear history, remove source, logout). First tap arms the
 // button in danger red for 4 seconds; second tap confirms and returns true.
 func (a *app) armedDangerButton(c *ui.Context, key, label, confirmLabel string) bool {
+	return a.armedDangerButtonWithTooltip(c, key, label, confirmLabel, "")
+}
+
+func (a *app) armedDangerButtonWithTooltip(c *ui.Context, key, label, confirmLabel, tooltip string) bool {
 	p := paletteFor(c)
 	now := c.Now()
 	armed := a.armed.key == key && now.Before(a.armed.until)
@@ -122,6 +158,9 @@ func (a *app) armedDangerButton(c *ui.Context, key, label, confirmLabel string) 
 	}
 
 	btn := ui.Button(c.Key("armed-"+key), "").Label(shownLabel).Radius(20).Padding(9, 16)
+	if tooltip != "" {
+		btn.Tooltip(tooltip)
+	}
 	targetBg := p.surfaceSubtle
 	targetText := p.text
 	if armed {

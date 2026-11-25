@@ -101,6 +101,7 @@ type playerExtraState struct {
 	statsCache playerStatsCache
 
 	sleepMode     sleepTimerMode
+	sleepMinutes  int
 	sleepDeadline time.Time
 	sleepPending  time.Duration // set before first frame with c.Now()
 
@@ -150,6 +151,9 @@ func (a *app) leavePlayerExtra() {
 // --- Always-on-top & Mini Window (摸鱼/画中画) ---
 
 func (a *app) toggleAlwaysOnTop() {
+	if a.fullScreen {
+		return
+	}
 	a.playerExtra.pinned = !a.playerExtra.pinned
 	if a.window != nil {
 		a.window.SetAlwaysOnTop(a.playerExtra.pinned)
@@ -321,18 +325,34 @@ func (a *app) rotateVideo(p mediaPlayer) {
 	}
 }
 
+func (a *app) resetVideoRotation(p mediaPlayer) {
+	a.playerExtra.rotation = 0
+	if ap, ok := p.(advancedMediaPlayer); ok {
+		_ = ap.SetPropertyString("video-rotate", "0")
+	}
+	a.showPlayerOSD("画面已恢复正常方向")
+}
+
+func (a *app) isSingleVideo() bool {
+	return !a.hasMultipleEpisodes() && !a.hasLocalPlaylist()
+}
+
 func (a *app) toggleLoop(p mediaPlayer) {
-	if a.playingLive {
+	if a.isLiveStream() {
 		return
 	}
 	a.playerExtra.loop = !a.playerExtra.loop
 	if ap, ok := p.(advancedMediaPlayer); ok {
 		_ = ap.SetLoop(a.playerExtra.loop)
 	}
+	prefix := "单集循环"
+	if a.isSingleVideo() {
+		prefix = "循环播放"
+	}
 	if a.playerExtra.loop {
-		a.showPlayerOSD("单集循环已开")
+		a.showPlayerOSD(prefix + "已开")
 	} else {
-		a.showPlayerOSD("单集循环已关")
+		a.showPlayerOSD(prefix + "已关")
 	}
 }
 
@@ -700,6 +720,7 @@ func (a *app) playbackStatsOverlay(c *ui.Context, p mediaPlayer) {
 		for _, line := range a.playerExtra.statsCache.lines {
 			ui.Text(c, line).FontSize(11).TextColor(ui.RGBA(228, 234, 250, 0.86)).SingleLine()
 		}
+		ui.Text(c, "按 I 键关闭").FontSize(10).TextColor(ui.RGBA(200, 210, 235, 0.56)).SingleLine()
 	})
 }
 
@@ -712,23 +733,30 @@ func (a *app) setSleepTimerMinutes(minutes int) {
 		return
 	}
 	a.playerExtra.sleepMode = sleepDuration
+	a.playerExtra.sleepMinutes = minutes
 	a.playerExtra.sleepDeadline = time.Time{}
 	a.playerExtra.sleepPending = time.Duration(minutes) * time.Minute
 	a.showPlayerOSD(fmt.Sprintf("%d 分钟后暂停播放", minutes))
 }
 
 func (a *app) setSleepAfterEpisode() {
-	if a.playingLive {
+	if a.isLiveStream() {
 		return
 	}
 	a.playerExtra.sleepMode = sleepAfterEpisode
+	a.playerExtra.sleepMinutes = 0
 	a.playerExtra.sleepDeadline = time.Time{}
 	a.playerExtra.sleepPending = 0
-	a.showPlayerOSD("播完本集后暂停")
+	if !a.isSingleVideo() {
+		a.showPlayerOSD("播完本集后暂停")
+	} else {
+		a.showPlayerOSD("播完本片后暂停")
+	}
 }
 
 func (a *app) clearSleepTimer() {
 	a.playerExtra.sleepMode = sleepOff
+	a.playerExtra.sleepMinutes = 0
 	a.playerExtra.sleepDeadline = time.Time{}
 	a.playerExtra.sleepPending = 0
 }
@@ -736,6 +764,9 @@ func (a *app) clearSleepTimer() {
 func (a *app) sleepTimerBadge(now time.Time) string {
 	switch a.playerExtra.sleepMode {
 	case sleepAfterEpisode:
+		if a.isSingleVideo() {
+			return "定时 · 播完本片"
+		}
 		return "定时 · 播完本集"
 	case sleepDuration:
 		rem := a.playerExtra.sleepPending
@@ -795,14 +826,42 @@ func formatSubtitleDelay(d time.Duration) string {
 	if math.Abs(sec) < 0.05 {
 		return "0.0s"
 	}
-	if sec > 0 {
-		return fmt.Sprintf("+%.1fs", sec)
+	if sec < 0 {
+		return fmt.Sprintf("提前 %.1fs", -sec)
 	}
-	return fmt.Sprintf("%.1fs", sec)
+	return fmt.Sprintf("推迟 %.1fs", sec)
+}
+
+// hasActiveSubtitleTrack reports whether the player supports subtitle tracks
+// and currently has a selected, visible subtitle track.
+func hasActiveSubtitleTrack(p mediaPlayer) bool {
+	tp, ok := p.(trackCapablePlayer)
+	if !ok || !tp.SubtitleVisible() {
+		return false
+	}
+	for _, tr := range tp.SubtitleTracks() {
+		if tr.Selected {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *app) adjustSubtitleDelay(p mediaPlayer, delta time.Duration) {
-	if a.playingLive || p == nil {
+	if a.isLiveStream() || p == nil {
+		return
+	}
+	if _, ok := p.(trackCapablePlayer); !ok {
+		a.showPlayerOSD("当前播放器不支持调整字幕偏移")
+		return
+	}
+	if !hasActiveSubtitleTrack(p) {
+		a.showPlayerOSD("当前未开启字幕")
+		return
+	}
+	ap, ok := p.(advancedMediaPlayer)
+	if !ok {
+		a.showPlayerOSD("当前播放器不支持调整字幕偏移")
 		return
 	}
 	next := a.playerExtra.subDelay + delta
@@ -810,10 +869,12 @@ func (a *app) adjustSubtitleDelay(p mediaPlayer, delta time.Duration) {
 	// Round to nearest 100ms to prevent floating point drift.
 	next = time.Duration(math.Round(next.Seconds()*10)) * 100 * time.Millisecond
 	a.playerExtra.subDelay = next
-	if ap, ok := p.(advancedMediaPlayer); ok {
-		_ = ap.SetPropertyString("sub-delay", fmt.Sprintf("%.1f", next.Seconds()))
+	_ = ap.SetPropertyString("sub-delay", fmt.Sprintf("%.1f", next.Seconds()))
+	if next == 0 {
+		a.showPlayerOSD("字幕已同步")
+	} else {
+		a.showPlayerOSD("字幕" + formatSubtitleDelay(next))
 	}
-	a.showPlayerOSD("字幕偏移 " + formatSubtitleDelay(next))
 }
 
 func (a *app) resetSubtitleDelay(p mediaPlayer) {
@@ -871,7 +932,7 @@ func chineseTrackRank(tr mediaTrack) int {
 }
 
 func (a *app) maybeAutoSelectChineseSubtitle(p mediaPlayer) {
-	if a.playerExtra.autoChineseApplied || a.playingLive {
+	if a.playerExtra.autoChineseApplied || a.isLiveStream() {
 		return
 	}
 	tp, ok := p.(trackCapablePlayer)
@@ -926,6 +987,10 @@ func (a *app) openSubtitleDialog() {
 	so := &a.playerExtra.subOnline
 	so.open = true
 	so.tokenInput = a.preferences.Subtitle.ASSRTToken
+	// For online/cloud videos without a configured ASSRT token, expand the token
+	// section proactively so the user never hits a blind error first; keep it
+	// collapsed for local videos (which have zero-login hash matching) or once set.
+	so.tokenOpen = !a.playingFile && strings.TrimSpace(a.preferences.Subtitle.ASSRTToken) == ""
 	if strings.TrimSpace(so.query) == "" {
 		title, _, _ := a.danmakuTargetMeta()
 		if title == "" {
@@ -1002,7 +1067,7 @@ func (a *app) searchOnlineSubtitlesByKeyword() {
 		so.failed = true
 		if errors.Is(err, subtitle.ErrTokenRequired) {
 			so.tokenOpen = true
-			so.message = "请展开下方「伪射手 Token 设置」填入个人 Token 后再按片名搜索（本地视频可直接点「射手哈希匹配」）"
+			so.message = "请在下方填入个人 ASSRT Token 后再按片名搜索（本地视频可直接点上方「自动匹配字幕」）"
 			return
 		}
 		so.message = "在线搜索失败：" + err.Error()
@@ -1084,6 +1149,7 @@ func (a *app) subtitleDialog(c *ui.Context, p mediaPlayer) {
 				ScrollbarStyle(danmakuScrollbar).ScrollbarInsets(4, 0, 4, 0).
 				Children(func() {
 					// 1. Offset, Style & Language Preference
+					subActive := hasActiveSubtitleTrack(p)
 					danmakuSection(c, func() {
 						ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 							ui.Text(c, "时间偏移").Width(64)
@@ -1091,19 +1157,20 @@ func (a *app) subtitleDialog(c *ui.Context, p mediaPlayer) {
 								label string
 								delta time.Duration
 							}{
-								{"-2s", -2 * time.Second},
-								{"-0.5s", -500 * time.Millisecond},
-								{"+0.5s", 500 * time.Millisecond},
-								{"+2s", 2 * time.Second},
+								{"提前 2s", -2 * time.Second},
+								{"提前 0.5s", -500 * time.Millisecond},
+								{"推迟 0.5s", 500 * time.Millisecond},
+								{"推迟 2s", 2 * time.Second},
 							} {
-								if glassButton(c, step.label).Label("字幕偏移 " + step.label).Padding(5, 9).Clicked() {
+								if glassButton(c, step.label).Label("字幕偏移 "+step.label).FontSize(12).Padding(5, 7).
+									Disabled(!subActive).Clicked() {
 									a.adjustSubtitleDelay(p, step.delta)
 								}
 							}
-							ui.Text(c, formatSubtitleDelay(a.playerExtra.subDelay)).FontSize(13).
+							ui.Text(c, formatSubtitleDelay(a.playerExtra.subDelay)).FontSize(12).
 								TextColor(pal.textMuted).TextAlign(ui.End).Grow(1).ContentTransition(ctNumeric)
 							if glassButton(c, "重置").Label("重置字幕偏移").Padding(5, 9).
-								Disabled(a.playerExtra.subDelay == 0).Clicked() {
+								Disabled(!subActive || a.playerExtra.subDelay == 0).Clicked() {
 								a.resetSubtitleDelay(p)
 							}
 						})
@@ -1169,17 +1236,37 @@ func (a *app) subtitleDialog(c *ui.Context, p mediaPlayer) {
 						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 							ui.Text(c, "在线匹配字幕").Bold().Grow(1)
 							if a.playingFile {
-								if glassButton(c, "射手哈希匹配").Label("射手哈希自动匹配").
-									Padding(5, 10).Disabled(a.running(jobSubtitle)).Clicked() {
+								matchLabel := "自动匹配字幕（免登录）"
+								if a.running(jobSubtitle) {
+									matchLabel = "匹配中…"
+								}
+								if primaryButton(c, matchLabel).Label("射手哈希自动匹配").
+									Tooltip("按视频文件指纹免登录匹配射手字幕").
+									Padding(5, 11).Disabled(a.running(jobSubtitle)).Clicked() {
 									a.searchOnlineSubtitlesByHash()
 								}
 							}
 						})
+						hasToken := strings.TrimSpace(sp.ASSRTToken) != ""
 						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 							qInput := ui.TextInput(c, &so.query).Label("在线字幕片名").Placeholder("输入片名关键词（如 沙丘 2024）").Grow(1)
-							doSearch := glassButton(c, "搜索字幕").Disabled(a.running(jobSubtitle)).Clicked()
+							searchLabel := "按片名搜索"
+							if a.running(jobSubtitle) {
+								searchLabel = "搜索中…"
+							}
+							searchBtn := glassButton(c, searchLabel).Label("搜索字幕").Disabled(a.running(jobSubtitle) || !hasToken)
+							if !hasToken {
+								searchBtn.Tooltip("请先在下方填写并保存个人 ASSRT Token")
+							}
+							doSearch := searchBtn.Clicked()
 							if !a.running(jobSubtitle) && qInput.Submitted() {
-								doSearch = true
+								if hasToken {
+									doSearch = true
+								} else {
+									so.tokenOpen = true
+									so.failed = false
+									so.message = "请先在下方填写并保存个人 ASSRT Token 后再按片名搜索"
+								}
 							}
 							if doSearch {
 								a.searchOnlineSubtitlesByKeyword()
@@ -1218,22 +1305,35 @@ func (a *app) subtitleDialog(c *ui.Context, p mediaPlayer) {
 						if so.tokenOpen {
 							tokPrefix = "▾ "
 						}
-						if glassButton(c, tokPrefix+"伪射手 (ASSRT) Token 设置（可选）").
+						tokTitle := "按片名搜索设置（需填写 ASSRT Token）"
+						if hasToken {
+							tokTitle = "按片名搜索设置（已配置 ASSRT Token）"
+						}
+						if glassButton(c, tokPrefix+tokTitle).
 							Label("伪射手 Token 设置").FillWidth().Clicked() {
 							so.tokenOpen = !so.tokenOpen
 						}
 						if so.tokenOpen {
-							ui.Text(c, "本地文件可直接免登录使用射手哈希匹配；按片名在线搜索需填写个人 ASSRT Token（仅保存在本机）。").
+							tokHint := "按片名在线搜索使用伪射手（ASSRT）接口，需填写你自己的 Token（仅保存在本机）。"
+							if a.playingFile {
+								tokHint += "本地视频可直接免登录使用上方「自动匹配字幕」。"
+							}
+							ui.Text(c, tokHint).
 								FontSize(12).TextColor(pal.textMuted)
 							ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-								ui.TextInput(c, &so.tokenInput).Label("ASSRT Token").Placeholder("粘贴个人 ASSRT API Token").Grow(1)
-								if primaryButton(c, "保存 Token").Clicked() {
+								tokInput := ui.TextInput(c, &so.tokenInput).Label("ASSRT Token").Placeholder("粘贴个人 ASSRT API Token").Grow(1)
+								save := primaryButton(c, "保存 Token").Clicked()
+								if tokInput.Submitted() {
+									save = true
+								}
+								if save {
 									sp.ASSRTToken = strings.TrimSpace(so.tokenInput)
 									a.savePreferences()
 									so.failed = false
 									if sp.ASSRTToken == "" {
 										so.message = "已清空 ASSRT Token"
 									} else {
+										so.tokenOpen = false
 										so.message = "已保存 ASSRT Token，现在可以按片名搜索字幕"
 									}
 								}
@@ -1267,25 +1367,52 @@ func (a *app) morePlayerControls(c *ui.Context, p mediaPlayer) {
 			if m.Item(rotLabel).ID("video-rotate").Chosen() {
 				a.rotateVideo(p)
 			}
+			if a.playerExtra.rotation != 0 {
+				if m.Item("恢复正常方向").ID("video-rotate-reset").Chosen() {
+					a.resetVideoRotation(p)
+				}
+			}
 		}
 		m.Separator()
-		if !a.playingLive {
-			if m.Item("单集循环 (L)").ID("loop-toggle").Checked(a.playerExtra.loop).Chosen() {
+		if !a.isLiveStream() {
+			loopLabel := "单集循环 (L)"
+			if a.isSingleVideo() {
+				loopLabel = "循环播放 (L)"
+			}
+			if m.Item(loopLabel).ID("loop-toggle").Checked(a.playerExtra.loop).Chosen() {
 				a.toggleLoop(p)
 			}
 			m.Separator()
 		}
-		if m.Item("定时关闭 · 关闭").ID("sleep-0").Radio(a.playerExtra.sleepMode == sleepOff).Chosen() {
+		offLabel := "定时关闭 · 关闭"
+		if badge := a.sleepTimerBadge(c.Now()); badge != "" {
+			offLabel = "定时关闭 · 取消（" + badge + "）"
+		}
+		if m.Item(offLabel).ID("sleep-0").Radio(a.playerExtra.sleepMode == sleepOff).Chosen() {
 			a.setSleepTimerMinutes(0)
 		}
 		for _, mins := range []int{15, 30, 45, 60} {
-			if m.Item(fmt.Sprintf("定时关闭 · %d 分钟", mins)).ID(fmt.Sprintf("sleep-%d", mins)).Chosen() {
-				a.setSleepTimerMinutes(mins)
+			active := a.playerExtra.sleepMode == sleepDuration && a.playerExtra.sleepMinutes == mins
+			if m.Item(fmt.Sprintf("定时关闭 · %d 分钟", mins)).ID(fmt.Sprintf("sleep-%d", mins)).Radio(active).Chosen() {
+				if active {
+					a.setSleepTimerMinutes(0)
+				} else {
+					a.setSleepTimerMinutes(mins)
+				}
 			}
 		}
-		if !a.playingLive {
-			if m.Item("定时关闭 · 播完本集").ID("sleep-ep").Radio(a.playerExtra.sleepMode == sleepAfterEpisode).Chosen() {
-				a.setSleepAfterEpisode()
+		if !a.isLiveStream() {
+			afterLabel := "定时关闭 · 播完本集"
+			if a.isSingleVideo() {
+				afterLabel = "定时关闭 · 播完本片"
+			}
+			active := a.playerExtra.sleepMode == sleepAfterEpisode
+			if m.Item(afterLabel).ID("sleep-ep").Radio(active).Chosen() {
+				if active {
+					a.setSleepTimerMinutes(0)
+				} else {
+					a.setSleepAfterEpisode()
+				}
 			}
 		}
 		m.Separator()
@@ -1295,5 +1422,5 @@ func (a *app) morePlayerControls(c *ui.Context, p mediaPlayer) {
 		if m.Item("播放信息 (I)").ID("toggle-stats").Checked(a.playerExtra.statsOpen).Chosen() {
 			a.toggleStatsOverlay()
 		}
-	}).Label("更多播放控制")
+	}).Label("更多播放控制").Tooltip("画面比例、旋转 (R)、循环 (L)、定时关闭、截图 (S)、播放信息 (I)")
 }

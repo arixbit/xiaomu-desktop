@@ -20,7 +20,7 @@ func (a *app) sourcesView(c *ui.Context) {
 	ui.Scroll(c).Fill().Gap(14).Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "首页和搜索会汇集这里的全部站点。").TextColor(p.textMuted).Grow(1)
-			if l.root != nil {
+			if l.root != nil && (a.speedTest.running || len(a.speedTestEntries()) > 0) {
 				if a.speedTest.running {
 					if glassButton(c, "停止测速").Clicked() {
 						a.cancelSourceSpeedTest()
@@ -30,9 +30,12 @@ func (a *app) sourcesView(c *ui.Context) {
 					a.startSourceSpeedTest()
 				}
 			}
-			if primaryButton(c, "添加片源").Clicked() {
-				b.importErr = ""
-				b.importOpen = true
+			importBtnLabel := "添加片源"
+			if l.root != nil {
+				importBtnLabel = "更换片源"
+			}
+			if primaryButton(c, importBtnLabel).Clicked() {
+				a.openImportDialog()
 			}
 		})
 		if a.speedTest.running {
@@ -54,14 +57,18 @@ func (a *app) sourcesView(c *ui.Context) {
 					}
 					ui.Text(c, address).FontSize(13).TextColor(p.textMuted).Selectable()
 					if b.assets != "" {
-						ui.Text(c, "自定义脚本目录："+b.assets).FontSize(13).TextColor(p.textMuted)
+						ui.Text(c, "脚本依赖目录："+b.assets).FontSize(13).TextColor(p.textMuted)
 					}
 				})
 				if l.root == nil {
 					return
 				}
-				if glassButton(c, "刷新配置").Disabled(a.running(jobConfig)).Clicked() {
-					a.loadConfig(b.configURL)
+				refreshLabel := "刷新配置"
+				if a.running(jobConfig) {
+					refreshLabel = "刷新中…"
+				}
+				if glassButton(c, refreshLabel).Disabled(a.running(jobConfig)).Clicked() {
+					a.refreshConfig(b.configURL)
 				}
 				ui.Box(c).Width(4)
 				if a.armedDangerButton(c, "remove-config", "移除片源", "确认移除？") {
@@ -131,13 +138,17 @@ func (a *app) sourcesView(c *ui.Context) {
 						addLabel = "更换直播源"
 					}
 					if glassButton(c, addLabel).Clicked() {
-						a.live.importErr = ""
-						a.live.importOpen = true
+						a.openLiveDialog()
 					}
 					if a.live.url != "" {
-						if glassButton(c, "刷新直播").Disabled(a.running(jobLive)).Clicked() {
+						liveRefreshLabel := "刷新直播"
+						if a.running(jobLive) {
+							liveRefreshLabel = "刷新中…"
+						}
+						if glassButton(c, liveRefreshLabel).Disabled(a.running(jobLive)).Clicked() {
 							a.refreshLive(a.live.url)
 						}
+						ui.Box(c).Width(4)
 						if a.armedDangerButton(c, "remove-live", "移除直播源", "确认移除？") {
 							a.removeLive()
 						}

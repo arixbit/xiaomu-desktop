@@ -50,10 +50,10 @@ type app struct {
 	pickSubtitleFile func() ([]string, error)
 	fileDialogOpen   bool
 	addRecent        func(string) error
-	notify         func(id, title, body string)
-	nowPlaying     nowPlayingSink
-	nowPlayingLast nowPlayingSnapshot
-	playbackPower  playbackPower
+	notify           func(id, title, body string)
+	nowPlaying       nowPlayingSink
+	nowPlayingLast   nowPlayingSnapshot
+	playbackPower    playbackPower
 	// pending holds file/URL events that arrived before the window
 	// existed; they run in order once it does.
 	pending []func()
@@ -109,8 +109,10 @@ type app struct {
 	windowThemeKnown bool
 	windowDarkTheme  bool
 
-	playingLive   bool
-	playingDirect bool
+	playingLive       bool
+	playingDirect     bool
+	playingDirectMPV  bool
+	playingDirectLive bool
 	// playingFile is set for a local file opened from the file manager; playingName
 	// is that file's name, shown in the header and Now Playing.
 	playingFile       bool
@@ -125,24 +127,24 @@ type app struct {
 	playingStreams    []catalog.Stream
 	playingStreamIdx  int
 	resumeAt          time.Duration
-	resumeIssued   bool
-	lastPosition   time.Duration
+	resumeIssued      bool
+	lastPosition      time.Duration
 
 	// speedBytes/speedAt/speedText are the last throughput sample
 	// taken from the proxy: the bytes served then, when, and the
 	// text the player shows for the rate since.
-	speedBytes      int64
-	speedAt         time.Time
-	speedText       string
-	panelSource     int
-	panelChoice     *playerSourceChoice
-	panelTab        int
-	panelOpen       bool
-	panelTouched    bool
-	fullScreen      bool
-	playerOverlay   playerOverlayState
-	playerPointer   playerPointerState
-	playerFocus     ui.Handle
+	speedBytes       int64
+	speedAt          time.Time
+	speedText        string
+	panelSource      int
+	panelChoice      *playerSourceChoice
+	panelTab         int
+	panelOpen        bool
+	panelTouched     bool
+	fullScreen       bool
+	playerOverlay    playerOverlayState
+	playerPointer    playerPointerState
+	playerFocus      ui.Handle
 	autoNext         bool
 	autoNextPending  bool
 	autoNextCanceled bool
@@ -169,15 +171,17 @@ func (a *app) view(c *ui.Context) {
 
 func (a *app) play() {
 	a.linkErr = ""
-	if ref, ok := pan.ParseShareURL(a.rawURL); ok {
+	raw := cleanUserURL(a.rawURL)
+	if ref, ok := pan.ParseShareURL(raw); ok {
 		a.openPanShare(ref)
 		return
 	}
-	if a.playDirectURL(a.rawURL, playbackHeaders(a.referer, a.ua)) {
+	if a.playDirectURL(raw, playbackHeaders(a.referer, a.ua)) {
 		a.linkOpen = false
 		a.linkErr = ""
-	} else {
+	} else if a.linkOpen {
 		a.linkErr = a.status
+		a.clearStatus()
 	}
 }
 
@@ -218,6 +222,8 @@ func (a *app) adoptPlayer(p mediaPlayer) {
 	}
 	a.episodeEnd = playbackEnd{}
 	a.live.catchupProgram = nil
+	a.playingDirectMPV = false
+	a.playingDirectLive = false
 	a.playingFile = false
 	a.playingFilePath = ""
 	a.playingName = ""
@@ -241,7 +247,7 @@ func (a *app) openPlaybackStream(stream catalog.Stream, keepCurrent bool) bool {
 	if p == nil || keepCurrent {
 		p, err = proxy.Start(nil)
 		if err != nil {
-			a.status = "代理启动失败: " + err.Error()
+			a.status = "代理启动失败：" + err.Error()
 			return false
 		}
 		if !keepCurrent {
@@ -267,7 +273,7 @@ func (a *app) openPlaybackStream(stream catalog.Stream, keepCurrent bool) bool {
 		if keepCurrent {
 			p.Close()
 		}
-		a.status = "无法打开: " + err.Error()
+		a.status = "无法打开：" + err.Error()
 		a.syncNowPlaying()
 		return false
 	}
@@ -360,12 +366,12 @@ func (a *app) playDirectMPVURL(raw string, headers map[string]string) bool {
 		player, err = openMPVPlayer(raw, opts)
 	}
 	if err != nil {
-		a.status = "无法打开: " + err.Error()
+		a.status = "无法打开：" + err.Error()
 		a.syncNowPlaying()
 		return false
 	}
 	a.adoptPlayer(player)
-	a.playingLive, a.playingDirect = false, false
+	a.playingLive, a.playingDirect, a.playingDirectMPV = false, false, true
 	a.status = "正在播放"
 	return true
 }
@@ -389,7 +395,7 @@ func (a *app) openPlaybackURL(raw string, headers map[string]string, keepCurrent
 	if p == nil || keepCurrent {
 		p, err = proxy.Start(headers)
 		if err != nil {
-			a.status = "代理启动失败: " + err.Error()
+			a.status = "代理启动失败：" + err.Error()
 			return false
 		}
 		if !keepCurrent {
@@ -406,7 +412,7 @@ func (a *app) openPlaybackURL(raw string, headers map[string]string, keepCurrent
 		if keepCurrent {
 			p.Close()
 		}
-		a.status = "无法打开: " + err.Error()
+		a.status = "无法打开：" + err.Error()
 		a.syncNowPlaying()
 		return false
 	}

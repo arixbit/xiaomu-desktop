@@ -28,7 +28,9 @@ type liveFilterCache struct {
 type liveBrowser struct {
 	url, input, query, group string
 	importOpen, restore      bool
+	importWasOpen            bool
 	importErr                string
+	importJobGen             uint64
 	sources                  []iptv.Source
 	cachedChannels           map[string][]iptv.Channel
 	cachedEPG                map[string]string
@@ -55,6 +57,7 @@ type liveBrowser struct {
 	filteredQueryCache       liveFilterCache
 	channelList              ui.ListState
 	panelChannelList         ui.ListState
+	resetLists               bool
 	playingChannel           int
 	playingStream            int
 	attempts                 int
@@ -314,13 +317,29 @@ func (a *app) refreshLive(raw string) {
 	a.loadLiveImport(raw, false)
 }
 
+func (a *app) openLiveDialog() {
+	a.live.input = a.live.url
+	a.live.importErr = ""
+	a.live.importJobGen = 0
+	a.live.importOpen = true
+}
+
 func (a *app) loadLiveImport(raw string, switchToLive bool) {
-	raw = strings.TrimSpace(raw)
+	a.loadLiveImportMode(raw, switchToLive, false)
+}
+
+func (a *app) loadLiveImportFromDialog(raw string) {
+	a.loadLiveImportMode(raw, true, true)
+}
+
+func (a *app) loadLiveImportMode(raw string, switchToLive, fromDialog bool) {
+	raw = cleanUserURL(raw)
 	if raw == "" {
 		msg := "请先粘贴直播频道表地址"
-		a.status = msg
 		if a.live.importOpen {
 			a.live.importErr = msg
+		} else {
+			a.setNotice(msg)
 		}
 		return
 	}
@@ -333,14 +352,28 @@ func (a *app) loadLiveImport(raw string, switchToLive bool) {
 		if len(doc.Lives) == 0 {
 			return jobResult{}, fmt.Errorf("这个地址里没有直播频道，请粘贴 M3U、TXT 频道表或含直播的影视配置")
 		}
-		return jobResult{apply: func() { a.applyLiveImport(raw, doc.Lives, switchToLive) }}, nil
+		return jobResult{apply: func() {
+			if fromDialog {
+				a.live.importJobGen = 0
+			}
+			a.applyLiveImport(raw, doc.Lives, switchToLive)
+		}}, nil
 	}, func(err error) {
+		if fromDialog {
+			a.live.importJobGen = 0
+		}
 		msg := jobError("导入直播", err)
-		a.status = msg
 		if a.live.importOpen {
 			a.live.importErr = msg
+		} else if !switchToLive {
+			a.setBackgroundError(msg)
+		} else {
+			a.status = msg
 		}
 	})
+	if fromDialog {
+		a.live.importJobGen = a.jobGen(jobLive)
+	}
 }
 
 // applyLiveImport makes a channel list the live source. A list imported on its
@@ -366,7 +399,12 @@ func (a *app) applyLiveImport(raw string, sources []iptv.Source, switchToLive bo
 	}
 	if a.persist {
 		if err := a.saveLiveSource(raw); err != nil {
-			a.status = "保存直播地址失败：" + err.Error()
+			msg := "保存直播地址失败：" + err.Error()
+			if !switchToLive {
+				a.setBackgroundError(msg)
+			} else {
+				a.status = msg
+			}
 		}
 	}
 }
@@ -558,8 +596,7 @@ func (a *app) liveView(c *ui.Context) {
 	p := paletteFor(c)
 	if len(live.sources) == 0 {
 		emptyStateWithAction(c, "添加直播源，开始看电视", "支持 M3U、TXT 频道表，以及影视配置中附带的直播。", "添加直播源", func() {
-			live.importErr = ""
-			live.importOpen = true
+			a.openLiveDialog()
 		})
 		return
 	}
@@ -599,13 +636,23 @@ func (a *app) liveView(c *ui.Context) {
 			if a.running(jobLive) {
 				emptyState(c, "正在加载频道…", "频道读取后会显示在这里。")
 			} else {
-				emptyState(c, "这个直播来源没有频道", "换一个直播来源，或到片源页更换直播源。")
+				emptyStateWithAction(c, "这个直播来源没有频道", "可切换上方其他直播来源，或更换直播源地址。", "更换直播源", func() {
+					a.openLiveDialog()
+				})
 			}
 			return
 		}
 		a.liveLastResumeBar(c)
 		groups := live.groups()
 		hasFavs := len(live.state.favorites) > 0
+		if !hasFavs && live.group == liveGroupFavorites {
+			live.group = ""
+			live.resetLists = true
+		}
+		if live.resetLists {
+			live.channelList, live.panelChannelList = ui.ListState{}, ui.ListState{}
+			live.resetLists = false
+		}
 		ui.Row(c).Grow(1).FillWidth().MinHeight(0).Gap(16).Children(func() {
 			if len(groups) > 0 || hasFavs {
 				ui.Scroll(c).Width(168).FillHeight().Gap(2).Children(func() {
@@ -636,7 +683,11 @@ func (a *app) liveView(c *ui.Context) {
 			}
 			indices := live.filteredChannels(true)
 			if len(indices) == 0 {
-				emptyState(c, "没有找到匹配的频道", "换个关键词，或切换左侧分组。")
+				emptyStateWithAction(c, "没有找到匹配的频道", "可以清空当前筛选条件，查看全部频道。", "清空筛选", func() {
+					live.query = ""
+					live.group = ""
+					live.channelList, live.panelChannelList = ui.ListState{}, ui.ListState{}
+				})
 				return
 			}
 			live.channelList.Key = func(row int) any { return indices[row] }
@@ -665,13 +716,7 @@ func (a *app) liveView(c *ui.Context) {
 					mainArea.Children(func() {
 						a.renderChannelLogo(c, channel, 36, p.dark)
 						ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-							ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-								ui.Text(c, channel.Name).Bold().SingleLine()
-								if fav {
-									ui.Text(c, "置顶").FontSize(10).Padding(1, 6).Radius(6).
-										Background(p.accent).TextColor(p.accentText).SingleLine()
-								}
-							})
+							ui.Text(c, channel.Name).Bold().SingleLine()
 							meta := channel.Group
 							if len(channel.Streams) > 1 {
 								streamNote := fmt.Sprintf("%d 条线路", len(channel.Streams))
@@ -720,40 +765,62 @@ func (a *app) liveView(c *ui.Context) {
 
 func (a *app) liveDialog(c *ui.Context) {
 	live := &a.live
+	if live.importOpen && !live.importWasOpen {
+		if live.input == "" && live.url != "" {
+			live.input = live.url
+		}
+		live.importWasOpen = true
+	}
 	p := paletteFor(c)
+	_, winH := c.Size()
 	ui.DialogBase(c, &live.importOpen, func(backdrop, panel ui.Element) {
 		backdrop.Background(p.dialogScrim).Transition(transDialogScrim)
-		panel.Width(520).MaxWidth(520).Padding(26).Gap(14).Radius(26).TextColor(p.text).Transition(transDialogPanel)
+		panel.Width(520).MaxWidth(520).MaxHeight(max(float32(240), winH-32)).Padding(24).Gap(12).Radius(26).TextColor(p.text).Transition(transDialogPanel)
 		applyPane(panel, p, p.dialogMat)
-		ui.Text(c, "添加直播源").FontSize(24).Bold()
-		ui.Text(c, "粘贴直播频道表地址（支持 M3U、TXT 或影视配置）。").TextColor(p.textMuted)
-		if ui.TextInput(c, &live.input).Label("直播地址").Placeholder("https://example.com/channels.m3u").FillWidth().Submitted() {
-			if !a.running(jobLive) {
-				a.importLive(live.input)
+		title := "添加直播源"
+		hint := "粘贴直播频道表地址（支持 M3U、TXT 或含直播的影视配置）。"
+		if live.url != "" {
+			title = "更换直播源"
+			hint = "粘贴新地址将替换当前直播源，你的频道收藏都会保留。"
+		}
+		ui.Text(c, title).FontSize(24).Bold()
+		ui.Scroll(c).FillWidth().MaxHeight(max(float32(120), winH-176)).Gap(12).Children(func() {
+			ui.Text(c, hint).TextColor(p.textMuted)
+			if ui.TextInput(c, &live.input).Label("直播地址").Placeholder("https://example.com/channels.m3u").FillWidth().AutoFocus().Submitted() {
+				if !a.running(jobLive) {
+					a.loadLiveImportFromDialog(live.input)
+				}
 			}
-		}
-		if live.importErr != "" {
-			ui.Text(c, live.importErr).FontSize(13).TextColor(p.warning)
-		}
+			if live.importErr != "" {
+				ui.Text(c, live.importErr).FontSize(13).TextColor(p.warning)
+			}
+		})
 		ui.Row(c).FillWidth().Gap(8).Justify(ui.End).Children(func() {
 			if glassButton(c, "取消").Clicked() {
 				live.importOpen = false
-				live.importErr = ""
 			}
-			submitLabel := "导入直播"
+			submitLabel := "导入"
 			if a.running(jobLive) {
 				submitLabel = "导入中…"
 			}
 			if primaryButton(c, submitLabel).Disabled(a.running(jobLive)).Clicked() {
-				a.importLive(live.input)
+				a.loadLiveImportFromDialog(live.input)
 			}
 		})
 	})
+	if !live.importOpen && live.importWasOpen {
+		live.importWasOpen = false
+		live.importErr = ""
+		if live.importJobGen != 0 {
+			a.cancelJobIfGen(jobLive, live.importJobGen)
+			live.importJobGen = 0
+		}
+	}
 }
 
 // advanceLive tries each alternative once when the player fails or never starts.
 func (a *app) advanceLive(p mediaPlayer) {
-	if !a.isLiveStream() || p == nil || a.live.playingChannel < 0 || a.live.playingChannel >= len(a.live.channels) {
+	if !a.playingLive || a.live.catchupProgram != nil || p == nil || a.live.playingChannel < 0 || a.live.playingChannel >= len(a.live.channels) {
 		return
 	}
 	if p.Err() == nil && (p.Ready() || time.Since(a.live.started) < 15*time.Second) {
