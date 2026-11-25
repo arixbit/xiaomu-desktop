@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"strconv"
@@ -159,7 +160,13 @@ func (a *app) refreshFollowingMode(manual bool) {
 	f.refreshErrors = map[string]string{}
 	generation, started := f.refreshGeneration, time.Now()
 	entries := append([]favoriteEntry(nil), f.entries...)
-	root, cached, assets, dispatch := a.library.root, maps.Clone(a.library.cached), strings.TrimSpace(a.browser.assets), a.dispatch
+	root, cached, skipDocs, assets, dispatch := a.library.root, maps.Clone(a.library.cached), a.activeFailedDocs(), strings.TrimSpace(a.browser.assets), a.dispatch
+	if cached == nil {
+		cached = map[string]*config.Config{}
+	}
+	if skipDocs == nil {
+		skipDocs = map[string]bool{}
+	}
 	available := make(map[string]bool, len(entries))
 	for _, e := range entries {
 		available[e.ConfigURL] = a.configAvailable(e.ConfigURL)
@@ -182,6 +189,23 @@ func (a *app) refreshFollowingMode(manual bool) {
 		skippedCount := 0
 		failedCount := 0
 		emptyCount := 0
+		onDoc := func(docURL string, doc *config.Config, err error) {
+			if doc != nil {
+				delete(skipDocs, docURL)
+				delete(skipDocs, doc.URL)
+				if docURL != "" {
+					cached[docURL] = doc
+				}
+				if doc.URL != "" {
+					cached[doc.URL] = doc
+				}
+			} else if docURL != "" && err != nil && !errors.Is(err, context.Canceled) {
+				skipDocs[docURL] = true
+			}
+			update(func() {
+				a.recordLibraryDocOutcome(docURL, doc, err)
+			})
+		}
 		// One title at a time bounds script runtimes and detail requests. A title
 		// saved before a site was known uses the library's four-worker search.
 		for _, e := range entries {
@@ -193,7 +217,7 @@ func (a *app) refreshFollowingMode(manual bool) {
 				continue
 			}
 			itemCtx, itemCancel := context.WithTimeout(ctx, 15*time.Second)
-			item, session, detail, err := followingDetail(itemCtx, e, root, cached, assets)
+			item, session, detail, err := followingDetail(itemCtx, e, root, cached, skipDocs, assets, onDoc)
 			if session != nil {
 				session.Close()
 			}
@@ -284,7 +308,7 @@ func (a *app) applyFollowingRefresh(old favoriteEntry, item library.Item, detail
 	return false
 }
 
-func followingDetail(ctx context.Context, e favoriteEntry, root *config.Config, cached map[string]*config.Config, assets string) (library.Item, source.Session, catalog.Detail, error) {
+func followingDetail(ctx context.Context, e favoriteEntry, root *config.Config, cached map[string]*config.Config, skipDocs map[string]bool, assets string, onDoc func(string, *config.Config, error)) (library.Item, source.Session, catalog.Detail, error) {
 	var item library.Item
 	if e.ConfigURL != "" && e.VideoID != "" {
 		doc := cached[e.ConfigURL]
@@ -292,12 +316,18 @@ func followingDetail(ctx context.Context, e favoriteEntry, root *config.Config, 
 			doc = root
 		}
 		if doc == nil {
+			if skipDocs[e.ConfigURL] {
+				return item, nil, catalog.Detail{}, fmt.Errorf("片源线路暂不可用")
+			}
 			release, err := source.AcquireBackground(ctx)
 			if err != nil {
 				return item, nil, catalog.Detail{}, err
 			}
 			doc, err = config.Read(ctx, e.ConfigURL, nil)
 			release()
+			if onDoc != nil {
+				onDoc(e.ConfigURL, doc, err)
+			}
 			if err != nil {
 				return item, nil, catalog.Detail{}, err
 			}
@@ -309,7 +339,21 @@ func followingDetail(ctx context.Context, e favoriteEntry, root *config.Config, 
 		item = library.Item{Entry: entry, Video: catalog.Video{ID: catalog.ID(e.VideoID), Name: e.Name, Pic: e.Pic}}
 	} else {
 		searchCtx, cancel := context.WithCancel(ctx)
-		_ = library.Scan(searchCtx, root, library.Options{Assets: assets, Query: e.Name, Cached: cached}, func(event library.Event) {
+		// Clone snapshots before Scan so worker goroutines never race with
+		// updates recorded by onDoc for subsequent followed titles.
+		_ = library.Scan(searchCtx, root, library.Options{
+			Assets:   assets,
+			Query:    e.Name,
+			Cached:   maps.Clone(cached),
+			SkipDocs: maps.Clone(skipDocs),
+		}, func(event library.Event) {
+			if onDoc != nil {
+				if event.Document != nil {
+					onDoc(event.URL, event.Document, nil)
+				} else if event.Result == nil && event.URL != "" && event.Err != nil {
+					onDoc(event.URL, nil, event.Err)
+				}
+			}
 			if item.Entry.Config != nil || event.Err != nil || event.Result == nil {
 				return
 			}
@@ -349,10 +393,10 @@ func (a *app) openFollowing(e favoriteEntry) {
 	if item, ok := a.rememberedCandidate(e.Name, e.Pic); ok {
 		e.ConfigURL, e.EntryKey, e.SiteKey, e.VideoID = configURL(item.Entry), entryKey(item.Entry), item.Entry.Site.Key, string(item.Video.ID)
 	}
-	root, cached, assets, sniff := a.library.root, maps.Clone(a.library.cached), strings.TrimSpace(a.browser.assets), a.sniffPage
+	root, cached, skipDocs, assets, sniff := a.library.root, maps.Clone(a.library.cached), a.activeFailedDocs(), strings.TrimSpace(a.browser.assets), a.sniffPage
 	a.cancelJob(jobTitle)
 	a.run(jobPlay, "打开追剧", func(ctx context.Context) (jobResult, error) {
-		item, session, detail, err := followingDetail(ctx, e, root, cached, assets)
+		item, session, detail, err := followingDetail(ctx, e, root, cached, skipDocs, assets, nil)
 		if err != nil {
 			return jobResult{}, err
 		}

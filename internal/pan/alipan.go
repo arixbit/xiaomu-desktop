@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"maps"
 	"net/http"
 	"sort"
@@ -14,7 +13,7 @@ import (
 	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
-	"github.com/egoist/mygo/netproxy"
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 )
 
 const (
@@ -71,7 +70,7 @@ func NewAliClient(opt AliClientOptions) *aliClient {
 	}
 	hc := opt.HTTPClient
 	if hc == nil {
-		hc = &http.Client{Transport: netproxy.Transport(), Timeout: 20 * time.Second}
+		hc = httpx.NewClient(20 * time.Second)
 	}
 	credsFn := DefaultCredentials
 	if opt.Credentials != nil {
@@ -124,8 +123,8 @@ func (c *aliClient) ensureAccessToken(ctx context.Context) (accessToken, driveID
 	if err != nil {
 		return "", "", err
 	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	defer httpx.DrainAndClose(resp.Body)
+	raw, _, err := httpx.ReadLimit(resp.Body, resp.ContentLength, 2<<20)
 	if err != nil {
 		return "", "", err
 	}
@@ -186,8 +185,8 @@ func (c *aliClient) postJSON(ctx context.Context, endpoint string, body any, hea
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	defer httpx.DrainAndClose(resp.Body)
+	raw, _, err := httpx.ReadLimit(resp.Body, resp.ContentLength, 4<<20)
 	if err != nil {
 		return err
 	}

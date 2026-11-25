@@ -237,3 +237,71 @@ func TestExtensionlessPartialPlaylistIsFetchedWhole(t *testing.T) {
 		t.Fatalf("HTTP %d: %s", resp.StatusCode, body)
 	}
 }
+
+func TestWrapSessionIsolatesHeadersAndRewritesPlaylistWithSID(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/live.m3u8":
+			if r.Header.Get("Referer") != "https://session.example/" {
+				http.Error(w, "wrong referer", http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			_, _ = io.WriteString(w, "#EXTM3U\n#EXTINF:4,\nseg.ts\n")
+		case "/seg.ts":
+			if r.Header.Get("Referer") != "https://session.example/" {
+				http.Error(w, "wrong seg referer", http.StatusForbidden)
+				return
+			}
+			_, _ = io.WriteString(w, "ok-seg")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer up.Close()
+
+	p, err := Start(map[string]string{"Referer": "https://default.example/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	sid, localURL := p.RegisterWrapSession(up.URL+"/live.m3u8", map[string]string{"Referer": "https://session.example/"})
+	if p.Header("Referer") != "https://default.example/" {
+		t.Fatalf("default proxy header mutated: %q", p.Header("Referer"))
+	}
+	resp, err := http.Get(localURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "sid="+sid) {
+		t.Fatalf("playlist status=%d body=%s", resp.StatusCode, body)
+	}
+	var segURL string
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.HasPrefix(line, "http://") {
+			segURL = strings.TrimSpace(line)
+		}
+	}
+	segResp, err := http.Get(segURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segBody, _ := io.ReadAll(segResp.Body)
+	segResp.Body.Close()
+	if segResp.StatusCode != http.StatusOK || string(segBody) != "ok-seg" {
+		t.Fatalf("seg status=%d body=%q", segResp.StatusCode, segBody)
+	}
+
+	p.RemoveSession(sid)
+	gone, err := http.Get(localURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone.Body.Close()
+	if gone.StatusCode != http.StatusNotFound {
+		t.Fatalf("removed wrap session status=%d, want 404", gone.StatusCode)
+	}
+}

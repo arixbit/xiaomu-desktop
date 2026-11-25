@@ -124,3 +124,123 @@ func TestReturningToPlayingSourceDiscardsPendingDetail(t *testing.T) {
 		t.Fatal("a late source detail displaced the viewer's last choice")
 	}
 }
+
+func TestPlayerSwitchesFromPan4KFilenameToCMS1080PEpisode(t *testing.T) {
+	a, other := playerWithTwoSites(t, "1080P线路", "第01集$/ep1.m3u8#第02集$/ep2.m3u8#第03集$/ep3.m3u8")
+	a.title.detail.Sources = []catalog.Source{{
+		Name: "夸克4K",
+		Episodes: []catalog.Episode{
+			{Name: "示例剧.S01E01.2026.2160p.WEB-DL.H265", ID: "pan1"},
+			{Name: "示例剧.S01E02.2026.2160p.WEB-DL.H265", ID: "pan2"},
+		},
+	}}
+	a.playingSource = "夸克4K"
+	a.playingEpisode = "示例剧.S01E02.2026.2160p.WEB-DL.H265"
+	a.resumeAt = 42 * time.Second
+	a.title.seeds = append(a.title.seeds, other)
+	a.panelOpen = true
+
+	old := a.player
+	a.switchSource(other)
+
+	if a.player == old || a.player == nil {
+		t.Fatalf("expected player to switch from 4K pan filename to 1080P CMS episode; panelChoice=%+v", a.panelChoice)
+	}
+	if a.title.item.Entry.Site.Key != "乙站" || a.playingSource != "1080P线路" || a.playingEpisode != "第02集" {
+		t.Fatalf("unexpected playback after switch: site=%q line=%q ep=%q", a.title.item.Entry.Site.Key, a.playingSource, a.playingEpisode)
+	}
+	if a.resumeAt != 42*time.Second || a.panelChoice != nil {
+		t.Fatalf("expected resume at 42s and cleared panelChoice, got resumeAt=%s choice=%+v", a.resumeAt, a.panelChoice)
+	}
+}
+
+func TestPlayerSwitchesSingleMovieFromPan4KToCMS1080P(t *testing.T) {
+	a, other := playerWithTwoSites(t, "1080P线路", "HD1080P$/movie1080.m3u8")
+	a.title.detail.Sources = []catalog.Source{{
+		Name:     "夸克4K",
+		Episodes: []catalog.Episode{{Name: "示例电影.2026.2160p.4K.HDR", ID: "pan4k"}},
+	}}
+	a.playingSource = "夸克4K"
+	a.playingEpisode = "示例电影.2026.2160p.4K.HDR"
+	a.resumeAt = 120 * time.Second
+	a.title.seeds = append(a.title.seeds, other)
+	a.panelOpen = true
+
+	old := a.player
+	a.switchSource(other)
+
+	if a.player == old || a.title.item.Entry.Site.Key != "乙站" || a.playingSource != "1080P线路" || a.playingEpisode != "HD1080P" {
+		t.Fatalf("single-episode movie did not auto-switch: site=%q line=%q ep=%q choice=%+v", a.title.item.Entry.Site.Key, a.playingSource, a.playingEpisode, a.panelChoice)
+	}
+	if a.resumeAt != 120*time.Second {
+		t.Fatalf("resumeAt = %s, want 120s", a.resumeAt)
+	}
+}
+
+func TestPlayerSourceSwitchFailureShowsOSDAllowsRetryAndBackToCurrent(t *testing.T) {
+	a, other := playerWithTwoSites(t, "1080P线路", "第1集$/broken.mp4")
+	a.title.seeds = append(a.title.seeds, other)
+	a.panelOpen = true
+	old := a.player
+
+	tt := ui.NewTester(a.view, 1120, 760)
+	if err := tt.Click("选择来源"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.ChooseMenuItem("乙站"); err != nil {
+		t.Fatal(err)
+	}
+	if a.player != old || a.panelChoice == nil || !a.panelChoice.failed {
+		t.Fatalf("expected failed switch keeping old player: choice=%+v", a.panelChoice)
+	}
+	if !strings.Contains(a.playerOSD.text, "切换失败") {
+		t.Fatalf("expected switch failure OSD, got %q", a.playerOSD.text)
+	}
+	if !tt.HasText("仍在播放：甲站 · 线路") || !tt.HasText("回到当前") {
+		t.Fatalf("expected active-source banner and back button: %v", tt.Texts())
+	}
+
+	// Failed source in dropdown must remain selectable for retry (ChooseMenuItem fails if disabled).
+	if err := tt.Click("选择来源"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.ChooseMenuItem("乙站"); err != nil {
+		t.Fatalf("failed source was not re-selectable for retry: %v", err)
+	}
+	// Clicking "回到当前" restores the panel to the playing source cleanly.
+	if err := tt.Click("回到当前"); err != nil {
+		t.Fatalf("click 回到当前: %v; texts=%v", err, tt.Texts())
+	}
+	if a.panelChoice != nil || a.player != old || a.title.item.Entry.Site.Key != "甲站" {
+		t.Fatalf("回到当前 did not restore playing source: choice=%+v site=%q", a.panelChoice, a.title.item.Entry.Site.Key)
+	}
+}
+
+func TestPlayerSameSourceUnmatchedLineShowsFeedbackAndKeepsCurrent(t *testing.T) {
+	a := newPlayerTestApp(t)
+	a.title.detail.Sources = []catalog.Source{
+		{Name: "4K线路", Episodes: []catalog.Episode{{Name: "第1集", ID: "1"}, {Name: "第2集", ID: "2"}, {Name: "第3集", ID: "3"}}},
+		{Name: "1080P线路", Episodes: []catalog.Episode{{Name: "正片", ID: "movie"}}},
+	}
+	a.playingSource, a.playingEpisode = "4K线路", "第3集"
+	a.panelOpen = true
+	old := a.player
+
+	tt := ui.NewTester(a.view, 1120, 760)
+	if err := tt.Click("1080P线路"); err != nil {
+		t.Fatal(err)
+	}
+	if a.player != old || !strings.Contains(a.playerOSD.text, "无对应分集") {
+		t.Fatalf("expected unmatched line OSD keeping old player: osd=%q", a.playerOSD.text)
+	}
+	if !tt.HasText("仍在播放：4K线路") {
+		t.Fatalf("expected inline notice that 4K线路 is still playing: %v", tt.Texts())
+	}
+	// Clicking back to the currently playing line does not restart playback.
+	if err := tt.Click("4K线路"); err != nil {
+		t.Fatal(err)
+	}
+	if a.player != old || a.panelSource != 0 {
+		t.Fatalf("returning to playing line restarted player or lost panelSource: panelSource=%d", a.panelSource)
+	}
+}

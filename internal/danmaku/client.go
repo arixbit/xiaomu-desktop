@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/egoist/mygo/netproxy"
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 )
 
 const maxResponseBytes = 16 << 20
@@ -34,14 +33,14 @@ type Client struct {
 	HTTP   *http.Client
 }
 
-var sharedTransport = sync.OnceValue(func() *http.Transport {
-	transport := netproxy.Transport().Clone()
+var sharedTransport = sync.OnceValue(func() http.RoundTripper {
+	transport := httpx.NewTransport()
 	transport.ResponseHeaderTimeout = 20 * time.Second
-	return transport
+	return httpx.WrapRoundTripper(transport, httpx.TracingOptions{})
 })
 
 func newHTTPClient() *http.Client {
-	return &http.Client{Transport: sharedTransport()}
+	return &http.Client{Transport: sharedTransport(), Timeout: 30 * time.Second}
 }
 
 // NewClient accepts a Dandanplay-compatible service root or its /api/v2 address,
@@ -164,15 +163,15 @@ func (c *Client) get(ctx context.Context, u *url.URL) ([]byte, error) {
 		}
 		return nil, fmt.Errorf("弹幕请求失败：%w", err)
 	}
-	defer response.Body.Close()
+	defer httpx.DrainAndClose(response.Body)
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("弹幕服务返回 HTTP %d", response.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
+	data, exceeded, err := httpx.ReadLimit(response.Body, response.ContentLength, maxResponseBytes)
 	if err != nil {
 		return nil, fmt.Errorf("读取弹幕响应失败：%w", err)
 	}
-	if len(data) > maxResponseBytes {
+	if exceeded {
 		return nil, fmt.Errorf("弹幕响应超过 16 MB")
 	}
 	return data, nil

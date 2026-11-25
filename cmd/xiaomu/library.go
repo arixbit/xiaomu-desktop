@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -62,11 +63,14 @@ type libraryScan struct {
 	progress         library.Event
 }
 
+const docFailTTL = 10 * time.Minute
+
 // UI state is updated only through dispatch. The feed and the search run
 // side by side, so going back from a search never reloads the home page.
 type libraryBrowser struct {
 	root         *config.Config
 	cached       map[string]*config.Config
+	failedDocs   map[string]time.Time
 	liveChannels map[string][]iptv.Channel
 	liveEPG      map[string]string
 	searchCache  *library.SearchCache
@@ -135,6 +139,50 @@ func (a *app) resetLibraryWithCache(doc *config.Config, cached map[string]*confi
 	}
 }
 
+func (a *app) activeFailedDocs() map[string]bool {
+	l := &a.library
+	if len(l.failedDocs) == 0 {
+		return nil
+	}
+	now := time.Now()
+	var skipDocs map[string]bool
+	for docURL, failedAt := range l.failedDocs {
+		if now.Sub(failedAt) < docFailTTL {
+			if skipDocs == nil {
+				skipDocs = make(map[string]bool, len(l.failedDocs))
+			}
+			skipDocs[docURL] = true
+		} else {
+			delete(l.failedDocs, docURL)
+		}
+	}
+	return skipDocs
+}
+
+func (a *app) recordLibraryDocOutcome(docURL string, doc *config.Config, err error) {
+	l := &a.library
+	if doc != nil {
+		delete(l.failedDocs, docURL)
+		delete(l.failedDocs, doc.URL)
+		if l.cached == nil {
+			l.cached = map[string]*config.Config{}
+		}
+		if docURL != "" {
+			l.cached[docURL] = doc
+		}
+		if doc.URL != "" {
+			l.cached[doc.URL] = doc
+		}
+		return
+	}
+	if docURL != "" && err != nil && !errors.Is(err, context.Canceled) {
+		if l.failedDocs == nil {
+			l.failedDocs = map[string]time.Time{}
+		}
+		l.failedDocs[docURL] = time.Now()
+	}
+}
+
 // searchLibrary shows the results for the toolbar's text above the tab.
 func (a *app) searchLibrary() {
 	if a.library.root == nil {
@@ -175,6 +223,10 @@ func (a *app) startScanWithSkip(s *libraryScan, query string, more, skipFailed b
 	if skipFailed && strings.TrimSpace(query) != "" {
 		skip = a.siteHealth.snapshotKeys()
 	}
+	var skipDocs map[string]bool
+	if skipFailed {
+		skipDocs = a.activeFailedDocs()
+	}
 	var preferred map[string]bool
 	if key := titleKey(query); key != "" {
 		if entryKey := a.sourceMemory.entries[key].Preferred.EntryKey; entryKey != "" {
@@ -187,6 +239,7 @@ func (a *app) startScanWithSkip(s *libraryScan, query string, more, skipFailed b
 		Cached:        maps.Clone(l.cached),
 		SearchCache:   l.searchCache,
 		Skip:          skip,
+		SkipDocs:      skipDocs,
 		Interactive:   s == &a.library.search,
 		Latency:       a.latency.snapshot(),
 		PreferredKeys: preferred,
@@ -410,6 +463,8 @@ func (a *app) appendLibraryEvent(s *libraryScan, event library.Event) bool {
 	s.progress = event
 	docAdded := false
 	if doc := event.Document; doc != nil {
+		delete(l.failedDocs, event.URL)
+		delete(l.failedDocs, doc.URL)
 		if l.cached[event.URL] != doc || l.cached[doc.URL] != doc {
 			l.cached[event.URL], l.cached[doc.URL] = doc, doc
 			if doc != l.root {
@@ -430,6 +485,11 @@ func (a *app) appendLibraryEvent(s *libraryScan, event library.Event) bool {
 				a.live.sources = append(a.live.sources, doc.Lives...)
 			}
 		}
+	} else if event.Result == nil && event.URL != "" && event.Err != nil && !errors.Is(event.Err, context.Canceled) {
+		if l.failedDocs == nil {
+			l.failedDocs = map[string]time.Time{}
+		}
+		l.failedDocs[event.URL] = time.Now()
 	}
 	result := event.Result
 	if result == nil {

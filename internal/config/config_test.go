@@ -4,8 +4,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestStripJSONC(t *testing.T) {
@@ -336,5 +342,157 @@ func TestClassifyPanAndAListSites(t *testing.T) {
 	}
 	if by["guard2"].Kind != KindCSP || !by["guard2"].Kind.Unsupported() {
 		t.Fatalf("encrypted Guard must stay unsupported: %+v", by["guard2"])
+	}
+}
+
+func TestFetchFallbackSkipsHTTPSOnDefiniteHTTPStatusAndCanceledContext(t *testing.T) {
+	for _, status := range []int{404, 403, 502} {
+		var calls []string
+		fetch := func(_ context.Context, u string) (Response, error) {
+			calls = append(calls, u)
+			return Response{Status: status, URL: u}, nil
+		}
+		if _, err := Read(context.Background(), "http://cdn.example/missing.json", fetch); err == nil {
+			t.Fatalf("status %d: expected error", status)
+		}
+		if len(calls) != 1 || calls[0] != "http://cdn.example/missing.json" {
+			t.Fatalf("status %d: unexpected HTTPS retry calls=%v", status, calls)
+		}
+	}
+
+	// 400 (plain HTTP sent to HTTPS port) and 426 still fall back to HTTPS.
+	for _, status := range []int{400, 426} {
+		var calls []string
+		fetch := func(_ context.Context, u string) (Response, error) {
+			calls = append(calls, u)
+			if strings.HasPrefix(u, "http://") {
+				return Response{Status: status, URL: u}, nil
+			}
+			return Response{Status: 200, Body: []byte(`{"sites":[]}`), URL: u}, nil
+		}
+		if _, err := Read(context.Background(), "http://cdn.example/upgrade.json", fetch); err != nil {
+			t.Fatalf("status %d: expected HTTPS fallback success, got %v", status, err)
+		}
+		if len(calls) != 2 || calls[1] != "https://cdn.example/upgrade.json" {
+			t.Fatalf("status %d: calls=%v", status, calls)
+		}
+	}
+
+	// Canceled context must not initiate an HTTPS retry.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var calls []string
+	fetch := func(_ context.Context, u string) (Response, error) {
+		calls = append(calls, u)
+		return Response{}, context.Canceled
+	}
+	if _, err := Read(ctx, "http://cdn.example/canceled.json", fetch); err == nil {
+		t.Fatal("expected canceled error")
+	}
+	if len(calls) != 1 {
+		t.Fatalf("canceled context retried over HTTPS: calls=%v", calls)
+	}
+}
+
+func TestReadCoalescesConcurrentRequestsAndPreservesSurvivorOnCancel(t *testing.T) {
+	var hits atomic.Int32
+	gate := make(chan struct{})
+	started := make(chan struct{}, 1)
+	canceledOnly := make(chan struct{}, 1)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cfg.json":
+			n := hits.Add(1)
+			if n == 1 {
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+				select {
+				case <-gate:
+				case <-r.Context().Done():
+					return
+				}
+			}
+			_, _ = w.Write([]byte(`{"sites":[{"key":"s1","name":"示例站","type":1,"api":"/vod"}]}`))
+		case "/cancel-only.json":
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-r.Context().Done()
+			select {
+			case canceledOnly <- struct{}{}:
+			default:
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	// 1. 3 concurrent callers coalesce to 1 HTTP request; canceling caller 0
+	// must NOT cancel the shared request for surviving callers 1 and 2.
+	ctx0, cancel0 := context.WithCancel(context.Background())
+	defer cancel0()
+	cfgs := make([]*Config, 3)
+	errs := make([]error, 3)
+	var wg sync.WaitGroup
+	for i := range 3 {
+		ctx := context.Background()
+		if i == 0 {
+			ctx = ctx0
+		}
+		wg.Go(func() {
+			cfgs[i], errs[i] = Read(ctx, srv.URL+"/cfg.json", nil)
+		})
+	}
+	<-started
+	time.Sleep(15 * time.Millisecond)
+	cancel0()
+	time.Sleep(10 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+
+	if hits.Load() != 1 {
+		t.Fatalf("expected 1 coalesced HTTP request for 3 concurrent callers, got %d", hits.Load())
+	}
+	if !errors.Is(errs[0], context.Canceled) {
+		t.Fatalf("caller 0 err = %v, want context.Canceled", errs[0])
+	}
+	for i := 1; i < 3; i++ {
+		if errs[i] != nil || cfgs[i] == nil || len(cfgs[i].Sites) != 1 {
+			t.Fatalf("caller %d failed: cfg=%+v err=%v", i, cfgs[i], errs[i])
+		}
+	}
+	if cfgs[1] == cfgs[2] {
+		t.Fatal("expected distinct shallow copies of Config for concurrent callers")
+	}
+
+	// 2. Subsequent sequential Read is not stale-cached and fetches fresh.
+	if _, err := Read(context.Background(), srv.URL+"/cfg.json", nil); err != nil {
+		t.Fatalf("sequential Read failed: %v", err)
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("expected fresh sequential fetch (hits=2), got %d", hits.Load())
+	}
+
+	// 3. When the sole waiter cancels, the underlying HTTP request is canceled.
+	onlyCtx, onlyCancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := Read(onlyCtx, srv.URL+"/cancel-only.json", nil)
+		done <- err
+	}()
+	<-started
+	onlyCancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("sole waiter cancel err = %v, want context.Canceled", err)
+	}
+	select {
+	case <-canceledOnly:
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceling sole waiter did not abort the underlying HTTP request")
 	}
 }

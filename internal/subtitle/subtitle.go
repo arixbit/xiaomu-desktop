@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/egoist/mygo/netproxy"
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 )
 
 const (
@@ -57,13 +57,10 @@ type Client struct {
 	ASSRTToken     string
 }
 
-// NewClient constructs a subtitle Client using MyGo's proxy-aware transport.
+// NewClient constructs a subtitle Client using Xiaomu's pooled proxy-aware transport.
 func NewClient(assrtToken string) *Client {
 	return &Client{
-		HTTP: &http.Client{
-			Transport: netproxy.Transport(),
-			Timeout:   15 * time.Second,
-		},
+		HTTP:           httpx.NewClient(15 * time.Second),
 		ShooterBaseURL: DefaultShooterBaseURL,
 		ASSRTBaseURL:   DefaultASSRTBaseURL,
 		ASSRTToken:     strings.TrimSpace(assrtToken),
@@ -74,7 +71,7 @@ func (c *Client) httpClient() *http.Client {
 	if c != nil && c.HTTP != nil {
 		return c.HTTP
 	}
-	return &http.Client{Transport: netproxy.Transport(), Timeout: 15 * time.Second}
+	return httpx.NewClient(15 * time.Second)
 }
 
 func (c *Client) shooterURL() string {
@@ -170,11 +167,11 @@ func (c *Client) SearchShooter(ctx context.Context, fileHash, filename string) (
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer httpx.DrainAndClose(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("射手字幕服务返回 HTTP %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxSearchBytes))
+	data, _, err := httpx.ReadLimit(resp.Body, resp.ContentLength, maxSearchBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -274,11 +271,11 @@ func (c *Client) SearchASSRT(ctx context.Context, query string) ([]Candidate, er
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer httpx.DrainAndClose(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("ASSRT 服务返回 HTTP %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxSearchBytes))
+	data, _, err := httpx.ReadLimit(resp.Body, resp.ContentLength, maxSearchBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -332,11 +329,11 @@ func (c *Client) resolveASSRTDownload(ctx context.Context, detailID int) (string
 	if err != nil {
 		return "", "", err
 	}
-	defer resp.Body.Close()
+	defer httpx.DrainAndClose(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return "", "", fmt.Errorf("ASSRT 详情返回 HTTP %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxSearchBytes))
+	data, _, err := httpx.ReadLimit(resp.Body, resp.ContentLength, maxSearchBytes)
 	if err != nil {
 		return "", "", err
 	}
@@ -415,15 +412,15 @@ func (c *Client) Download(ctx context.Context, cand Candidate, destDir string) (
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer httpx.DrainAndClose(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("下载字幕返回 HTTP %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxSubtitleBytes+1))
+	data, exceeded, err := httpx.ReadLimit(resp.Body, resp.ContentLength, maxSubtitleBytes)
 	if err != nil {
 		return "", err
 	}
-	if len(data) > maxSubtitleBytes {
+	if exceeded {
 		return "", fmt.Errorf("字幕文件超过 %d 字节上限", maxSubtitleBytes)
 	}
 	if len(data) == 0 {

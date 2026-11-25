@@ -25,7 +25,7 @@ func (p *Proxy) do(req *http.Request) (*http.Response, error) {
 		cancel(nil)
 		return nil, err
 	}
-	resp.Body = &idleBody{ReadCloser: resp.Body, ctx: ctx, cancel: cancel, timeout: timeout}
+	resp.Body = &idleBody{ReadCloser: resp.Body, ctx: ctx, cancel: cancel, timer: timer, timeout: timeout}
 	return resp, nil
 }
 
@@ -33,13 +33,14 @@ type idleBody struct {
 	io.ReadCloser
 	ctx     context.Context
 	cancel  context.CancelCauseFunc
+	timer   *time.Timer
 	timeout time.Duration
 }
 
 func (b *idleBody) Read(buf []byte) (int, error) {
-	timer := time.AfterFunc(b.timeout, func() { b.cancel(errUpstreamTimeout) })
+	b.timer.Reset(b.timeout)
 	n, err := b.ReadCloser.Read(buf)
-	timer.Stop()
+	b.timer.Stop()
 	if err != nil {
 		if cause := context.Cause(b.ctx); cause != nil {
 			err = cause
@@ -49,6 +50,7 @@ func (b *idleBody) Read(buf []byte) (int, error) {
 }
 
 func (b *idleBody) Close() error {
+	b.timer.Stop()
 	b.cancel(nil)
 	return b.ReadCloser.Close()
 }

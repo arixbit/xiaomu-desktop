@@ -229,7 +229,57 @@ func (a *app) adoptPlayer(p mediaPlayer) {
 	a.localPlaylist = nil
 	a.localPlaylistIdx = -1
 	a.playingSource, a.playingEpisode = "", ""
+	a.playingSourceIdx, a.playingEpisodeIdx = -1, -1
 	a.playingStreams, a.playingStreamIdx = nil, 0
+}
+
+func (a *app) ensureProxy() (*proxy.Proxy, error) {
+	if a.proxy != nil {
+		return a.proxy, nil
+	}
+	p, err := proxy.Start(nil)
+	if err != nil {
+		return nil, err
+	}
+	a.proxy = p
+	return p, nil
+}
+
+// openProxySession serves one playback stream on the shared loopback proxy
+// using an isolated /s/<id>/... session so episode switches, line changes, and
+// retries keep the existing upstream TCP/TLS connection pool warm while leaving
+// the current player untouched until the replacement actually opens.
+func (a *app) openProxySession(cfg proxy.SessionConfig, keepCurrent bool) bool {
+	p, err := a.ensureProxy()
+	if err != nil {
+		a.status = "代理启动失败：" + err.Error()
+		return false
+	}
+	oldSession := a.proxySession
+	if !keepCurrent {
+		a.closeCurrentPlayer()
+		if oldSession != "" {
+			p.RemoveSession(oldSession)
+			a.proxySession = ""
+			oldSession = ""
+		}
+	}
+	sessID, localURL := p.RegisterSession(cfg)
+	player, err := a.openMediaURL(localURL)
+	if err != nil {
+		p.RemoveSession(sessID)
+		a.status = "无法打开：" + err.Error()
+		a.syncNowPlaying()
+		return false
+	}
+	a.adoptPlayer(player)
+	if oldSession != "" && oldSession != sessID {
+		p.RemoveSession(oldSession)
+	}
+	a.proxySession = sessID
+	a.playingLive, a.playingDirect = false, false
+	a.status = "正在播放"
+	return true
 }
 
 // openPlaybackStream serves a stream through an isolated proxy session that
@@ -242,51 +292,12 @@ func (a *app) openPlaybackStream(stream catalog.Stream, keepCurrent bool) bool {
 		a.status = "请输入 http 或 https 播放地址"
 		return false
 	}
-	p := a.proxy
-	if p == nil || keepCurrent {
-		p, err = proxy.Start(nil)
-		if err != nil {
-			a.status = "代理启动失败：" + err.Error()
-			return false
-		}
-		if !keepCurrent {
-			a.proxy = p
-		}
-	}
-	if !keepCurrent {
-		if a.proxySession != "" && p == a.proxy {
-			p.RemoveSession(a.proxySession)
-			a.proxySession = ""
-		}
-		a.closeCurrentPlayer()
-	}
-	sessID, localURL := p.RegisterSession(proxy.SessionConfig{
+	return a.openProxySession(proxy.SessionConfig{
 		URL:      raw,
 		Headers:  stream.Headers,
 		Filename: stream.Filename,
 		Prefetch: !stream.IsHLS,
-	})
-	player, err := a.openMediaURL(localURL)
-	if err != nil {
-		p.RemoveSession(sessID)
-		if keepCurrent {
-			p.Close()
-		}
-		a.status = "无法打开：" + err.Error()
-		a.syncNowPlaying()
-		return false
-	}
-	a.adoptPlayer(player)
-	if keepCurrent {
-		if a.proxy != nil {
-			a.proxy.Close()
-		}
-		a.proxy = p
-	}
-	a.proxySession = sessID
-	a.playingLive, a.playingDirect = false, false
-	a.status = "正在播放"
-	return true
+	}, keepCurrent)
 }
 
 func (a *app) openMediaURL(localURL string) (mediaPlayer, error) {
@@ -381,8 +392,10 @@ func (a *app) playURL(raw string, headers map[string]string) bool {
 	return a.openPlaybackURL(raw, headers, false)
 }
 
-// A replacement episode stages its headers on a separate proxy so the old player
-// can keep using its own session until the new media actually opens.
+// openPlaybackURL serves HTTP media on the shared loopback proxy so episode
+// switches, line changes, and retries keep the upstream TCP/TLS connection pool
+// warm. Replacement opens stage headers under an isolated /u?sid=... session so
+// the current player stays unaffected until the new stream actually opens.
 func (a *app) openPlaybackURL(raw string, headers map[string]string, keepCurrent bool) bool {
 	raw = strings.TrimSpace(raw)
 	u, err := url.Parse(raw)
@@ -390,26 +403,29 @@ func (a *app) openPlaybackURL(raw string, headers map[string]string, keepCurrent
 		a.status = "请输入 http 或 https 播放地址"
 		return false
 	}
-	p := a.proxy
-	if p == nil || keepCurrent {
-		p, err = proxy.Start(headers)
-		if err != nil {
-			a.status = "代理启动失败：" + err.Error()
-			return false
-		}
-		if !keepCurrent {
-			a.proxy = p
-		}
-	} else {
-		p.SetHeaders(headers)
-	}
-	if !keepCurrent {
-		a.closeCurrentPlayer()
-	}
-	player, err := a.openMediaURL(p.Wrap(raw))
+	p, err := a.ensureProxy()
 	if err != nil {
-		if keepCurrent {
-			p.Close()
+		a.status = "代理启动失败：" + err.Error()
+		return false
+	}
+	oldSession := a.proxySession
+	var sessID, localURL string
+	if keepCurrent {
+		sessID, localURL = p.RegisterWrapSession(raw, headers)
+	} else {
+		a.closeCurrentPlayer()
+		if oldSession != "" {
+			p.RemoveSession(oldSession)
+			a.proxySession = ""
+			oldSession = ""
+		}
+		p.SetHeaders(headers)
+		localURL = p.Wrap(raw)
+	}
+	player, err := a.openMediaURL(localURL)
+	if err != nil {
+		if sessID != "" {
+			p.RemoveSession(sessID)
 		}
 		a.status = "无法打开：" + err.Error()
 		a.syncNowPlaying()
@@ -417,11 +433,12 @@ func (a *app) openPlaybackURL(raw string, headers map[string]string, keepCurrent
 	}
 	a.adoptPlayer(player)
 	if keepCurrent {
-		if a.proxy != nil {
-			a.proxy.Close()
-		}
-		a.proxy = p
+		p.SetHeaders(headers)
 	}
+	if oldSession != "" && oldSession != sessID {
+		p.RemoveSession(oldSession)
+	}
+	a.proxySession = sessID
 	a.playingLive, a.playingDirect = false, false
 	a.status = "正在播放"
 	return true

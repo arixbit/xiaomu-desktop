@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -19,8 +18,8 @@ import (
 
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 	"github.com/arixbit/xiaomu-desktop/internal/pan"
-	"github.com/egoist/mygo/netproxy"
 )
 
 const (
@@ -77,7 +76,7 @@ func Open(ctx context.Context, site config.Site) (*Session, []catalog.Category, 
 	s := &Session{
 		drives: drives,
 		vodPic: vodPic,
-		client: &http.Client{Transport: netproxy.Transport(), Timeout: 12 * time.Second},
+		client: httpx.NewClient(12 * time.Second),
 	}
 	cats := make([]catalog.Category, 0, len(drives))
 	for i, d := range drives {
@@ -211,8 +210,8 @@ func (s *Session) apiPost(ctx context.Context, server, endpoint string, payload 
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	defer httpx.DrainAndClose(resp.Body)
+	raw, _, err := httpx.ReadLimit(resp.Body, resp.ContentLength, 4<<20)
 	if err != nil {
 		return err
 	}

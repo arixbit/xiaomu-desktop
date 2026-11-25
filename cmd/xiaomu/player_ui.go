@@ -911,21 +911,66 @@ func panelLineChip(c *ui.Context, key, label string, selected bool) ui.Element {
 	return btn
 }
 
+func (a *app) playingSourceSummary() string {
+	var parts []string
+	if a.title != nil {
+		if label := a.title.item.Entry.Label(); label != "" {
+			parts = append(parts, label)
+		}
+	}
+	if a.playingSource != "" {
+		parts = append(parts, a.playingSource)
+	}
+	return strings.Join(parts, " · ")
+}
+
 func (a *app) panelEpisodes(c *ui.Context) {
 	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Gap(12).ScrollbarStyle(danmakuScrollbar).Children(func() {
 		a.panelSources(c, a.candidates())
 		detail := a.title.detail
 		if choice := a.panelChoice; choice != nil {
 			if choice.message != "" {
-				ui.Text(c, choice.message).FontSize(12).TextColor(playerMutedText)
+				bg := ui.RGBA(255, 255, 255, 0.06)
+				border := ui.RGBA(255, 255, 255, 0.14)
+				fg := ui.RGBA(248, 249, 255, 0.88)
+				if choice.failed {
+					bg = ui.RGBA(239, 68, 68, 0.15)
+					border = ui.RGBA(248, 113, 113, 0.45)
+					fg = ui.RGB(254, 202, 202)
+				}
+				ui.Column(c).FillWidth().Padding(8, 10).Gap(4).Radius(10).Background(bg).Border(1, border).Children(func() {
+					ui.Text(c, choice.message).FontSize(12).TextColor(fg)
+					if playing := a.playingSourceSummary(); playing != "" {
+						ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+							ui.Text(c, "仍在播放："+playing).FontSize(11).TextColor(playerMutedText).SingleLine().Grow(1)
+							if !a.running(jobPlay) && a.title != nil {
+								retBtn := ui.ButtonBase(c.Key("panel-choice-back")).Padding(2, 7).Radius(6).
+									Cursor(ui.CursorPointer).Label("回到当前来源").
+									Background(ui.RGBA(255, 255, 255, 0.10)).Border(1, ui.RGBA(255, 255, 255, 0.16))
+								applyPressPose(retBtn)
+								retBtn.Children(func() {
+									ui.Text(c, "回到当前").FontSize(11).TextColor(playerText).SingleLine().PassThrough()
+								})
+								if retBtn.Clicked() {
+									a.switchSource(a.title.item)
+								}
+							}
+						})
+					}
+				})
 			}
-			detail = choice.detail
+			if a.panelChoice == nil {
+				detail = a.title.detail
+			} else {
+				detail = choice.detail
+			}
 		}
 		if detail == nil || len(detail.Sources) == 0 {
 			return
 		}
+		playingLine, _, hasPlaying := a.currentEpisode()
 		if a.panelSource < 0 || a.panelSource >= len(detail.Sources) {
-			a.panelSource, _, _ = a.currentEpisode()
+			a.panelSource = playingLine
 		}
 		selectedLine := a.panelSource
 		if len(detail.Sources) > 1 {
@@ -943,6 +988,9 @@ func (a *app) panelEpisodes(c *ui.Context) {
 						}
 					}
 				})
+				if a.panelChoice == nil && hasPlaying && selectedLine != playingLine && !a.running(jobPlay) && a.playFailure == nil {
+					ui.Text(c, "未匹配当前分集 · 仍在播放："+a.playingSource+"，请点击下方分集切换").FontSize(11).TextColor(ui.RGB(255, 198, 130))
+				}
 			})
 		}
 		selected := detail.Sources[selectedLine]
@@ -1015,7 +1063,7 @@ func (a *app) panelSources(c *ui.Context, candidates []library.Item) {
 		}
 		panelSectionHeader(c, "来源", count)
 		if len(candidates) > 1 {
-			retry := a.panelChoice != nil && a.panelChoice.detail == nil && !a.running(jobPlay)
+			retry := a.panelChoice != nil && (a.panelChoice.detail == nil || a.panelChoice.failed) && !a.running(jobPlay)
 			srcBtn := ui.ButtonBase(c.Key("panel-source-select")).FillWidth().Padding(8, 12).Gap(8).Radius(10).
 				AlignItems(ui.Center).Cursor(ui.CursorPointer).Label("选择来源").
 				Border(1, ui.RGBA(255, 255, 255, 0.12))

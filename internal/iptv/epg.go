@@ -1,6 +1,7 @@
 package iptv
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -17,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/egoist/mygo/netproxy"
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 )
 
 const (
@@ -62,10 +63,11 @@ func IsTemplateEPG(rawURL string) bool {
 }
 
 func defaultEPGClient() *http.Client {
-	return &http.Client{Transport: netproxy.Transport(), Timeout: 20 * time.Second}
+	return httpx.NewClient(20 * time.Second)
 }
 
-// FetchXMLTV downloads and parses an XMLTV guide (plain .xml or gzipped .xml.gz).
+// FetchXMLTV downloads and parses an XMLTV guide (plain .xml or gzipped .xml.gz)
+// in a streaming pass so large schedules do not trigger multi-buffer memory spikes.
 func FetchXMLTV(ctx context.Context, client *http.Client, rawURL string, headers map[string]string) (*EPG, error) {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -88,38 +90,41 @@ func FetchXMLTV(ctx context.Context, client *http.Client, rawURL string, headers
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer httpx.DrainAndClose(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("EPG 服务返回 HTTP %d", resp.StatusCode)
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxEPGBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(raw) > maxEPGBytes {
+	if resp.ContentLength > maxEPGBytes {
 		return nil, fmt.Errorf("EPG 文件超过上限")
 	}
-	return ParseXMLTV(raw)
+	return parseXMLTVReader(resp.Body)
 }
 
 // ParseXMLTV parses XMLTV bytes (automatically gunzipping .xml.gz payloads).
 func ParseXMLTV(data []byte) (*EPG, error) {
-	if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
-		gr, err := gzip.NewReader(bytes.NewReader(data))
+	if len(data) > maxEPGBytes {
+		return nil, fmt.Errorf("EPG 文件超过上限")
+	}
+	return parseXMLTVReader(bytes.NewReader(data))
+}
+
+func parseXMLTVReader(r io.Reader) (*EPG, error) {
+	rawLim := &io.LimitedReader{R: r, N: maxEPGBytes + 1}
+	br := bufio.NewReaderSize(rawLim, 32*1024)
+	magic, _ := br.Peek(2)
+	isGzip := len(magic) >= 2 && magic[0] == 0x1f && magic[1] == 0x8b
+	var src io.Reader = br
+	var decLim *io.LimitedReader
+	if isGzip {
+		gr, err := gzip.NewReader(br)
 		if err != nil {
 			return nil, fmt.Errorf("解压 EPG 失败：%w", err)
 		}
 		defer gr.Close()
-		unpacked, err := io.ReadAll(io.LimitReader(gr, maxEPGBytes+1))
-		if err != nil {
-			return nil, fmt.Errorf("读取压缩 EPG 失败：%w", err)
-		}
-		if len(unpacked) > maxEPGBytes {
-			return nil, fmt.Errorf("解压后 EPG 超过上限")
-		}
-		data = unpacked
+		decLim = &io.LimitedReader{R: gr, N: maxEPGBytes + 1}
+		src = decLim
 	}
-	dec := xml.NewDecoder(bytes.NewReader(data))
+	dec := xml.NewDecoder(src)
 	epg := &EPG{
 		byID:      make(map[string][]Program),
 		aliasToID: make(map[string]string),
@@ -131,6 +136,12 @@ func ParseXMLTV(data []byte) (*EPG, error) {
 			break
 		}
 		if err != nil {
+			if decLim != nil && decLim.N <= 0 {
+				return nil, fmt.Errorf("解压后 EPG 超过上限")
+			}
+			if rawLim.N <= 0 {
+				return nil, fmt.Errorf("EPG 文件超过上限")
+			}
 			return nil, fmt.Errorf("解析 XMLTV 失败：%w", err)
 		}
 		se, ok := tok.(xml.StartElement)
@@ -211,6 +222,12 @@ func ParseXMLTV(data []byte) (*EPG, error) {
 		})
 		epg.byID[id] = progs
 	}
+	if decLim != nil && decLim.N <= 0 {
+		return nil, fmt.Errorf("解压后 EPG 超过上限")
+	}
+	if rawLim.N <= 0 {
+		return nil, fmt.Errorf("EPG 文件超过上限")
+	}
 	return epg, nil
 }
 
@@ -276,11 +293,11 @@ func FetchDIYPChannel(ctx context.Context, client *http.Client, templateURL stri
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer httpx.DrainAndClose(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("EPG 接口返回 HTTP %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDIYPEPGBytes))
+	body, _, err := httpx.ReadLimit(resp.Body, resp.ContentLength, maxDIYPEPGBytes)
 	if err != nil {
 		return nil, err
 	}

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/arixbit/xiaomu-desktop/internal/config"
@@ -107,5 +108,28 @@ func TestOpenRejectsHTMLScript(t *testing.T) {
 	_, _, err := Open(context.Background(), config.Site{Kind: config.KindFongMi, Type: 3, API: srv.URL + "/entry.js"}, "")
 	if err == nil || !strings.Contains(err.Error(), srv.URL+"/entry.js") || !strings.Contains(err.Error(), "HTTP 200") || !strings.Contains(err.Error(), "HTML") {
 		t.Fatalf("error: %v", err)
+	}
+}
+
+func TestOpenReusesProbedScriptWithoutDoubleFetch(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/spider.js" {
+			hits.Add(1)
+			w.Header().Set("Content-Type", "text/javascript")
+			fmt.Fprint(w, `import {Spider} from 'catvod'; export default class Demo extends Spider { homeVideoContent(){return {list:[{vod_id:'1',vod_name:'示例片'}]}} }`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	s, _, err := Open(context.Background(), config.Site{Kind: config.KindFongMi, Type: 3, API: srv.URL + "/spider.js"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if hits.Load() != 1 {
+		t.Fatalf("probed FongMi script was downloaded %d times, want 1", hits.Load())
 	}
 }

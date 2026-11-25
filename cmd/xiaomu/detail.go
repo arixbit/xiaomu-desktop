@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -755,6 +757,8 @@ func (a *app) startEpisode(play catalog.Playback, line string, episode catalog.E
 	if t == nil {
 		return
 	}
+	wasReplacing := a.player != nil
+	prevLine := a.playingSource
 	if a.sourceAttempt.title != t || sourceMemoryItemKey(a.sourceAttempt.item) != sourceMemoryItemKey(t.item) || a.sourceAttempt.player != nil {
 		a.beginSourceAttempt(t.item, line, episode.Name)
 	}
@@ -769,6 +773,9 @@ func (a *app) startEpisode(play catalog.Playback, line string, episode catalog.E
 		return
 	}
 	a.notePlayingEpisode(line, episode, at)
+	if wasReplacing && prevLine != "" && prevLine != line {
+		a.showPlayerOSD("已切换：" + line)
+	}
 }
 
 func selectPlaybackStream(play catalog.Playback) (catalog.Stream, int, bool) {
@@ -813,6 +820,7 @@ func (a *app) openEpisodeMedia(play catalog.Playback) bool {
 func (a *app) notePlayingEpisode(line string, episode catalog.Episode, at time.Duration) {
 	t := a.title
 	a.playingSource, a.playingEpisode, a.resumeAt = line, episode.Name, at
+	a.playingSourceIdx, a.playingEpisodeIdx = -1, -1
 	a.syncNowPlaying()
 	a.sourceAttempt.player = a.player
 	a.revealContinueWatching(t.name)
@@ -820,8 +828,26 @@ func (a *app) notePlayingEpisode(line string, episode catalog.Episode, at time.D
 	a.startDanmaku()
 }
 
+var spacedDashEpisode = regexp.MustCompile(`(?:\s+[-–—]\s*)0*([0-9]{1,3})(?:\s*[\[\(【（]|$)`)
+
+// episodeMatchNumber extracts a normalized episode number from either standard
+// CMS labels ("第05集", "05") or cloud-drive/release filenames ("Show.S01E05.2160p",
+// "片名 EP05 4K", "[字幕组] 番剧 - 05 [1080p]").
+func episodeMatchNumber(name string) int {
+	if n := danmakuNumber(name); n > 0 && (n < 1900 || n > 2099) {
+		return n
+	}
+	if m := spacedDashEpisode.FindStringSubmatch(name); len(m) == 2 {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
 // matchEpisode finds in detail the episode a viewer was watching elsewhere:
-// by name, then by number, then by place in the first line.
+// by name, then by label, then by normalized episode number (for cloud-drive
+// filenames like S01E05 / EP05 vs 第05集), then by place in the first line.
 func matchEpisode(detail catalog.Detail, name string, index int) (line int, episode catalog.Episode, ok bool) {
 	for i, source := range detail.Sources {
 		for _, candidate := range source.Episodes {
@@ -835,6 +861,15 @@ func matchEpisode(detail catalog.Detail, name string, index int) (line int, epis
 		for _, candidate := range source.Episodes {
 			if episodeButtonLabel(candidate.Name) == label {
 				return i, candidate, true
+			}
+		}
+	}
+	if num := episodeMatchNumber(name); num > 0 {
+		for i, source := range detail.Sources {
+			for _, candidate := range source.Episodes {
+				if episodeMatchNumber(candidate.Name) == num {
+					return i, candidate, true
+				}
 			}
 		}
 	}
@@ -989,12 +1024,12 @@ func (t *titlePage) currentLine() (catalog.Source, bool) {
 // isCurrent reports whether item is the source on show. A title with no
 // source on show yet — its item is empty — has no current source.
 func (t *titlePage) isCurrent(item library.Item) bool {
-	return t.detail != nil && t.item.Entry.Config != nil && itemKey(t.item) == itemKey(item)
+	return t != nil && t.detail != nil && t.item.Entry.Config != nil && itemKey(t.item) == itemKey(item)
 }
 
 // currentFailed reports whether the source on show failed to load.
 func (t *titlePage) currentFailed() bool {
-	return t.detail != nil && t.item.Entry.Config != nil && t.failed[itemKey(t.item)] != ""
+	return t != nil && t.detail != nil && t.item.Entry.Config != nil && t.failed[itemKey(t.item)] != ""
 }
 
 // sourceAccordion is every site that has the title, as one list where
@@ -1031,8 +1066,14 @@ func (a *app) sourceAccordion(c *ui.Context, candidates []library.Item) {
 			}
 		}
 	})
+	if a.title != t {
+		return
+	}
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
 		for _, item := range candidates {
+			if a.title != t {
+				return
+			}
 			a.sourceRow(c, item)
 		}
 	})
@@ -1053,6 +1094,9 @@ func (a *app) sourceAccordion(c *ui.Context, candidates []library.Item) {
 
 func (a *app) sourceRow(c *ui.Context, item library.Item) {
 	t := a.title
+	if t == nil {
+		return
+	}
 	p := paletteFor(c)
 	key := itemKey(item)
 	current := t.isCurrent(item)
