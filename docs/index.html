@@ -69,7 +69,7 @@
         </article>
         <article class="card">
           <h3>豆瓣热播与跨站搜索</h3>
-          <p>首页提供热播电影、热播剧集和最近更新，点海报直接搜你自己的片库；按 <code>⌘K</code> / <code>Ctrl+K</code> 跨站搜索，同名影片合并显示来源数，失效站点自动过滤。</p>
+          <p>首页提供实时热门、热门电影/剧集/综艺/动漫/短剧/纪录片、Top 250 与最近更新并支持下滑自动翻页，点海报高并发检索你的片库；按 <code>⌘K</code> / <code>Ctrl+K</code> 跨站搜索，快站优先、同名合并，失效站点自动过滤。</p>
         </article>
         <article class="card">
           <h3>继续观看与追剧提醒</h3>
@@ -132,13 +132,13 @@
       <p class="section-intro">选择你的桌面平台下载最新版，均附带 <code>SHA256SUMS</code> 校验文件与全格式 <code>libmpv</code> 播放组件。</p>
       <div class="install-grid">
         <div class="platform-card">
-          <h3>macOS（13+ Universal）</h3>
-          <p class="platform-meta">同时支持 Apple Silicon（M 系列）与 Intel，内置通用 <code>libmpv.dylib</code>。</p>
+          <h3>macOS（13+ Apple Silicon / Intel）</h3>
+          <p class="platform-meta">按芯片分架构打包（M 系列选 <code>arm64</code>，Intel 选 <code>amd64</code>），体积更小，内置对应架构 <code>libmpv.dylib</code>。</p>
           <p><a class="btn btn-primary btn-sm" href="https://github.com/arixbit/xiaomu-desktop/releases/latest">下载 macOS DMG / ZIP</a></p>
           <ol class="steps">
             <li>
               <h4>安装应用</h4>
-              <p>打开 <code>.dmg</code> 将 <code>Xiaomu.app</code> 拖到“应用程序”，或解压 <code>-macos-universal.zip</code> 后移入“应用程序”。</p>
+              <p>按芯片下载对应 <code>-arm64.dmg</code> / <code>-amd64.dmg</code> 将 <code>Xiaomu.app</code> 拖到“应用程序”，或解压对应 <code>-macos-arm64.zip</code> / <code>-macos-amd64.zip</code> 后移入“应用程序”。</p>
             </li>
             <li>
               <h4>首次打开</h4>

@@ -17,7 +17,7 @@
 | `cmd/xiaomu/main.go` (`fitMainWindow`) | Windows 启动/还原/退出全屏后把窗口裁切到工作区内 | 规避 Windows 居中或还原窗口越出可见工作区的问题 | 上游在 Windows 侧内置工作区边界钳制后可删除 |
 | `cmd/xiaomu/player_pointer.go` | 260ms 延迟提交单击，避免双击全屏时先暂停再继续 | `ui` 尚无内置单/双击互斥手势 | `ui` 提供原生单/双击防抖手势后可替换 |
 | `cmd/xiaomu/danmaku.go` (`danmakuOverlay`) | 4 次偏移 `p.TextLayout` 模拟弹幕四向硬描边（已缓存 `ui.ShapeText` 排版，不再每帧重排） | `ui.Span` 支持模糊 `TextShadow`，但 `Painter` 尚无原生硬描边（stroke text） | `Painter` 原生支持文字描边后，可将每条弹幕 5 次绘制合并为 1 次 |
-| `scripts/build-release.sh` | 构建完成后通过 `ditto` 生成 `xiaomu-<ver>-macos-universal.zip` | MyGo v0.10.0 的 `mygo build` 默认产出 `.app`、`.dmg` 与更新包，不再自动产出 `.zip` | 若上游恢复内置 macOS `.zip` 产物，可移除脚本中的 `ditto` 步骤 |
+| `scripts/build-release.sh` | 构建完成后通过 `ditto` 生成 `xiaomu-<ver>-macos-arm64.zip` 与 `xiaomu-<ver>-macos-amd64.zip` | MyGo v0.10.0 的 `mygo build` 默认产出 `.app`、`.dmg` 与更新包，不再自动产出 `.zip` | 若上游恢复内置 macOS `.zip` 产物，可移除脚本中的 `ditto` 步骤 |
 
 ## 二、MyGo v0.10.0 新能力接入记录
 
