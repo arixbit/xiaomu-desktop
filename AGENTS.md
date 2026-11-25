@@ -1,6 +1,6 @@
 # 给编码助手
 
-小幕（Xiaomu）是原生桌面、TVBox 风格的多源影视播放器外壳（macOS 13+ 与 Windows 10/11 x64）。它只提供工具：绝不内置影视片源、默认影视配置或任何真实影视片源地址。用户的配置 URL 绝不能提交进仓库，包括测试、fixture 和文档。示例只用 `example.com` 这类保留域名或本地夹具。
+小幕（Xiaomu）是原生桌面、TVBox 风格的多源影视播放器外壳（macOS 13+ 与 Windows 10/11 x64/ARM64）。它只提供工具：绝不内置影视片源、默认影视配置或任何真实影视片源地址。用户的配置 URL 绝不能提交进仓库，包括测试、fixture 和文档。示例只用 `example.com` 这类保留域名或本地夹具。
 
 弹幕服务例外（用户于 2026-11-23 明确授权）：允许内置有公开开源项目、可匿名访问的通用弹幕服务地址。来源和地址记录在 `docs/danmaku.md`；不使用其他应用的私有凭证。弹幕离线测试仍使用保留域名或本地夹具，真实联网验证必须显式启用，不提交用户的片名、配置或观看数据。
 
@@ -10,10 +10,10 @@
 
 - **Go 1.27.3+**，零 cgo。
 - **MyGo 原生桌面框架**（钉扎版本见 `go.mod`）：只用 `ui` 包与 Glass 插件，无 Web 前端、无 Bun。
-- **播放引擎**：优先使用 `github.com/arixbit/mygo-player`（`libmpv` LGPL-2.1+，零 cgo；macOS 走 VideoToolbox + Metal 零拷贝，Windows x64 走 D3D11VA + `ui.Bitmap`），支持全格式容器、多音轨、内外挂字幕及原生请求头；其他平台与无头单测平滑回退 MyGo 内置 `ui.VideoPlayer`。HTTP/HLS/HTTP-FLV 播放经 `127.0.0.1` 本地代理注入 Referer / UA / Cookie、改写 m3u8 并统计下载速度；`libmpv` 后端下直播亦支持直连 `rtsp://` / `rtmp://`。
+- **播放引擎**：优先使用 `github.com/arixbit/mygo-player`（`libmpv` LGPL-2.1+，零 cgo；macOS 走 VideoToolbox + Metal 零拷贝，Windows x64/ARM64 走 D3D11VA + `ui.Bitmap`），支持全格式容器、多音轨、内外挂字幕及原生请求头；其他平台与无头单测平滑回退 MyGo 内置 `ui.VideoPlayer`。HTTP/HLS/HTTP-FLV 播放经 `127.0.0.1` 本地代理注入 Referer / UA / Cookie、改写 m3u8 并统计下载速度；`libmpv` 后端下直播亦支持直连 `rtsp://` / `rtmp://`。
 - **脚本引擎**：`modernc.org/quickjs`（纯 Go，无 cgo），用于运行 drpy2 与 FongMi class 脚本；另原生解释 `csp_XBPQ` 规则与 type 0/1 CMS。
 - **隔离 WebView**：仅用于动态网页嗅探（`cmd/xiaomu/sniff.go`）和网盘官方网页登录（`cmd/xiaomu/pan_auth.go`），不向页面暴露 Go 方法。
-- **目标平台**：macOS 13+（`darwin/arm64` 与 `darwin/amd64` 分架构打包，App 声明与 Go 1.27.3 最低要求一致）与 Windows 10/11（`windows/amd64`；`mygo-player v0.5.1` 暂未提供 `windows/arm64` 动态库）。
+- **目标平台**：macOS 13+（`darwin/arm64` 与 `darwin/amd64` 分架构打包，App 声明与 Go 1.27.3 最低要求一致）与 Windows 10/11（`windows/amd64` 与 `windows/arm64`）。
 
 ## 目录
 

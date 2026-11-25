@@ -16,6 +16,8 @@ jobs:
             race: true
           - os: windows-latest
             race: false
+          - os: windows-11-arm
+            race: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

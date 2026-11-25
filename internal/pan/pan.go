@@ -547,13 +547,17 @@ func IsVideoFilename(name string) bool {
 
 // IsNativePlayableFilename reports whether Xiaomu's built-in player natively
 // supports the container format on the current platform (full-format mygo-player
-// on macOS and Windows amd64, system decoder fallback elsewhere).
+// on macOS and Windows amd64/arm64, system decoder fallback elsewhere).
 func IsNativePlayableFilename(name string) bool {
+	return isNativePlayableFilenameFor(name, runtime.GOOS, runtime.GOARCH)
+}
+
+func isNativePlayableFilenameFor(name, goos, goarch string) bool {
 	ext := strings.ToLower(path.Ext(strings.TrimSpace(name)))
 	if nativePlayableExts[ext] {
 		return true
 	}
-	return (runtime.GOOS == "darwin" || (runtime.GOOS == "windows" && runtime.GOARCH == "amd64")) && mpvPlayableExts[ext]
+	return (goos == "darwin" || (goos == "windows" && (goarch == "amd64" || goarch == "arm64"))) && mpvPlayableExts[ext]
 }
 
 // ContainerLabel returns a short uppercase container label such as "MKV" or "MP4".

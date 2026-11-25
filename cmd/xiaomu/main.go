@@ -21,7 +21,7 @@ import (
 )
 
 // app is the window state; only the UI thread changes it. open is nil in the
-// real process and uses mygo-player (macOS & Windows amd64) with system
+// real process and uses mygo-player (macOS & Windows amd64/arm64) with system
 // video.OpenURL fallback; tests replace open or openMPV.
 type app struct {
 	window  *mygo.Window

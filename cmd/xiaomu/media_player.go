@@ -14,7 +14,7 @@ import (
 
 // mediaPlayer is the common playback contract between Xiaomu's UI and the
 // active video engine: mygo-player (libmpv zero-copy Metal on macOS;
-// double-buffered ui.Bitmap + D3D11VA on Windows amd64), with automatic
+// double-buffered ui.Bitmap + D3D11VA on Windows amd64/arm64), with automatic
 // fallback to MyGo's built-in system ui.VideoPlayer on other platforms and in
 // headless unit tests.
 type mediaPlayer interface {
@@ -87,7 +87,11 @@ type advancedMediaPlayer interface {
 }
 
 func mpvBackendSupported() bool {
-	return runtime.GOOS == "darwin" || (runtime.GOOS == "windows" && runtime.GOARCH == "amd64")
+	return mpvBackendSupportedFor(runtime.GOOS, runtime.GOARCH)
+}
+
+func mpvBackendSupportedFor(goos, goarch string) bool {
+	return goos == "darwin" || (goos == "windows" && (goarch == "amd64" || goarch == "arm64"))
 }
 
 // systemMediaPlayer adapts MyGo's built-in *ui.VideoPlayer to mediaPlayer.
