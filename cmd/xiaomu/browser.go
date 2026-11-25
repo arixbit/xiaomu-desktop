@@ -20,8 +20,11 @@ import (
 type browser struct {
 	configURL, assets, query string
 	importOpen               bool
+	importWasOpen            bool
 	importAdvanced           bool
+	importURL, importAssets  string
 	importErr                string
+	importJobGen             uint64
 
 	site       library.Entry
 	session    source.Session
@@ -39,21 +42,22 @@ type browser struct {
 type jobSlot int
 
 const (
-	jobConfig  jobSlot = iota // importing or refreshing a configuration
-	jobLive                   // importing a live list or reading its channels
-	jobSite                   // browsing one site
-	jobTitle                  // reading a title from one of its sources
-	jobPlay                   // resolving an episode into media
-	jobDanmaku                // searching or loading this episode's comments
-	jobSubtitle               // searching or downloading online external subtitles
-	jobEPG                    // loading IPTV EPG program guides
-	jobPan                    // verifying cloud-drive credentials or cleaning temp files
+	jobConfig   jobSlot = iota // importing or refreshing a configuration
+	jobLive                    // importing a live list or reading its channels
+	jobSite                    // browsing one site
+	jobTitle                   // reading a title from one of its sources
+	jobPlay                    // resolving an episode into media
+	jobDanmaku                 // searching or loading this episode's comments
+	jobSubtitle                // searching or downloading online external subtitles
+	jobEPG                     // loading IPTV EPG program guides
+	jobPan                     // verifying cloud-drive credentials or cleaning temp files
 	jobSlots
 )
 
 type job struct {
 	cancel context.CancelFunc
 	gen    uint64
+	label  string
 }
 
 // A job returns an update to apply on the UI thread and optional cleanup for
@@ -83,13 +87,47 @@ func (a *app) busy() bool {
 // cancelJob abandons the slot's job; its result is discarded when it returns.
 func (a *app) cancelJob(slot jobSlot) {
 	a.jobsMu.Lock()
-	defer a.jobsMu.Unlock()
 	j := &a.jobs[slot]
+	label := j.label
 	if j.cancel != nil {
 		j.cancel()
 		j.cancel = nil
 	}
+	j.label = ""
 	j.gen++
+	a.jobsMu.Unlock()
+	if label != "" && a.status == label+"…" {
+		a.status = ""
+	}
+}
+
+func (a *app) jobGen(slot jobSlot) uint64 {
+	a.jobsMu.Lock()
+	defer a.jobsMu.Unlock()
+	return a.jobs[slot].gen
+}
+
+func (a *app) cancelJobIfGen(slot jobSlot, gen uint64) {
+	if gen == 0 {
+		return
+	}
+	a.jobsMu.Lock()
+	j := &a.jobs[slot]
+	if j.gen != gen {
+		a.jobsMu.Unlock()
+		return
+	}
+	label := j.label
+	if j.cancel != nil {
+		j.cancel()
+		j.cancel = nil
+	}
+	j.label = ""
+	j.gen++
+	a.jobsMu.Unlock()
+	if label != "" && a.status == label+"…" {
+		a.status = ""
+	}
 }
 
 func (a *app) cancelJobs() {
@@ -97,7 +135,7 @@ func (a *app) cancelJobs() {
 	for slot := range a.jobs {
 		a.cancelJob(jobSlot(slot))
 	}
-	a.status = "已取消，可以重试或选择其他站点"
+	a.setNotice("已取消，可以重试或选择其他站点")
 }
 
 // run starts work in slot, replacing the job already there. fail, when not
@@ -119,9 +157,10 @@ func (a *app) run(slot jobSlot, label string, work func(context.Context) (jobRes
 	j.gen++
 	ctx, cancel := context.WithTimeout(context.Background(), jobTimeout(slot))
 	j.cancel = cancel
+	j.label = label
 	gen := j.gen
 	a.jobsMu.Unlock()
-	if label != "" {
+	if label != "" && !a.hasActiveUndo() {
 		a.status = label + "…"
 	}
 	dispatch := a.dispatch
@@ -139,8 +178,12 @@ func (a *app) run(slot jobSlot, label string, work func(context.Context) (jobRes
 			current := j.gen == gen
 			if current {
 				j.cancel = nil
+				j.label = ""
 			}
 			a.jobsMu.Unlock()
+			if current && !a.closed && label != "" && a.status == label+"…" {
+				a.status = ""
+			}
 			if !current || a.closed || err != nil {
 				if result.discard != nil {
 					result.discard()
@@ -153,9 +196,6 @@ func (a *app) run(slot jobSlot, label string, work func(context.Context) (jobRes
 					}
 				}
 				return
-			}
-			if label != "" && a.status == label+"…" {
-				a.status = ""
 			}
 			if result.apply != nil {
 				result.apply()
@@ -236,17 +276,39 @@ func (a *app) close() {
 	a.closePanLoginWindow()
 }
 
+func (a *app) openImportDialog() {
+	b := &a.browser
+	b.importURL = b.configURL
+	b.importAssets = b.assets
+	b.importErr = ""
+	b.importJobGen = 0
+	b.importOpen = true
+}
+
 func (a *app) loadConfig(raw string) {
-	a.readConfig(raw, false)
+	a.readConfigMode(raw, false, false, false, "")
+}
+
+func (a *app) loadConfigFromDialog(raw, assets string) {
+	a.readConfigMode(raw, false, false, true, assets)
+}
+
+func (a *app) refreshConfig(raw string) {
+	a.readConfigMode(raw, false, true, false, "")
 }
 
 func (a *app) readConfig(raw string, restoring bool) {
-	raw = strings.TrimSpace(raw)
+	a.readConfigMode(raw, restoring, false, false, "")
+}
+
+func (a *app) readConfigMode(raw string, restoring, refreshing, fromDialog bool, draftAssets string) {
+	raw = cleanUserURL(raw)
 	if raw == "" {
 		msg := "请先粘贴配置地址"
-		a.status = msg
 		if a.browser.importOpen {
 			a.browser.importErr = msg
+		} else {
+			a.setNotice(msg)
 		}
 		return
 	}
@@ -257,42 +319,86 @@ func (a *app) readConfig(raw string, restoring bool) {
 			return jobResult{}, err
 		}
 		return jobResult{apply: func() {
-			a.applyConfig(raw, doc, restoring)
+			if fromDialog {
+				a.browser.importJobGen = 0
+			}
+			a.applyConfigFull(raw, doc, restoring, refreshing, fromDialog, draftAssets)
 			a.finishLibraryEvent()
 		}}, nil
 	}, func(err error) {
 		a.pendingLibrary = nil
+		if fromDialog {
+			a.browser.importJobGen = 0
+		}
 		msg := jobError("加载配置", err)
-		a.status = msg
 		if a.browser.importOpen {
 			a.browser.importErr = msg
+		} else if refreshing {
+			a.setBackgroundError(msg)
+		} else {
+			a.status = msg
 		}
 	})
+	if fromDialog {
+		a.browser.importJobGen = a.jobGen(jobConfig)
+	}
 }
 
 func (a *app) applyConfig(raw string, doc *config.Config, restoring bool) {
+	a.applyConfigFull(raw, doc, restoring, false, false, "")
+}
+
+func (a *app) applyConfigMode(raw string, doc *config.Config, restoring, refreshing bool) {
+	a.applyConfigFull(raw, doc, restoring, refreshing, false, "")
+}
+
+func (a *app) applyConfigFull(raw string, doc *config.Config, restoring, refreshing, fromDialog bool, draftAssets string) {
 	b := &a.browser
-	b.importOpen = false
-	b.importErr = ""
 	if len(doc.Sites) == 0 && len(doc.Lines) == 0 {
 		if len(doc.Lives) == 0 {
-			a.status = "这个地址里没有影视站点，也没有直播频道"
+			msg := "这个地址里没有影视站点，也没有直播频道"
+			if fromDialog && b.importOpen {
+				b.importErr = msg
+			} else if refreshing {
+				a.setBackgroundError(msg)
+			} else {
+				b.importOpen = false
+				b.importErr = ""
+				a.status = msg
+			}
 			return
 		}
-		// A plain channel list is a live source; the film library stays.
+		b.importOpen = false
+		b.importErr = ""
+		// A plain channel list is a live source; the film library and its script directory stay untouched.
 		if !restoring || a.live.url == "" {
-			a.applyLiveImport(raw, doc.Lives, true)
+			a.applyLiveImport(raw, doc.Lives, !refreshing)
 		}
 		return
+	}
+	b.importOpen = false
+	b.importErr = ""
+	if fromDialog {
+		b.assets = draftAssets
 	}
 	if !restoring {
 		a.clearSiteHealth()
 		a.showFailedSites = false
 	}
-	a.applyLibraryConfig(raw, doc, nil, nil, nil)
+	a.applyLibraryConfigMode(raw, doc, nil, nil, nil, refreshing)
+	if !restoring {
+		if refreshing {
+			a.setNotice("影视配置已刷新")
+		}
+	}
 	if a.persist {
 		if err := a.saveImportedSource(raw); err != nil {
-			a.status = "保存片源地址失败：" + err.Error()
+			msg := "保存片源地址失败：" + err.Error()
+			if refreshing {
+				a.setBackgroundError(msg)
+			} else {
+				a.status = msg
+			}
 		}
 	}
 }
@@ -307,10 +413,27 @@ func (a *app) applyCachedConfig(raw string, cached cachedSourceConfig) {
 }
 
 func (a *app) applyLibraryConfig(raw string, doc *config.Config, cached map[string]*config.Config, liveChannels map[string][]iptv.Channel, liveEPG map[string]string) {
-	a.cancelJob(jobSite)
-	a.closeSite()
-	a.clearTitle()
-	a.nav = nil
+	a.applyLibraryConfigMode(raw, doc, cached, liveChannels, liveEPG, false)
+}
+
+func (a *app) applyLibraryConfigMode(raw string, doc *config.Config, cached map[string]*config.Config, liveChannels map[string][]iptv.Channel, liveEPG map[string]string, keepRoute bool) {
+	if !keepRoute {
+		a.cancelJob(jobSite)
+		a.closeSite()
+		a.clearTitle()
+		a.nav = nil
+	} else {
+		// Background refresh must not dismantle an active playback session,
+		// open title detail, or site browsing screen that the user entered
+		// while the refresh request was still in flight.
+		if a.route() != routeSite {
+			a.cancelJob(jobSite)
+			a.closeSite()
+		}
+		if a.player == nil && a.route() != routeDetail && !a.running(jobPlay) && !a.running(jobTitle) {
+			a.clearTitle()
+		}
+	}
 	a.browser.configURL = raw
 	if a.live.url == "" {
 		a.cancelJob(jobLive)
@@ -403,11 +526,9 @@ func (a *app) loadPage(category string, page int) {
 		return jobResult{apply: func() {
 			b := &a.browser
 			b.category, b.page, b.results, b.selected = category, page, result, -1
-			msg := fmt.Sprintf("第 %d 页 · %d 部影片", page, len(result.Videos))
 			if len(result.Videos) == 0 {
-				msg += "，可换分类或换站点"
+				a.setNotice(fmt.Sprintf("第 %d 页 · 0 部影片，可换分类或换站点", page))
 			}
-			a.setNotice(msg)
 		}}, nil
 	}, nil)
 }
@@ -544,40 +665,65 @@ func (a *app) welcomeView(c *ui.Context) {
 
 func (a *app) importDialog(c *ui.Context) {
 	b := &a.browser
+	if b.importOpen && !b.importWasOpen {
+		if b.importURL == "" && b.configURL != "" {
+			b.importURL = b.configURL
+		}
+		if b.importAssets == "" && b.assets != "" {
+			b.importAssets = b.assets
+		}
+		b.importWasOpen = true
+	}
 	p := paletteFor(c)
+	_, winH := c.Size()
 	ui.DialogBase(c, &b.importOpen, func(backdrop, panel ui.Element) {
 		backdrop.Background(p.dialogScrim).Transition(transDialogScrim)
-		panel.Width(520).MaxWidth(520).Padding(26).Gap(14).Radius(26).TextColor(p.text).Transition(transDialogPanel)
+		panel.Width(520).MaxWidth(520).MaxHeight(max(float32(260), winH-32)).Padding(24).Gap(12).Radius(26).TextColor(p.text).Transition(transDialogPanel)
 		applyPane(panel, p, p.dialogMat)
-		ui.Text(c, "添加片源").FontSize(24).Bold()
-		ui.Text(c, "粘贴影视配置或直播频道表地址（自动识别）。导入后即可全库搜索与观看。").TextColor(p.textMuted)
-		if ui.TextInput(c, &b.configURL).Label("配置地址").Placeholder("https://example.com/config.json").FillWidth().Submitted() {
-			if !a.running(jobConfig) {
-				a.loadConfig(b.configURL)
+		title := "添加片源"
+		hint := "粘贴影视配置或直播频道表地址（自动识别），导入后即可全库搜索与观看。"
+		if a.library.root != nil {
+			title = "更换片源"
+			hint = "粘贴新地址将替换当前片源，你的观看历史与追剧都会保留。"
+		}
+		ui.Text(c, title).FontSize(24).Bold()
+		ui.Scroll(c).FillWidth().MaxHeight(max(float32(120), winH-176)).Gap(12).Children(func() {
+			ui.Text(c, hint).TextColor(p.textMuted)
+			if ui.TextInput(c, &b.importURL).Label("配置地址").Placeholder("https://example.com/config.json").FillWidth().AutoFocus().Submitted() {
+				if !a.running(jobConfig) {
+					a.loadConfigFromDialog(b.importURL, b.importAssets)
+				}
 			}
-		}
-		ui.Collapsible(c.Key("import-advanced"), "高级选项", &b.importAdvanced, func() {
-			ui.Column(c).FillWidth().Padding(6, 0, 2, 0).Gap(6).Children(func() {
-				ui.TextInput(c, &b.assets).Label("自定义脚本目录（可选）").Placeholder("本地脚本依赖目录").FillWidth()
+			ui.Collapsible(c.Key("import-advanced"), "高级选项", &b.importAdvanced, func() {
+				ui.Column(c).FillWidth().Padding(6, 0, 2, 0).Gap(6).Children(func() {
+					ui.TextInput(c, &b.importAssets).Label("脚本依赖目录（可选）").Placeholder("仅个别脚本源需要，通常留空即可").FillWidth()
+				})
 			})
+			if b.importErr != "" {
+				ui.Text(c, b.importErr).FontSize(13).TextColor(p.warning)
+			}
 		})
-		if b.importErr != "" {
-			ui.Text(c, b.importErr).FontSize(13).TextColor(p.warning)
-		}
 		ui.Row(c).FillWidth().Gap(8).Justify(ui.End).Children(func() {
 			if glassButton(c, "取消").Clicked() {
 				b.importOpen = false
-				b.importErr = ""
 			}
-			submitLabel := "加载配置"
+			submitLabel := "导入"
 			if a.running(jobConfig) {
-				submitLabel = "加载中…"
+				submitLabel = "导入中…"
 			}
 			if primaryButton(c, submitLabel).Disabled(a.running(jobConfig)).Clicked() {
-				a.loadConfig(b.configURL)
+				a.loadConfigFromDialog(b.importURL, b.importAssets)
 			}
 		})
 	})
+	if !b.importOpen && b.importWasOpen {
+		b.importWasOpen = false
+		b.importErr = ""
+		if b.importJobGen != 0 {
+			a.cancelJobIfGen(jobConfig, b.importJobGen)
+			b.importJobGen = 0
+		}
+	}
 }
 
 // videoCard is a poster with its title over it. badge, when set, says where

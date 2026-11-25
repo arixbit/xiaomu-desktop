@@ -110,6 +110,8 @@ func (a *app) loadDiscoveryTab(force bool) {
 			list.feed = feed
 			if cacheErr != nil {
 				list.message = "榜单已更新，本地缓存保存失败；重启后可重新加载。"
+			} else if force {
+				a.setNotice("豆瓣榜单已更新")
 			}
 		})
 	}
@@ -173,8 +175,7 @@ func (a *app) homeView(c *ui.Context) {
 				ui.Text(c, "观看记录和追剧仍保存在本机。重新添加片源后即可继续播放，也可直接打开或拖入本地视频文件。").TextColor(p.textMuted)
 				ui.Row(c).Gap(10).Children(func() {
 					if primaryButton(c, "添加片源").Clicked() {
-						a.browser.importErr = ""
-						a.browser.importOpen = true
+						a.openImportDialog()
 					}
 					if glassButton(c, "打开本地视频").Clicked() {
 						a.openLocalFileDialog()
@@ -197,7 +198,11 @@ func (a *app) homeView(c *ui.Context) {
 				ui.Text(c, "豆瓣榜单 · 更新于 "+list.feed.Updated.Local().Format("01-02 15:04")).FontSize(13).TextColor(p.textMuted)
 			}
 			if list.message == "" {
-				if glassButton(c, "刷新榜单").Disabled(list.loading).Clicked() {
+				refreshLabel := "刷新榜单"
+				if list.loading {
+					refreshLabel = "刷新中…"
+				}
+				if glassButton(c, refreshLabel).Disabled(list.loading).Clicked() {
 					a.loadDiscoveryTab(true)
 				}
 			}

@@ -41,6 +41,15 @@ func (a *app) followingHistory(name string) (historyEntry, bool) {
 	return a.history.findByTitle(name)
 }
 
+func (a *app) hasAnyFollowingNew() bool {
+	for _, e := range a.favorites.entries {
+		if a.followingHasNew(e) {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *app) followingHasNew(e favoriteEntry) bool {
 	if e.EpisodeCount <= 0 || e.Checked.IsZero() {
 		return false
@@ -131,11 +140,15 @@ func (a *app) followingRefreshButton(c *ui.Context) {
 		return
 	}
 	if glassButton(c, "刷新追剧").Clicked() {
-		a.refreshFollowing()
+		a.refreshFollowingMode(true)
 	}
 }
 
 func (a *app) refreshFollowing() {
+	a.refreshFollowingMode(false)
+}
+
+func (a *app) refreshFollowingMode(manual bool) {
 	if a.closed || a.library.root == nil || a.favorites.readErr != nil || len(a.favorites.entries) == 0 {
 		return
 	}
@@ -165,6 +178,10 @@ func (a *app) refreshFollowing() {
 	}
 	work := func() {
 		defer cancel()
+		checkedNames := map[string]bool{}
+		skippedCount := 0
+		failedCount := 0
+		emptyCount := 0
 		// One title at a time bounds script runtimes and detail requests. A title
 		// saved before a site was known uses the library's four-worker search.
 		for _, e := range entries {
@@ -172,6 +189,7 @@ func (a *app) refreshFollowing() {
 				break
 			}
 			if e.ConfigURL != "" && !available[e.ConfigURL] {
+				skippedCount++
 				continue
 			}
 			itemCtx, itemCancel := context.WithTimeout(ctx, 15*time.Second)
@@ -183,9 +201,43 @@ func (a *app) refreshFollowing() {
 			if ctx.Err() != nil {
 				break
 			}
-			update(func() { a.applyFollowingRefresh(e, item, detail, err, started) })
+			entry := e
+			update(func() {
+				if a.applyFollowingRefresh(entry, item, detail, err, started) {
+					checkedNames[titleKey(entry.Name)] = true
+				} else if err != nil {
+					failedCount++
+				} else {
+					emptyCount++
+				}
+			})
 		}
-		update(func() { f.refreshCancel, f.refreshing = nil, false })
+		update(func() {
+			f.refreshCancel, f.refreshing = nil, false
+			if manual {
+				newCount := 0
+				for _, e := range a.favorites.entries {
+					if checkedNames[titleKey(e.Name)] && a.followingHasNew(e) {
+						newCount++
+					}
+				}
+				checkedCount := len(checkedNames)
+				switch {
+				case checkedCount == 0 && failedCount == 0 && emptyCount == 0 && skippedCount > 0:
+					a.setNotice("当前片源无可检查的追剧（片源已移除）")
+				case checkedCount == 0 && failedCount == 0 && emptyCount > 0:
+					a.setNotice("追剧检查完成，暂未获取到最新分集")
+				case newCount > 0 && failedCount > 0:
+					a.setNotice(fmt.Sprintf("追剧检查完成：%d 部有新集，%d 部检查失败", newCount, failedCount))
+				case newCount > 0:
+					a.setNotice(fmt.Sprintf("追剧检查完成，%d 部有新集", newCount))
+				case failedCount > 0:
+					a.setNotice(fmt.Sprintf("追剧检查完成：%d 部检查失败，可稍后重试", failedCount))
+				default:
+					a.setNotice("追剧已检查，暂无新集")
+				}
+			}
+		})
 	}
 	if dispatch == nil {
 		work()
@@ -194,7 +246,7 @@ func (a *app) refreshFollowing() {
 	}
 }
 
-func (a *app) applyFollowingRefresh(old favoriteEntry, item library.Item, detail catalog.Detail, err error, started time.Time) {
+func (a *app) applyFollowingRefresh(old favoriteEntry, item library.Item, detail catalog.Detail, err error, started time.Time) bool {
 	entries := append([]favoriteEntry(nil), a.favorites.entries...)
 	for i, e := range entries {
 		if titleKey(e.Name) != titleKey(old.Name) || !e.Added.Equal(old.Added) || e.Checked.After(started) || e.EntryKey != old.EntryKey || e.VideoID != old.VideoID {
@@ -205,11 +257,11 @@ func (a *app) applyFollowingRefresh(old favoriteEntry, item library.Item, detail
 				a.favorites.refreshErrors = map[string]string{}
 			}
 			a.favorites.refreshErrors[titleKey(e.Name)] = "更新检查失败，可稍后重试"
-			return
+			return false
 		}
 		count, latest := followingEpisodes(detail)
 		if count == 0 {
-			return // An empty or temporary response must not erase known episodes.
+			return false // An empty or temporary response must not erase known episodes.
 		}
 		e.ConfigURL, e.EntryKey, e.SiteKey, e.VideoID = configURL(item.Entry), entryKey(item.Entry), item.Entry.Site.Key, string(item.Video.ID)
 		e.EpisodeCount, e.LatestEpisode, e.Checked = count, latest, time.Now()
@@ -222,13 +274,14 @@ func (a *app) applyFollowingRefresh(old favoriteEntry, item library.Item, detail
 				a.favorites.refreshErrors = map[string]string{}
 			}
 			a.favorites.refreshErrors[titleKey(e.Name)] = "追剧更新保存失败"
-		} else {
-			// Only a saved refresh with more episodes than the last
-			// known count notifies; the first check has no baseline.
-			a.notifyFollow(old, count, latest)
+			return false
 		}
-		return
+		// Only a saved refresh with more episodes than the last
+		// known count notifies; the first check has no baseline.
+		a.notifyFollow(old, count, latest)
+		return true
 	}
+	return false
 }
 
 func followingDetail(ctx context.Context, e favoriteEntry, root *config.Config, cached map[string]*config.Config, assets string) (library.Item, source.Session, catalog.Detail, error) {

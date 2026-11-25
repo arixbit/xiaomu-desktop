@@ -110,7 +110,13 @@ func (a *app) recoveryActions(c *ui.Context) {
 			provider := f.authProvider
 			line, ep, at := f.line, f.episode, f.at
 			if primaryButton(c, "登录"+provider.Label()).Clicked() {
+				originTitle := a.title
+				originPlayGen := a.jobGen(jobPlay)
+				originPlayer := a.player
 				a.beginPanWebLogin(provider, func() {
+					if a.title != originTitle || a.jobGen(jobPlay) != originPlayGen || a.player != originPlayer {
+						return
+					}
 					a.resumeAfterPanLogin(line, ep, at)
 				})
 			}
@@ -121,6 +127,20 @@ func (a *app) recoveryActions(c *ui.Context) {
 		if a.player != nil && len(a.candidates()) > 1 && glassButton(c, "换来源").Clicked() {
 			a.panelTab, a.panelOpen, a.panelTouched = 0, true, true
 			a.playerOverlay = playerOverlayState{}
+		}
+		if a.title != nil && !a.inStack(routeSearch) && len(a.candidates()) <= 1 && a.library.root != nil {
+			searchingThis := a.library.search.running && titleKey(a.library.search.query) == titleKey(a.title.name)
+			if searchingThis {
+				glassButton(c, "查找来源中…").Disabled(true)
+			} else if titleKey(a.library.search.query) != titleKey(a.title.name) {
+				if glassButton(c, "查找其他来源").Clicked() {
+					a.startScan(&a.library.search, a.title.name, false)
+					if a.player != nil {
+						a.panelTab, a.panelOpen, a.panelTouched = 0, true, true
+						a.playerOverlay = playerOverlayState{}
+					}
+				}
+			}
 		}
 		if glassButton(c, "重试").Clicked() {
 			a.retryEpisode()

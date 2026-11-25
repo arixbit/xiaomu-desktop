@@ -153,7 +153,7 @@ func TestEpisodeRetryRefreshesExpiredCMSURL(t *testing.T) {
 	at := 25 * time.Second
 	a.playEpisodeAt("线路", detail.Sources[0].Episodes[0], at)
 	tt := ui.NewTester(a.view, 1120, 760)
-	if a.playFailure == nil || !tt.HasText("无法打开: 404 Not Found") {
+	if a.playFailure == nil || !tt.HasText("无法打开：404 Not Found") {
 		t.Fatalf("expected an expired playback address: %v", tt.Texts())
 	}
 	if err := tt.Click("重试"); err != nil {

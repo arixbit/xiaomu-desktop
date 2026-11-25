@@ -159,8 +159,8 @@ func TestBrowserFlow(t *testing.T) {
 	if a.route() != routeSources || a.browser.session != nil {
 		t.Fatal("leaving the site did not release it")
 	}
-	click("添加片源")
-	click("加载配置")
+	click("更换片源")
+	click("导入")
 	if a.browser.session != nil || a.title != nil || a.route() != routeHome {
 		t.Fatal("old site state survived config reload")
 	}

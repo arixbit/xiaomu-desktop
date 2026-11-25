@@ -50,6 +50,7 @@ func TestNativePlayerSwitchesSiteAtCurrentPosition(t *testing.T) {
 	if err := tt.Click("换源与选集"); err != nil {
 		t.Fatal(err)
 	}
+	tt.Advance(350 * time.Millisecond)
 	if err := tt.Click("选择来源"); err != nil {
 		t.Fatal(err)
 	}

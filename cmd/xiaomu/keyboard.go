@@ -30,6 +30,10 @@ func (a *app) handleKeyboard(c *ui.Context) {
 		}
 		return
 	}
+	if a.armed.key != "" && c.Shortcut(0, ui.KeyEscape) && !c.ShortcutRepeated() {
+		a.clearArmed()
+		return
+	}
 	if a.fullScreen && c.Shortcut(0, ui.KeyEscape) && !c.ShortcutRepeated() {
 		a.setFullScreen(false)
 		if a.window != nil {
@@ -86,7 +90,7 @@ func (a *app) handleKeyboard(c *ui.Context) {
 		a.togglePlayerFullScreen()
 		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 	}
-	if c.Shortcut(0, ui.KeyP) && !c.ShortcutRepeated() {
+	if !a.fullScreen && c.Shortcut(0, ui.KeyP) && !c.ShortcutRepeated() {
 		a.toggleAlwaysOnTop()
 		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 	}
@@ -108,15 +112,15 @@ func (a *app) handleKeyboard(c *ui.Context) {
 			a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 		}
 	}
-	if !a.playingLive && c.Shortcut(0, ui.KeyL) && !c.ShortcutRepeated() {
+	if !a.isLiveStream() && c.Shortcut(0, ui.KeyL) && !c.ShortcutRepeated() {
 		a.toggleLoop(p)
 		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 	}
-	if !a.playingLive && c.Shortcut(0, ui.KeyBracketLeft) {
+	if !a.isLiveStream() && c.Shortcut(0, ui.KeyBracketLeft) {
 		a.adjustSubtitleDelay(p, -500*time.Millisecond)
 		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 	}
-	if !a.playingLive && c.Shortcut(0, ui.KeyBracketRight) {
+	if !a.isLiveStream() && c.Shortcut(0, ui.KeyBracketRight) {
 		a.adjustSubtitleDelay(p, 500*time.Millisecond)
 		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 	}

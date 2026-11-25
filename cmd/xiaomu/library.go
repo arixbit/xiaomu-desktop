@@ -115,12 +115,12 @@ func (a *app) resetLibraryWithCache(doc *config.Config, cached map[string]*confi
 // searchLibrary shows the results for the toolbar's text above the tab.
 func (a *app) searchLibrary() {
 	if a.library.root == nil {
-		a.status = "请先添加片源，再搜索片名"
+		a.setNotice("请先添加片源，再搜索片名")
 		return
 	}
 	query := strings.TrimSpace(a.browser.query)
 	if query == "" {
-		a.status = "请输入片名"
+		a.setNotice("请输入片名")
 		return
 	}
 	if err := a.searchHistory.record(query); err != nil {
@@ -577,14 +577,8 @@ func (s *libraryScan) summary() string {
 		state = "已停止，保留已找到的影片"
 	}
 	text := fmt.Sprintf("%s · %d 部影片", state, len(s.groups))
-	if s.progress.Failed > 0 {
-		text += fmt.Sprintf(" · %d 个请求未成功", s.progress.Failed)
-	}
-	if s.progress.Cooling > 0 {
-		text += fmt.Sprintf(" · %d 个站点稍后重试", s.progress.Cooling)
-	}
-	if s.progress.Skipped > 0 {
-		text += fmt.Sprintf(" · 已跳过 %d 个站点", s.progress.Skipped)
+	if unavailable := s.progress.Failed + s.progress.Cooling + s.progress.SkippedHealth; unavailable > 0 {
+		text += fmt.Sprintf(" · %d 个站点暂不可用", unavailable)
 	}
 	return text
 }
@@ -667,7 +661,9 @@ func (a *app) feedView(c *ui.Context) {
 		if s.running {
 			emptyState(c, "正在汇集影片", "可直接输入片名搜索，影片返回后会立即显示。")
 		} else {
-			emptyState(c, "暂时没有影片", "试试搜索片名，或重新加载。")
+			emptyStateWithAction(c, "暂时没有影片", "试试直接搜索片名，或重新加载片库。", "重新加载", func() {
+				a.reloadScan(s)
+			})
 		}
 		return
 	}
@@ -682,8 +678,12 @@ func (a *app) searchView(c *ui.Context) {
 		if len(s.groups) == 0 {
 			if s.running {
 				emptyState(c, "正在搜索", "找到的影片会立即显示。")
+			} else if s.progress.Failed+s.progress.Cooling+s.progress.SkippedHealth > 0 {
+				emptyStateWithAction(c, "没有找到匹配的影片", "部分站点暂未响应，可重新加载全部站点，或换个关键词再搜。", "重试全部站点", func() {
+					a.reloadScan(s)
+				})
 			} else {
-				emptyState(c, "没有找到匹配的影片", "换个关键词再搜；未响应的站点可以重新加载。")
+				emptyState(c, "没有找到匹配的影片", "试试缩短或更换关键词再搜索。")
 			}
 			return
 		}

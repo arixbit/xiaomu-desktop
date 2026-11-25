@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
@@ -125,12 +126,38 @@ func (a *app) panCredentialsCard(c *ui.Context) {
 				ui.Text(c, "播放网盘影片时，未登录会自动弹出官方授权页面，完成后仅保存在本机。").
 					FontSize(13).TextColor(p.textMuted)
 			})
-			if creds.Has(pan.ProviderQuark) || creds.Has(pan.ProviderUC) || creds.Has(pan.ProviderBaidu) {
-				if glassButton(c, "清理临时文件").Disabled(a.running(jobPan)).Clicked() {
-					a.cleanupPanTempFiles()
+			var cleanProviders []string
+			for _, prov := range []pan.Provider{pan.ProviderQuark, pan.ProviderUC, pan.ProviderBaidu} {
+				if creds.Has(prov) {
+					cleanProviders = append(cleanProviders, prov.Label())
+				}
+			}
+			if len(cleanProviders) > 0 {
+				tempDir := creds.EffectiveTempDir()
+				scope := fmt.Sprintf("将清空 %s 中的「%s」目录（夸克/UC 会同时清理回收站），不影响其他目录",
+					strings.Join(cleanProviders, "、"), tempDir)
+				if a.running(jobPan) {
+					glassButton(c, "清理中…").Tooltip(scope).Disabled(true)
+				} else {
+					if a.armedDangerButtonWithTooltip(c, "pan-cleanup-temp", "清理临时文件", "确认清理？", scope) {
+						a.cleanupPanTempFiles()
+					}
 				}
 			}
 		})
+		if a.armed.key == "pan-cleanup-temp" && c.Now().Before(a.armed.until) {
+			var cleanProviders []string
+			for _, prov := range []pan.Provider{pan.ProviderQuark, pan.ProviderUC, pan.ProviderBaidu} {
+				if creds.Has(prov) {
+					cleanProviders = append(cleanProviders, prov.Label())
+				}
+			}
+			if len(cleanProviders) > 0 {
+				ui.Text(c, fmt.Sprintf("再次点击「确认清理？」将清空 %s 的「%s」目录（夸克/UC 含回收站），按 Esc 可取消。",
+					strings.Join(cleanProviders, "、"), creds.EffectiveTempDir())).
+					FontSize(12).TextColor(p.warning)
+			}
+		}
 		ui.Row(c).FillWidth().Wrap().Gap(10).Children(func() {
 			for _, provider := range panAccountProviders {
 				signedIn := creds.Has(provider)
@@ -258,6 +285,7 @@ func (a *app) openPanShare(ref pan.ShareRef) {
 		failed: map[string]string{},
 	}
 	a.push(routeDetail)
+	originTitle := a.title
 	session := pan.OpenShareSession(ref)
 	a.run(jobTitle, "解析网盘分享", func(ctx context.Context) (jobResult, error) {
 		detail, err := session.Detail(ctx, ref.RawURL)
@@ -265,7 +293,7 @@ func (a *app) openPanShare(ref pan.ShareRef) {
 			return jobResult{}, err
 		}
 		return jobResult{discard: session.Close, apply: func() {
-			if a.title == nil {
+			if a.title != originTitle {
 				session.Close()
 				return
 			}
@@ -279,7 +307,20 @@ func (a *app) openPanShare(ref pan.ShareRef) {
 			a.title.line, a.title.chunk = 0, 0
 		}}, nil
 	}, func(err error) {
-		if a.title != nil {
+		if provider, needAuth := pan.AuthRequiredProvider(err); needAuth {
+			if a.title == originTitle && a.title != nil {
+				a.title.failed[itemKey(item)] = err.Error()
+			}
+			a.clearStatus()
+			a.promptPanLogin(provider, err.Error(), func() {
+				if a.title != originTitle {
+					return
+				}
+				a.openPanShare(ref)
+			})
+			return
+		}
+		if a.title == originTitle && a.title != nil {
 			a.title.failed[itemKey(item)] = jobError("解析网盘分享", err)
 		}
 		a.status = jobError("解析网盘分享", err)

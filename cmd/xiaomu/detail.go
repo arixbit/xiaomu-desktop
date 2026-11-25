@@ -22,14 +22,14 @@ const episodeChunk = 50
 // titlePage is one title and the sites that have it. Its session belongs to
 // the source on show, and serves the player while an episode plays.
 type titlePage struct {
-	name, pic      string
-	score          string            // Douban score, when the opener knew one
-	seeds          []library.Item    // sources known when the page opened
-	failed         map[string]string // source → why it could not be read
-	auto           bool              // open the first source that reads
-	searchFallback bool              // a saved source may have disappeared
-	pending        library.Item      // the source being read
-	item           library.Item      // the source on show
+	name, pic        string
+	score            string            // Douban score, when the opener knew one
+	seeds            []library.Item    // sources known when the page opened
+	failed           map[string]string // source → why it could not be read
+	auto             bool              // open the first source that reads
+	searchFallback   bool              // a saved source may have disappeared
+	pending          library.Item      // the source being read
+	item             library.Item      // the source on show
 	session          source.Session
 	detail           *catalog.Detail
 	line             int  // chosen play line
@@ -331,7 +331,8 @@ func (a *app) openCandidate(item library.Item) {
 		return jobResult{discard: session.Close, apply: func() {
 			a.closeSession(t.session)
 			t.session, t.detail, t.item = session, &detail, item
-			t.line, t.chunk = a.preferredLine(t.name, item, detail), 0
+			t.line = a.preferredLine(t.name, item, detail)
+			t.chunk = a.initialEpisodeChunk(t.name, detail, t.line)
 			delete(t.failed, key)
 			// The detail read is the freshest measurement of this
 			// site's speed; a failed read records nothing.
@@ -339,11 +340,54 @@ func (a *app) openCandidate(item library.Item) {
 			a.updateFollowedTitle()
 		}}, nil
 	}, func(err error) {
+		if provider, needAuth := pan.AuthRequiredProvider(err); needAuth && !t.auto {
+			t.failed[key] = err.Error()
+			a.clearStatus()
+			originTitle := t
+			a.promptPanLogin(provider, err.Error(), func() {
+				if a.title != originTitle {
+					return
+				}
+				a.openCandidate(item)
+			})
+			return
+		}
 		// The page shows the failure beside its source and tries the next one.
 		t.failed[key] = jobError("读取", err)
 		a.status = ""
 		a.autoOpenTitle()
 	})
+}
+
+// initialEpisodeChunk picks the episode range page containing the viewer's
+// watched/next episode so long series open straight to where they left off.
+func (a *app) initialEpisodeChunk(title string, detail catalog.Detail, lineIdx int) int {
+	if lineIdx < 0 || lineIdx >= len(detail.Sources) {
+		return 0
+	}
+	episodes := detail.Sources[lineIdx].Episodes
+	if len(episodes) <= episodeChunk {
+		return 0
+	}
+	targetName := ""
+	if a.playingEpisode != "" && a.title != nil && titleKey(a.title.name) == titleKey(title) {
+		targetName = a.playingEpisode
+	} else if h, found := a.history.findByTitle(title); found {
+		if _, target, _, ok := resumePoint(detail, h); ok {
+			targetName = target.Name
+		} else {
+			targetName = h.Episode
+		}
+	}
+	if targetName == "" {
+		return 0
+	}
+	for i, ep := range episodes {
+		if ep.Name == targetName || episodeButtonLabel(ep.Name) == episodeButtonLabel(targetName) {
+			return i / episodeChunk
+		}
+	}
+	return 0
 }
 
 // showRelated replaces a title nobody has with the search that looked for it.
@@ -460,7 +504,13 @@ func (a *app) loadEpisode(line string, episode catalog.Episode, at time.Duration
 			if a.player != nil {
 				a.player.Pause()
 			}
+			originTitle := t
+			originPlayGen := a.jobGen(jobPlay)
+			originPlayer := a.player
 			a.promptPanLogin(provider, err.Error(), func() {
+				if a.title != originTitle || a.jobGen(jobPlay) != originPlayGen || a.player != originPlayer {
+					return
+				}
 				a.resumeAfterPanLogin(line, episode, at)
 			})
 			return
@@ -632,7 +682,11 @@ func (a *app) playNextLine() {
 			return
 		}
 	}
-	a.status = "没有其他线路可换，试试换来源"
+	if len(a.candidates()) > 1 {
+		a.setNotice("没有其他线路可换，试试换来源")
+	} else {
+		a.setNotice("没有其他线路可换")
+	}
 }
 
 func (a *app) detailView(c *ui.Context) {
@@ -776,7 +830,11 @@ func (a *app) sourceAccordion(c *ui.Context, candidates []library.Item) {
 			ui.Text(c, fmt.Sprintf("共 %d 个", len(candidates))).FontSize(13).TextColor(p.textMuted).ContentTransition(ctNumeric)
 		}
 		if t.currentFailed() || a.playFailure != nil {
-			ui.Text(c, "当前来源播不了，换一个即可").FontSize(13).TextColor(p.textMuted).Grow(1)
+			failHint := "当前来源播不了，换一个试试"
+			if len(candidates) <= 1 {
+				failHint = "当前来源播不了，可查找其他来源"
+			}
+			ui.Text(c, failHint).FontSize(13).TextColor(p.textMuted).Grow(1)
 		} else {
 			ui.Spacer(c)
 		}
@@ -804,7 +862,7 @@ func (a *app) sourceAccordion(c *ui.Context, candidates []library.Item) {
 	case len(candidates) == 0:
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "片库里没有找到《"+t.name+"》。").TextColor(p.textMuted).Grow(1)
-			if len(search.groups) > 0 && glassButton(c, "查看相近结果").Clicked() {
+			if len(search.groups) > 0 && primaryButton(c, "查看相近结果").Clicked() {
 				a.showRelated()
 			}
 		})
@@ -945,11 +1003,21 @@ func (a *app) episodeList(c *ui.Context) {
 			}
 		})
 	}
+	activeEpisode := ""
+	if line.Name == a.playingSource && a.playingEpisode != "" {
+		activeEpisode = a.playingEpisode
+	} else if h, found := a.history.findByTitle(t.name); found {
+		if _, target, _, ok := resumePoint(*t.detail, h); ok {
+			activeEpisode = target.Name
+		} else {
+			activeEpisode = h.Episode
+		}
+	}
 	start := t.chunk * episodeChunk
 	ui.Row(c.Key(fmt.Sprintf("episodes-%d-%d", t.line, t.chunk))).FillWidth().Wrap().Gap(8).Children(func() {
 		for j, episode := range line.Episodes[start:min(start+episodeChunk, count)] {
-			playing := line.Name == a.playingSource && episode.Name == a.playingEpisode
-			if chip(c.Key(j), episodeButtonLabel(episode.Name), playing).MinWidth(52).Clicked() {
+			active := activeEpisode != "" && (episode.Name == activeEpisode || episodeButtonLabel(episode.Name) == episodeButtonLabel(activeEpisode))
+			if chip(c.Key(j), episodeButtonLabel(episode.Name), active).MinWidth(52).Clicked() {
 				a.playEpisode(line.Name, episode)
 			}
 		}
