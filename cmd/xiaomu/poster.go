@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/egoist/mygo/netproxy"
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/netimage"
 )
@@ -26,9 +26,9 @@ const (
 )
 
 var (
-	posterClient     = &http.Client{Transport: netproxy.Transport(), Timeout: posterTimeout}
+	posterClient     = httpx.NewClient(posterTimeout)
 	posterClientOnce sync.Once
-	posterNetClient  = &http.Client{Transport: posterRoundTripper{}}
+	posterNetClient  = &http.Client{Transport: posterRoundTripper{}, Timeout: posterTimeout}
 )
 
 func initPosterNetImage() {
@@ -115,15 +115,15 @@ func fetchValidatedPosterResponse(req *http.Request) (*http.Response, error) {
 	if resp.StatusCode == http.StatusNotModified {
 		return resp, nil
 	}
-	defer resp.Body.Close()
+	defer httpx.DrainAndClose(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("海报 HTTP %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxPosterBytes+1))
+	data, exceeded, err := httpx.ReadLimit(resp.Body, resp.ContentLength, maxPosterBytes)
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > maxPosterBytes {
+	if exceeded {
 		return nil, fmt.Errorf("海报超过 %d 字节", maxPosterBytes)
 	}
 	if err := req.Context().Err(); err != nil {
@@ -168,10 +168,13 @@ func fetchPoster(ctx context.Context, raw string) (ui.ImageSource, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	defer httpx.DrainAndClose(resp.Body)
+	data, exceeded, err := httpx.ReadLimit(resp.Body, resp.ContentLength, maxPosterBytes)
 	if err != nil {
 		return nil, err
+	}
+	if exceeded {
+		return nil, fmt.Errorf("海报超过 %d 字节", maxPosterBytes)
 	}
 	if img, err := ui.DecodeBitmapScaled(data, posterMaxSide); err == nil {
 		return img, nil

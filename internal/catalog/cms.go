@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -15,8 +14,8 @@ import (
 	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 	"github.com/arixbit/xiaomu-desktop/internal/urljoin"
-	"github.com/egoist/mygo/netproxy"
 	"golang.org/x/net/html/charset"
 )
 
@@ -40,9 +39,7 @@ func OpenCMS(site config.Site) (*Session, error) {
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return nil, fmt.Errorf("CMS 站点地址无效：%s", site.API)
 	}
-	c := &cmsSession{api: site.API, kind: site.Kind, client: &http.Client{
-		Transport: netproxy.Transport(), Timeout: 25 * time.Second,
-	}}
+	c := &cmsSession{api: site.API, kind: site.Kind, client: httpx.NewClient(25 * time.Second)}
 	return &Session{cms: c, kind: site.Kind}, nil
 }
 
@@ -227,12 +224,12 @@ func (c *cmsSession) request(ctx context.Context, action string, params map[stri
 	if err != nil {
 		return nil, requestURL, fmt.Errorf("CMS 请求 %s: %w", requestURL, err)
 	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, cmsMaxBytes+1))
+	defer httpx.DrainAndClose(resp.Body)
+	body, exceeded, err := httpx.ReadLimit(resp.Body, resp.ContentLength, cmsMaxBytes)
 	if err != nil {
 		return nil, requestURL, fmt.Errorf("CMS 读取 %s: %w", requestURL, err)
 	}
-	if len(body) > cmsMaxBytes {
+	if exceeded {
 		return nil, requestURL, fmt.Errorf("CMS 响应 %s 超过 %d 字节", requestURL, cmsMaxBytes)
 	}
 	contentType := resp.Header.Get("Content-Type")

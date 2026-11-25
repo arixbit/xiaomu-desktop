@@ -21,6 +21,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 )
 
 const (
@@ -990,18 +992,18 @@ func (p *directProvider) get(ctx context.Context, rawURL string, extraHeaders ma
 		}
 		return nil, fmt.Errorf("弹幕请求失败：%w", err)
 	}
-	defer response.Body.Close()
+	defer httpx.DrainAndClose(response.Body)
 	if response.StatusCode == http.StatusNotFound {
 		return nil, errHTTPNotFound
 	}
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("弹幕服务返回 HTTP %d", response.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
+	data, exceeded, err := httpx.ReadLimit(response.Body, response.ContentLength, maxResponseBytes)
 	if err != nil {
 		return nil, fmt.Errorf("读取弹幕响应失败：%w", err)
 	}
-	if len(data) > maxResponseBytes {
+	if exceeded {
 		return nil, fmt.Errorf("弹幕响应超过 16 MB")
 	}
 	return data, nil

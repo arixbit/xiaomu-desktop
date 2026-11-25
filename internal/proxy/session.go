@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 )
 
 // SessionConfig configures an isolated loopback stream endpoint (/s/<id>/<filename>)
@@ -158,7 +160,7 @@ func (p *Proxy) serveSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if !isSub && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
 		if newURL, newHdr, refreshed := sess.tryRefresh(r.Context()); refreshed {
-			_ = resp.Body.Close()
+			httpx.DrainAndClose(resp.Body)
 			resp, err = p.doSessionRequest(r.Context(), r.Method, newURL, newHdr, r.Header.Get("Range"), isHLSPath)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
@@ -170,7 +172,7 @@ func (p *Proxy) serveSession(w http.ResponseWriter, r *http.Request) {
 			headers = newHdr
 		}
 	}
-	defer resp.Body.Close()
+	defer httpx.DrainAndClose(resp.Body)
 
 	base := u
 	if resp.Request != nil && resp.Request.URL != nil {
@@ -205,7 +207,7 @@ func (p *Proxy) serveSession(w http.ResponseWriter, r *http.Request) {
 			p.writeSessionPlaylist(w, resp, base.String(), headers, wrapSub, r.Context())
 			return
 		}
-		restBody, err := io.ReadAll(io.LimitReader(resp.Body, playlistLimit))
+		restBody, _, err := httpx.ReadLimit(resp.Body, resp.ContentLength, playlistLimit)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -218,6 +220,11 @@ func (p *Proxy) serveSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 	if n > 0 {
 		_, _ = w.Write(buf[:n])
+	}
+	rc := http.NewResponseController(w)
+	if resp.Header.Get("Content-Length") == "" && rc.Flush() == nil {
+		copyFlushing(w, resp.Body, rc)
+		return
 	}
 	_, _ = io.Copy(w, resp.Body)
 }
@@ -241,13 +248,13 @@ func (p *Proxy) writeSessionPlaylist(w http.ResponseWriter, resp *http.Response,
 		req := resp.Request.Clone(reqCtx)
 		req.Header.Del("Range")
 		applyMap(req, headers)
-		_ = resp.Body.Close()
+		httpx.DrainAndClose(resp.Body)
 		full, err := p.do(req)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		defer full.Body.Close()
+		defer httpx.DrainAndClose(full.Body)
 		if full.StatusCode != http.StatusOK {
 			http.Error(w, "upstream did not return a complete playlist", http.StatusBadGateway)
 			return
@@ -255,7 +262,7 @@ func (p *Proxy) writeSessionPlaylist(w http.ResponseWriter, resp *http.Response,
 		resp = full
 		playlistURL = full.Request.URL.String()
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, playlistLimit))
+	body, _, err := httpx.ReadLimit(resp.Body, resp.ContentLength, playlistLimit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return

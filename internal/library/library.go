@@ -69,6 +69,7 @@ type Options struct {
 	Timeout       time.Duration
 	SearchCache   *SearchCache
 	Skip          map[string]bool
+	SkipDocs      map[string]bool
 	Interactive   bool
 	Latency       map[string]time.Duration
 	PreferredKeys map[string]bool
@@ -160,6 +161,9 @@ func Scan(ctx context.Context, root *config.Config, options Options, emit func(E
 				continue
 			}
 			seenDocs[child.URL] = true
+			if options.Cached[child.URL] == nil && options.SkipDocs[child.URL] {
+				continue
+			}
 			queue = append(queue, task{url: child.URL, line: child.Name, depth: depth + 1})
 		}
 		for _, site := range doc.Sites {

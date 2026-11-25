@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 )
 
 const (
@@ -47,7 +48,7 @@ func (p *Proxy) servePrefetch(w http.ResponseWriter, r *http.Request, sess *prox
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		if newURL, newHdr, refreshed := sess.tryRefresh(r.Context()); refreshed {
-			_ = resp.Body.Close()
+			httpx.DrainAndClose(resp.Body)
 			target, headers = newURL, newHdr
 			resp, err = p.doSessionRequest(r.Context(), http.MethodGet, target, headers, firstRange, false)
 			if err != nil {
@@ -56,19 +57,19 @@ func (p *Proxy) servePrefetch(w http.ResponseWriter, r *http.Request, sess *prox
 		}
 	}
 	if resp.StatusCode != http.StatusPartialContent {
-		_ = resp.Body.Close()
+		httpx.DrainAndClose(resp.Body)
 		return false
 	}
 	_, actualEnd, total, validCR := parseContentRange(resp.Header.Get("Content-Range"))
 	if !validCR || total <= 0 {
-		_ = resp.Body.Close()
+		httpx.DrainAndClose(resp.Body)
 		return false
 	}
 
 	// Read first chunk completely before committing headers so errors can still fall back cleanly.
-	firstData, err := io.ReadAll(io.LimitReader(resp.Body, prefetchChunkSize+1))
+	firstData, _, err := httpx.ReadLimit(resp.Body, firstEnd-reqStart+1, prefetchChunkSize)
 	ct := resp.Header.Get("Content-Type")
-	_ = resp.Body.Close()
+	httpx.DrainAndClose(resp.Body)
 	if err != nil {
 		return errors.Is(err, context.Canceled)
 	}
@@ -198,19 +199,19 @@ func (p *Proxy) fetchChunk(ctx context.Context, sess *proxySession, target strin
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		if newURL, newHdr, refreshed := sess.tryRefresh(ctx); refreshed {
-			_ = resp.Body.Close()
+			httpx.DrainAndClose(resp.Body)
 			resp, err = p.doSessionRequest(ctx, http.MethodGet, newURL, newHdr, rng, false)
 			if err != nil {
 				return nil, err
 			}
 		}
 	}
-	defer resp.Body.Close()
+	defer httpx.DrainAndClose(resp.Body)
 	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("upstream chunk HTTP %d", resp.StatusCode)
 	}
 	expected := end - start + 1
-	data, err := io.ReadAll(io.LimitReader(resp.Body, expected+1))
+	data, _, err := httpx.ReadLimit(resp.Body, expected, expected)
 	if err != nil {
 		return nil, err
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/arixbit/xiaomu-desktop/internal/alist"
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/drpy"
 	"github.com/arixbit/xiaomu-desktop/internal/fongmi"
 	"github.com/arixbit/xiaomu-desktop/internal/pan"
 	"github.com/arixbit/xiaomu-desktop/internal/xbpq"
@@ -76,19 +77,28 @@ func Open(ctx context.Context, site config.Site, assets string) (Session, []cata
 		return pan.OpenWebSite(ctx, site)
 	}
 	if site.Kind == config.KindFongMi && scriptURL(site.API) {
-		res, err := config.HTTPFetcher(nil)(ctx, site.API)
-		if err != nil {
-			return nil, nil, fmt.Errorf("识别站点脚本 %s 失败：%w", site.API, err)
-		}
-		if res.Status < 200 || res.Status >= 300 {
-			return nil, nil, fmt.Errorf("识别站点脚本 %s 失败：HTTP %d (Content-Type %q)", site.API, res.Status, res.ContentType)
-		}
-		source := string(res.Body)
-		if strings.HasPrefix(strings.TrimLeft(source, "\ufeff \t\r\n"), "<") || strings.Contains(strings.ToLower(res.ContentType), "html") {
-			return nil, nil, fmt.Errorf("站点脚本 %s 返回 HTML，不是 JavaScript：HTTP %d (Content-Type %q)", site.API, res.Status, res.ContentType)
-		}
-		if strings.Contains(strings.ToLower(res.ContentType), "json") {
-			return nil, nil, fmt.Errorf("站点脚本 %s 返回 JSON，不是 JavaScript：HTTP %d (Content-Type %q)", site.API, res.Status, res.ContentType)
+		var source string
+		if strings.HasPrefix(site.API, "http://") || strings.HasPrefix(site.API, "https://") {
+			var err error
+			source, err = drpy.FetchCachedModule(ctx, site.API)
+			if err != nil {
+				return nil, nil, fmt.Errorf("识别站点脚本 %s 失败：%w", site.API, err)
+			}
+		} else {
+			res, err := config.HTTPFetcher(nil)(ctx, site.API)
+			if err != nil {
+				return nil, nil, fmt.Errorf("识别站点脚本 %s 失败：%w", site.API, err)
+			}
+			if res.Status < 200 || res.Status >= 300 {
+				return nil, nil, fmt.Errorf("识别站点脚本 %s 失败：HTTP %d (Content-Type %q)", site.API, res.Status, res.ContentType)
+			}
+			source = string(res.Body)
+			if strings.HasPrefix(strings.TrimLeft(source, "\ufeff \t\r\n"), "<") || strings.Contains(strings.ToLower(res.ContentType), "html") {
+				return nil, nil, fmt.Errorf("站点脚本 %s 返回 HTML，不是 JavaScript：HTTP %d (Content-Type %q)", site.API, res.Status, res.ContentType)
+			}
+			if strings.Contains(strings.ToLower(res.ContentType), "json") {
+				return nil, nil, fmt.Errorf("站点脚本 %s 返回 JSON，不是 JavaScript：HTTP %d (Content-Type %q)", site.API, res.Status, res.ContentType)
+			}
 		}
 		kind := config.Classify(site.Type, site.API, site.Ext, source)
 		if kind == config.KindDRPY2 || drpyObjectExport(source) {

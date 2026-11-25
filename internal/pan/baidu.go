@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
-	"github.com/egoist/mygo/netproxy"
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 )
 
 const (
@@ -84,7 +84,7 @@ func NewBaiduClient(opt BaiduClientOptions) *baiduClient {
 	}
 	hc := opt.HTTPClient
 	if hc == nil {
-		hc = &http.Client{Transport: netproxy.Transport(), Timeout: 20 * time.Second}
+		hc = httpx.NewClient(20 * time.Second)
 	}
 	credsFn := DefaultCredentials
 	if opt.Credentials != nil {
@@ -172,8 +172,8 @@ func (c *baiduClient) doReq(ctx context.Context, method, fullURL string, form ur
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	defer httpx.DrainAndClose(resp.Body)
+	raw, _, err := httpx.ReadLimit(resp.Body, resp.ContentLength, 8<<20)
 	if err != nil {
 		return nil, resp.Cookies(), resp.StatusCode, err
 	}

@@ -21,8 +21,8 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 	"github.com/arixbit/xiaomu-desktop/internal/urljoin"
-	"github.com/egoist/mygo/netproxy"
 )
 
 const UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
@@ -70,7 +70,7 @@ func (r Resolver) Resolve(ctx context.Context, play catalog.Playback) (result ca
 	client := r.Client
 	if client == nil {
 		jar, _ := cookiejar.New(nil)
-		client = &http.Client{Transport: netproxy.Transport(), Jar: jar, Timeout: 12 * time.Second}
+		client = httpx.NewClientWithJar(12*time.Second, jar)
 	}
 	play.Headers = maps.Clone(play.Headers)
 	if play.Headers == nil {
@@ -131,7 +131,7 @@ func inspect(ctx context.Context, client *http.Client, play catalog.Playback, se
 	if err != nil {
 		return catalog.Playback{}, err
 	}
-	defer resp.Body.Close()
+	defer httpx.DrainAndClose(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return catalog.Playback{}, fmt.Errorf("播放站点返回 HTTP %d", resp.StatusCode)
 	}
@@ -156,11 +156,15 @@ func inspect(ctx context.Context, client *http.Client, play catalog.Playback, se
 		}
 		return play, nil
 	}
-	rest, err := io.ReadAll(io.LimitReader(resp.Body, pageLimit+1))
+	remCL := int64(-1)
+	if resp.ContentLength >= int64(n) {
+		remCL = resp.ContentLength - int64(n)
+	}
+	rest, exceeded, err := httpx.ReadLimit(resp.Body, remCL, pageLimit)
 	if err != nil {
 		return catalog.Playback{}, err
 	}
-	if len(rest) > pageLimit {
+	if exceeded {
 		return catalog.Playback{}, fmt.Errorf("播放页面超过大小限制")
 	}
 	body := string(prefix) + string(rest)

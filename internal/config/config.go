@@ -11,18 +11,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/fileurl"
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 	"github.com/arixbit/xiaomu-desktop/internal/iptv"
 	"github.com/arixbit/xiaomu-desktop/internal/urljoin"
-	"github.com/egoist/mygo/netproxy"
 )
 
 const maxBytes = 32 << 20
@@ -124,7 +124,7 @@ func HTTPFetcher(client *http.Client) Fetcher {
 
 func httpFetcher(client *http.Client, headers map[string]string) Fetcher {
 	if client == nil {
-		client = &http.Client{Transport: netproxy.Transport(), Timeout: 30 * time.Second}
+		client = httpx.NewClient(30 * time.Second)
 	}
 	return func(ctx context.Context, raw string) (Response, error) {
 		if strings.HasPrefix(raw, "file://") {
@@ -150,8 +150,8 @@ func httpFetcher(client *http.Client, headers map[string]string) Fetcher {
 		if err != nil {
 			return Response{}, err
 		}
-		defer resp.Body.Close()
-		body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
+		defer httpx.DrainAndClose(resp.Body)
+		body, _, err := httpx.ReadLimit(resp.Body, resp.ContentLength, maxBytes)
 		if err != nil {
 			return Response{}, err
 		}
@@ -167,9 +167,6 @@ func httpFetcher(client *http.Client, headers map[string]string) Fetcher {
 // returns the resolved config. line is the depot entry name; empty uses
 // the first line.
 func Load(ctx context.Context, pageURL, line string, fetch Fetcher) (*Config, error) {
-	if fetch == nil {
-		fetch = HTTPFetcher(nil)
-	}
 	return load(ctx, pageURL, line, fetch, 0)
 }
 
@@ -196,15 +193,94 @@ func load(ctx context.Context, pageURL, line string, fetch Fetcher, depth int) (
 	return cfg, nil
 }
 
+type readFlight struct {
+	done    chan struct{}
+	cancel  context.CancelFunc
+	waiters int
+	cfg     *Config
+	err     error
+}
+
+type readFlightGroup struct {
+	mu       sync.Mutex
+	inFlight map[string]*readFlight
+}
+
+var sharedReadFlights = &readFlightGroup{}
+
+func (g *readFlightGroup) do(ctx context.Context, key string, fn func(context.Context) (*Config, error)) (*Config, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	g.mu.Lock()
+	flight, ok := g.inFlight[key]
+	if ok {
+		flight.waiters++
+		g.mu.Unlock()
+	} else {
+		fctx, fcancel := context.WithTimeout(context.Background(), 30*time.Second)
+		flight = &readFlight{
+			done:    make(chan struct{}),
+			cancel:  fcancel,
+			waiters: 1,
+		}
+		if g.inFlight == nil {
+			g.inFlight = map[string]*readFlight{}
+		}
+		g.inFlight[key] = flight
+		g.mu.Unlock()
+		go func() {
+			cfg, err := fn(fctx)
+			fcancel()
+			g.mu.Lock()
+			if g.inFlight[key] == flight {
+				delete(g.inFlight, key)
+			}
+			flight.cfg, flight.err = cfg, err
+			close(flight.done)
+			g.mu.Unlock()
+		}()
+	}
+
+	select {
+	case <-flight.done:
+		if flight.cfg != nil {
+			cp := *flight.cfg
+			return &cp, flight.err
+		}
+		return nil, flight.err
+	case <-ctx.Done():
+		g.mu.Lock()
+		flight.waiters--
+		if flight.waiters == 0 {
+			flight.cancel()
+			if g.inFlight[key] == flight {
+				delete(g.inFlight, key)
+			}
+		}
+		g.mu.Unlock()
+		return nil, ctx.Err()
+	}
+}
+
 // Read loads one document without choosing a depot line. Lines and Sites have
 // resolved URLs; callers can present the choices before fetching another file.
 func Read(ctx context.Context, pageURL string, fetch Fetcher) (*Config, error) {
 	if extOf(pageURL) == ".jar" {
 		return nil, fmt.Errorf("config: refusing to download jar %s", pageURL)
 	}
+	if fetch == nil && (strings.HasPrefix(pageURL, "http://") || strings.HasPrefix(pageURL, "https://")) {
+		return sharedReadFlights.do(ctx, pageURL, func(fctx context.Context) (*Config, error) {
+			return readDoc(fctx, pageURL, HTTPFetcher(nil))
+		})
+	}
 	if fetch == nil {
 		fetch = HTTPFetcher(nil)
 	}
+	return readDoc(ctx, pageURL, fetch)
+}
+
+func readDoc(ctx context.Context, pageURL string, fetch Fetcher) (*Config, error) {
 	res, err := fetchFallback(ctx, pageURL, fetch)
 	if err != nil {
 		return nil, err
@@ -383,7 +459,7 @@ func resolveMaybe(base, ref string) string {
 
 func fetchFallback(ctx context.Context, raw string, fetch Fetcher) (Response, error) {
 	res, err := fetch(ctx, raw)
-	if failed(res, err) && strings.HasPrefix(strings.ToLower(raw), "http://") {
+	if shouldHTTPSFallback(ctx, res, err) && strings.HasPrefix(strings.ToLower(raw), "http://") {
 		alt := "https://" + raw[len("http://"):]
 		res2, err2 := fetch(ctx, alt)
 		if !failed(res2, err2) {
@@ -397,6 +473,20 @@ func fetchFallback(ctx context.Context, raw string, fetch Fetcher) (Response, er
 		return Response{}, fmt.Errorf("config: get %s: HTTP %d%s", raw, res.Status, contentTypeDetail(res.ContentType))
 	}
 	return res, nil
+}
+
+// shouldHTTPSFallback limits http:// -> https:// retries to transport errors
+// (such as connection refused/reset on port 80) or explicit HTTPS-upgrade HTTP
+// statuses (400/426). Definite server responses like 404/403/502 or canceled
+// contexts must not trigger a second slow round trip.
+func shouldHTTPSFallback(ctx context.Context, res Response, err error) bool {
+	if ctx != nil && ctx.Err() != nil {
+		return false
+	}
+	if err != nil {
+		return true
+	}
+	return res.Status == http.StatusBadRequest || res.Status == http.StatusUpgradeRequired
 }
 
 func contentTypeDetail(contentType string) string {

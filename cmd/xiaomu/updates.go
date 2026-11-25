@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/netproxy"
 	"github.com/egoist/mygo/plugins/updater"
 	updatenative "github.com/egoist/mygo/plugins/updater/native"
 	"github.com/egoist/mygo/ui"
@@ -35,13 +35,10 @@ func newDarwinArchUpdateSource(arch string) *darwinArchUpdateSource {
 	if arch != "arm64" && arch != "amd64" {
 		return nil
 	}
-	base := netproxy.Transport()
-	tr := base.Clone()
-	tr.ResponseHeaderTimeout = 30 * time.Second
 	return &darwinArchUpdateSource{
 		baseURL: updateReleaseDownloadBase,
 		arch:    arch,
-		client:  &http.Client{Transport: tr},
+		client:  httpx.NewStreamClient(30*time.Second, false),
 		delays:  []time.Duration{time.Second, 2 * time.Second},
 	}
 }
@@ -77,7 +74,7 @@ func (s *darwinArchUpdateSource) get(ctx context.Context, rawURL string) (io.Rea
 	}
 	client := s.client
 	if client == nil {
-		client = http.DefaultClient
+		client = httpx.SharedStreamClient()
 	}
 	for try := 0; ; try++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -99,7 +96,7 @@ func (s *darwinArchUpdateSource) get(ctx context.Context, rawURL string) (io.Rea
 			retryable = ctx.Err() == nil
 		} else {
 			status = resp.StatusCode
-			resp.Body.Close()
+			httpx.DrainAndClose(resp.Body)
 			attemptErr = fmt.Errorf("GET %s: %s", rawURL, resp.Status)
 			retryable = status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
 		}

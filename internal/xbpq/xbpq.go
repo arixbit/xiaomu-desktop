@@ -20,9 +20,9 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 	"github.com/arixbit/xiaomu-desktop/internal/resolve"
 	"github.com/arixbit/xiaomu-desktop/internal/urljoin"
-	"github.com/egoist/mygo/netproxy"
 	"golang.org/x/net/html/charset"
 )
 
@@ -50,7 +50,7 @@ func Open(ctx context.Context, site config.Site) (*Session, []catalog.Category, 
 		raw = string(body)
 	}
 	jar, _ := cookiejar.New(nil)
-	s := &Session{headers: map[string]string{"User-Agent": resolve.UserAgent}, client: &http.Client{Transport: netproxy.Transport(), Jar: jar, Timeout: 18 * time.Second}}
+	s := &Session{headers: map[string]string{"User-Agent": resolve.UserAgent}, client: httpx.NewClientWithJar(18*time.Second, jar)}
 	if err := json.Unmarshal(config.Strip([]byte(raw)), &s.rule); err != nil {
 		return nil, nil, fmt.Errorf("读取 XBPQ 规则：%w", err)
 	}
@@ -146,7 +146,7 @@ func (s *Session) fetch(ctx context.Context, raw string) (string, string, error)
 	if err != nil {
 		return "", "", err
 	}
-	defer resp.Body.Close()
+	defer httpx.DrainAndClose(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", "", fmt.Errorf("站点返回 HTTP %d", resp.StatusCode)
 	}
@@ -154,7 +154,7 @@ func (s *Session) fetch(ctx context.Context, raw string) (string, string, error)
 	if err != nil {
 		return "", "", err
 	}
-	body, err := io.ReadAll(reader)
+	body, _, err := httpx.ReadLimit(reader, -1, 16<<20)
 	return string(body), resp.Request.URL.String(), err
 }
 

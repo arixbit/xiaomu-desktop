@@ -20,8 +20,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 	"github.com/arixbit/xiaomu-desktop/internal/urljoin"
-	"github.com/egoist/mygo/netproxy"
 )
 
 const playlistLimit = 8 << 20
@@ -74,14 +74,12 @@ func Start(headers map[string]string) (*Proxy, error) {
 	if err != nil {
 		return nil, err
 	}
-	transport := netproxy.Transport().Clone()
-	transport.DisableCompression = true
 	p := &Proxy{
 		base:     "http://" + ln.Addr().String(),
 		ln:       ln,
 		headers:  clone(headers),
 		sessions: map[string]*proxySession{},
-		client:   &http.Client{Transport: transport},
+		client:   httpx.NewStreamClient(0, true),
 	}
 	p.client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {
@@ -105,6 +103,24 @@ func (p *Proxy) Base() string { return p.base }
 // Wrap returns the local URL that plays target with the current headers.
 func (p *Proxy) Wrap(target string) string {
 	return p.base + "/u?url=" + url.QueryEscape(target)
+}
+
+func (p *Proxy) wrapWithSID(sid, target string) string {
+	if sid == "" {
+		return p.Wrap(target)
+	}
+	return p.base + "/u?sid=" + url.QueryEscape(sid) + "&url=" + url.QueryEscape(target)
+}
+
+// RegisterWrapSession mounts an isolated header set for /u?sid=<id>&url=...
+// so replacing an active playback stream can reuse the same Proxy and upstream
+// connection pool without mutating the current player's headers prematurely.
+func (p *Proxy) RegisterWrapSession(target string, headers map[string]string) (id, localURL string) {
+	id, _ = p.RegisterSession(SessionConfig{
+		URL:     target,
+		Headers: headers,
+	})
+	return id, p.wrapWithSID(id, target)
 }
 
 // SetHeaders replaces the headers injected on later requests.
@@ -156,12 +172,28 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "url must be http or https", http.StatusBadRequest)
 		return
 	}
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, u.String(), nil)
+	reqCtx := r.Context()
+	sid := r.URL.Query().Get("sid")
+	var sessHeaders map[string]string
+	if sid != "" {
+		sess, found := p.session(sid)
+		if !found {
+			http.NotFound(w, r)
+			return
+		}
+		_, sessHeaders = sess.snapshot()
+		reqCtx = context.WithValue(reqCtx, sessionHeadersKey{}, sessHeaders)
+	}
+	req, err := http.NewRequestWithContext(reqCtx, r.Method, u.String(), nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	p.apply(req)
+	if sid != "" {
+		applyMap(req, sessHeaders)
+	} else {
+		p.apply(req)
+	}
 	// A rewritten playlist has different byte offsets from its upstream.
 	// Fetch it whole; segment and MP4 byte ranges still pass through.
 	if rg := r.Header.Get("Range"); rg != "" && !playlist("", u.Path) {
@@ -175,7 +207,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
+	defer httpx.DrainAndClose(resp.Body)
 	base := u
 	if resp.Request != nil && resp.Request.URL != nil {
 		base = resp.Request.URL
@@ -192,8 +224,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(w, resp.Body)
 		return
 	}
+	wrap := p.Wrap
+	if sid != "" {
+		wrap = func(raw string) string { return p.wrapWithSID(sid, raw) }
+	}
 	if playlist(resp.Header.Get("Content-Type"), base.Path) {
-		p.writePlaylist(w, resp, base.String(), r.Context())
+		p.writePlaylistWith(w, resp, base.String(), reqCtx, sessHeaders, sid != "", wrap)
 		return
 	}
 	// Sniff a short prefix so a playlist without a useful content type
@@ -206,16 +242,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if n > 0 && bytes.HasPrefix(bytes.TrimSpace(buf[:n]), []byte("#EXTM3U")) {
 		if resp.StatusCode == http.StatusPartialContent {
-			p.writePlaylist(w, resp, base.String(), r.Context())
+			p.writePlaylistWith(w, resp, base.String(), reqCtx, sessHeaders, sid != "", wrap)
 			return
 		}
-		rest, err := io.ReadAll(io.LimitReader(resp.Body, playlistLimit))
+		rest, _, err := httpx.ReadLimit(resp.Body, resp.ContentLength, playlistLimit)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
 		body := append(append([]byte{}, buf[:n]...), rest...)
-		p.writeRewritten(w, base.String(), body)
+		p.writeRewrittenWith(w, base.String(), body, wrap)
 		return
 	}
 	copyMediaHeaders(w.Header(), resp.Header)
@@ -253,19 +289,22 @@ func copyFlushing(dst io.Writer, src io.Reader, rc *http.ResponseController) {
 	}
 }
 
-func (p *Proxy) writePlaylist(w http.ResponseWriter, resp *http.Response, playlistURL string, ctx context.Context) {
+func (p *Proxy) writePlaylistWith(w http.ResponseWriter, resp *http.Response, playlistURL string, ctx context.Context, sessHeaders map[string]string, hasSession bool, wrap func(string) string) {
 	if resp.StatusCode == http.StatusPartialContent {
 		// Extensionless playlist endpoints can only be identified after the
 		// response. Retry without the player's range before rewriting.
 		req := resp.Request.Clone(ctx)
 		req.Header.Del("Range")
-		_ = resp.Body.Close()
+		if hasSession {
+			applyMap(req, sessHeaders)
+		}
+		httpx.DrainAndClose(resp.Body)
 		full, err := p.do(req)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		defer full.Body.Close()
+		defer httpx.DrainAndClose(full.Body)
 		if full.StatusCode != http.StatusOK {
 			http.Error(w, "upstream did not return a complete playlist", http.StatusBadGateway)
 			return
@@ -273,23 +312,12 @@ func (p *Proxy) writePlaylist(w http.ResponseWriter, resp *http.Response, playli
 		resp = full
 		playlistURL = full.Request.URL.String()
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, playlistLimit))
+	body, _, err := httpx.ReadLimit(resp.Body, resp.ContentLength, playlistLimit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	p.writeRewritten(w, playlistURL, body)
-}
-
-func (p *Proxy) writeRewritten(w http.ResponseWriter, playlistURL string, body []byte) {
-	if !bytes.HasPrefix(bytes.TrimSpace(body), []byte("#EXTM3U")) {
-		http.Error(w, "upstream returned a page instead of an HLS playlist", http.StatusBadGateway)
-		return
-	}
-	out := rewriteM3U8(string(body), playlistURL, p.Wrap)
-	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-	w.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(w, out)
+	p.writeRewrittenWith(w, playlistURL, body, wrap)
 }
 
 func (p *Proxy) apply(req *http.Request) {

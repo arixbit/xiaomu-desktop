@@ -78,6 +78,25 @@ func TestSearchAcrossDepotPreservesOriginsAndSkipsDisabledSites(t *testing.T) {
 	if configReads.Load() != 2 {
 		t.Fatal("cached line configurations were fetched again")
 	}
+	var badHits atomic.Int32
+	badFetch := func(ctx context.Context, u string) (config.Response, error) {
+		if strings.HasSuffix(u, "/bad.json") {
+			badHits.Add(1)
+			return config.Response{Status: http.StatusNotFound, URL: u}, nil
+		}
+		return config.HTTPFetcher(nil)(ctx, u)
+	}
+	if err := Scan(context.Background(), root, Options{
+		Query:    "示例",
+		Cached:   cache,
+		SkipDocs: map[string]bool{srv.URL + "/bad.json": true},
+		Fetch:    badFetch,
+	}, func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+	if badHits.Load() != 0 {
+		t.Fatalf("cooling failed depot line was fetched %d times, want 0", badHits.Load())
+	}
 }
 
 func TestSearchStreamsBeforeSlowSiteTimesOut(t *testing.T) {

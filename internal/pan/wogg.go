@@ -14,9 +14,9 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 	"github.com/arixbit/xiaomu-desktop/internal/resolve"
 	"github.com/arixbit/xiaomu-desktop/internal/urljoin"
-	"github.com/egoist/mygo/netproxy"
 	"golang.org/x/net/html/charset"
 )
 
@@ -66,7 +66,7 @@ func OpenWebSiteContent(site config.Site) (*WebSiteSession, error) {
 	jar, _ := cookiejar.New(nil)
 	return &WebSiteSession{
 		baseURL: base,
-		client:  &http.Client{Transport: netproxy.Transport(), Jar: jar, Timeout: 15 * time.Second},
+		client:  httpx.NewClientWithJar(15*time.Second, jar),
 	}, nil
 }
 
@@ -108,7 +108,7 @@ func (s *WebSiteSession) fetchDoc(ctx context.Context, target string) (*goquery.
 	if err != nil {
 		return nil, "", err
 	}
-	defer resp.Body.Close()
+	defer httpx.DrainAndClose(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, "", fmt.Errorf("网盘站点返回 HTTP %d", resp.StatusCode)
 	}

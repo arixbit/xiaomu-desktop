@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"maps"
 	"net/http"
 	"strings"
 
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 )
 
 func (r Resolver) parse(ctx context.Context, client *http.Client, parser config.Parser, play catalog.Playback) (catalog.Playback, error) {
@@ -45,11 +45,11 @@ func (r Resolver) parse(ctx context.Context, client *http.Client, parser config.
 	if err != nil {
 		return catalog.Playback{}, err
 	}
-	defer resp.Body.Close()
+	defer httpx.DrainAndClose(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return catalog.Playback{}, fmt.Errorf("解析接口 HTTP %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, pageLimit))
+	body, _, err := httpx.ReadLimit(resp.Body, resp.ContentLength, pageLimit)
 	if err != nil {
 		return catalog.Playback{}, err
 	}

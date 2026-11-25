@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/egoist/mygo/netproxy"
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 )
 
 // Kind identifies an independent Douban discovery list.
@@ -126,7 +126,7 @@ type Client struct {
 
 // New creates a metadata client. An empty cache directory disables persistence.
 func New(cacheDir string) *Client {
-	return &Client{HTTP: &http.Client{Transport: netproxy.Transport(), Timeout: 10 * time.Second}, CacheDir: cacheDir}
+	return &Client{HTTP: httpx.NewClient(10 * time.Second), CacheDir: cacheDir}
 }
 
 // Cached returns the last valid list, including stale lists for offline display.
@@ -182,15 +182,15 @@ func (c *Client) FetchPage(ctx context.Context, kind Kind, start int) (Feed, err
 	if err != nil {
 		return Feed{}, fmt.Errorf("连接豆瓣失败：%w", err)
 	}
-	defer res.Body.Close()
+	defer httpx.DrainAndClose(res.Body)
 	if res.StatusCode != http.StatusOK {
 		return Feed{}, fmt.Errorf("豆瓣暂时不可用（HTTP %d）", res.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(res.Body, maxBytes+1))
+	body, exceeded, err := httpx.ReadLimit(res.Body, res.ContentLength, maxBytes)
 	if err != nil {
 		return Feed{}, fmt.Errorf("读取豆瓣榜单：%w", err)
 	}
-	if len(body) > maxBytes {
+	if exceeded {
 		return Feed{}, fmt.Errorf("豆瓣榜单响应过大")
 	}
 	if strings.HasPrefix(strings.TrimSpace(string(body)), "<") || strings.Contains(strings.ToLower(res.Header.Get("Content-Type")), "html") {

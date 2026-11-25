@@ -24,9 +24,9 @@ import (
 	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/fileurl"
+	"github.com/arixbit/xiaomu-desktop/internal/httpx"
 	"github.com/arixbit/xiaomu-desktop/internal/pdfh"
 	"github.com/arixbit/xiaomu-desktop/internal/urljoin"
-	"github.com/egoist/mygo/netproxy"
 	"modernc.org/quickjs"
 )
 
@@ -62,16 +62,17 @@ const scriptMemoryLimit = 64 << 20
 var scriptSlots = make(chan struct{}, 4)
 
 type Engine struct {
-	gate    chan struct{}
-	vm      *quickjs.VM
-	eng     quickjs.Value
-	loaded  bool
-	fetch   Fetcher
-	modules map[string]string
-	assets  string
-	entry   string
-	ctx     context.Context
-	store   map[string]string
+	gate           chan struct{}
+	vm             *quickjs.VM
+	eng            quickjs.Value
+	loaded         bool
+	fetch          Fetcher
+	useModuleCache bool
+	modules        map[string]string
+	assets         string
+	entry          string
+	ctx            context.Context
+	store          map[string]string
 }
 
 // Open starts a runtime and registers the host globals.
@@ -88,13 +89,14 @@ func Open(opt Options) (*Engine, error) {
 		return nil, err
 	}
 	e := &Engine{
-		vm:      vm,
-		gate:    make(chan struct{}, 1),
-		fetch:   opt.Fetch,
-		modules: modules,
-		assets:  opt.AssetsDir,
-		store:   map[string]string{},
-		ctx:     context.Background(),
+		vm:             vm,
+		gate:           make(chan struct{}, 1),
+		fetch:          opt.Fetch,
+		useModuleCache: opt.Fetch == nil,
+		modules:        modules,
+		assets:         opt.AssetsDir,
+		store:          map[string]string{},
+		ctx:            context.Background(),
 	}
 	if e.fetch == nil {
 		e.fetch = httpFetch
@@ -413,6 +415,8 @@ func (e *Engine) register() error {
 }
 
 const prelude = `
+globalThis.console = { log() {}, info() {}, warn() {}, error() {}, debug() {} };
+globalThis.print = () => {};
 globalThis.local = {
   get(a, b) {
     if (arguments.length >= 2) return __xiaomuLocalGet(String(a ?? ""), String(b ?? ""));
@@ -608,35 +612,184 @@ func (e *Engine) loadModule(_ *quickjs.VM, name string) (string, error) {
 		return asModule(name, string(b)), nil
 	}
 	if strings.HasPrefix(name, "http://") || strings.HasPrefix(name, "https://") {
-		res, err := e.fetch(e.ctx, Request{URL: name, Method: http.MethodGet})
+		src, err := e.fetchRemoteModule(name)
 		if err != nil {
-			return "", fmt.Errorf("drpy: module %s: %w", name, err)
+			return "", err
 		}
-		contentType := ""
-		for k, v := range res.Headers {
-			if strings.EqualFold(k, "Content-Type") {
-				contentType = v
-				break
-			}
-		}
-		if res.Status != 0 && (res.Status < 200 || res.Status >= 300) {
-			return "", fmt.Errorf("drpy: module %s: HTTP %d (Content-Type %q)", name, res.Status, contentType)
-		}
-		// Raw file hosts also serve JavaScript as plain text or binary data.
-		mediaType := strings.ToLower(strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0]))
-		switch mediaType {
-		case "", "text/plain", "application/octet-stream",
-			"text/javascript", "application/javascript", "application/x-javascript",
-			"text/ecmascript", "application/ecmascript":
-		default:
-			return "", fmt.Errorf("drpy: module %s: HTTP %d: expected JavaScript, got Content-Type %q", name, res.Status, contentType)
-		}
-		if strings.HasPrefix(strings.TrimLeft(res.Content, "\ufeff \t\r\n"), "<") {
-			return "", fmt.Errorf("drpy: module %s: HTTP %d: expected JavaScript, got HTML/XML (Content-Type %q)", name, res.Status, contentType)
-		}
-		return asModule(name, res.Content), nil
+		return asModule(name, src), nil
 	}
 	return "", fmt.Errorf("drpy: cannot load module %s", name)
+}
+
+const (
+	remoteModuleTTL        = 15 * time.Minute
+	remoteModuleNegTTL     = 5 * time.Minute
+	remoteModuleMaxEntries = 128
+	remoteModuleMaxBytes   = 4 << 20
+)
+
+type remoteModuleStatusError struct {
+	status int
+	msg    string
+}
+
+func (e *remoteModuleStatusError) Error() string { return e.msg }
+
+func isCacheableModuleError(err error) bool {
+	var statusErr *remoteModuleStatusError
+	return errors.As(err, &statusErr) && (statusErr.status == http.StatusNotFound || statusErr.status == http.StatusGone)
+}
+
+type cachedModuleEntry struct {
+	content string
+	err     error
+	expires time.Time
+}
+
+type moduleFlight struct {
+	done    chan struct{}
+	content string
+	err     error
+}
+
+type remoteModuleCache struct {
+	mu       sync.Mutex
+	entries  map[string]cachedModuleEntry
+	inFlight map[string]*moduleFlight
+}
+
+var sharedModuleCache = &remoteModuleCache{}
+
+func (c *remoteModuleCache) putLocked(name string, entry cachedModuleEntry) {
+	if c.entries == nil {
+		c.entries = map[string]cachedModuleEntry{}
+	}
+	if _, exists := c.entries[name]; !exists && len(c.entries) >= remoteModuleMaxEntries {
+		oldestKey := ""
+		var oldestExp time.Time
+		for k, v := range c.entries {
+			if oldestKey == "" || v.expires.Before(oldestExp) {
+				oldestKey, oldestExp = k, v.expires
+			}
+		}
+		if oldestKey != "" {
+			delete(c.entries, oldestKey)
+		}
+	}
+	c.entries[name] = entry
+}
+
+func (c *remoteModuleCache) getOrFetch(ctx context.Context, name string, fetch func(context.Context, string) (string, error)) (string, error) {
+	now := time.Now()
+	c.mu.Lock()
+	if entry, ok := c.entries[name]; ok && now.Before(entry.expires) {
+		c.mu.Unlock()
+		return entry.content, entry.err
+	}
+	if flight, ok := c.inFlight[name]; ok {
+		c.mu.Unlock()
+		select {
+		case <-flight.done:
+			if flight.err == nil || isCacheableModuleError(flight.err) {
+				return flight.content, flight.err
+			}
+			// Fall through and try once independently if the first caller hit a transient error or canceled.
+			if ctx != nil && ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+		return fetch(ctx, name)
+	}
+	flight := &moduleFlight{done: make(chan struct{})}
+	if c.inFlight == nil {
+		c.inFlight = map[string]*moduleFlight{}
+	}
+	c.inFlight[name] = flight
+	c.mu.Unlock()
+
+	content, err := fetch(ctx, name)
+
+	c.mu.Lock()
+	if c.inFlight[name] == flight {
+		delete(c.inFlight, name)
+	}
+	if err == nil && len(content) <= remoteModuleMaxBytes {
+		c.putLocked(name, cachedModuleEntry{
+			content: content,
+			expires: time.Now().Add(remoteModuleTTL),
+		})
+	} else if isCacheableModuleError(err) {
+		c.putLocked(name, cachedModuleEntry{
+			err:     err,
+			expires: time.Now().Add(remoteModuleNegTTL),
+		})
+	}
+	flight.content, flight.err = content, err
+	close(flight.done)
+	c.mu.Unlock()
+	return content, err
+}
+
+// FetchCachedModule downloads and validates a remote JavaScript module through
+// the shared in-memory module cache (including in-flight coalescing and 404/410
+// negative caching) so callers probing a script before opening a runtime reuse
+// the same cached source instead of downloading it twice.
+func FetchCachedModule(ctx context.Context, rawURL string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return sharedModuleCache.getOrFetch(ctx, rawURL, func(ctx context.Context, name string) (string, error) {
+		return fetchRemoteModuleWith(ctx, httpFetch, name)
+	})
+}
+
+func (e *Engine) fetchRemoteModule(name string) (string, error) {
+	if e.useModuleCache {
+		return sharedModuleCache.getOrFetch(e.ctx, name, e.fetchRemoteModuleUncached)
+	}
+	return e.fetchRemoteModuleUncached(e.ctx, name)
+}
+
+func (e *Engine) fetchRemoteModuleUncached(ctx context.Context, name string) (string, error) {
+	return fetchRemoteModuleWith(ctx, e.fetch, name)
+}
+
+func fetchRemoteModuleWith(ctx context.Context, fetch Fetcher, name string) (string, error) {
+	res, err := fetch(ctx, Request{URL: name, Method: http.MethodGet})
+	if err != nil {
+		return "", fmt.Errorf("drpy: module %s: %w", name, err)
+	}
+	contentType := ""
+	for k, v := range res.Headers {
+		if strings.EqualFold(k, "Content-Type") {
+			contentType = v
+			break
+		}
+	}
+	if res.Status != 0 && (res.Status < 200 || res.Status >= 300) {
+		return "", &remoteModuleStatusError{
+			status: res.Status,
+			msg:    fmt.Sprintf("drpy: module %s: HTTP %d (Content-Type %q)", name, res.Status, contentType),
+		}
+	}
+	// Raw file hosts also serve JavaScript as plain text or binary data.
+	mediaType := strings.ToLower(strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0]))
+	switch mediaType {
+	case "", "text/plain", "application/octet-stream",
+		"text/javascript", "application/javascript", "application/x-javascript",
+		"text/ecmascript", "application/ecmascript":
+	default:
+		if strings.Contains(mediaType, "html") {
+			return "", fmt.Errorf("drpy: module %s: HTTP %d: expected JavaScript, got HTML (Content-Type %q)", name, res.Status, contentType)
+		}
+		return "", fmt.Errorf("drpy: module %s: HTTP %d: expected JavaScript, got Content-Type %q", name, res.Status, contentType)
+	}
+	if strings.HasPrefix(strings.TrimLeft(res.Content, "\ufeff \t\r\n"), "<") {
+		return "", fmt.Errorf("drpy: module %s: HTTP %d: expected JavaScript, got HTML/XML (Content-Type %q)", name, res.Status, contentType)
+	}
+	return res.Content, nil
 }
 
 // asModule lets a classic script (crypto-js, jsencrypt) load as an ES module.
@@ -732,7 +885,7 @@ func readModuleOverrides(dir string) (map[string]string, error) {
 }
 
 var sharedHTTPClient = sync.OnceValue(func() *http.Client {
-	return &http.Client{Transport: netproxy.Transport(), Timeout: 20 * time.Second}
+	return httpx.NewClient(20 * time.Second)
 })
 
 func httpFetch(ctx context.Context, req Request) (Result, error) {
@@ -755,8 +908,8 @@ func httpFetch(ctx context.Context, req Request) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	defer resp.Body.Close()
-	buf, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	defer httpx.DrainAndClose(resp.Body)
+	buf, _, err := httpx.ReadLimit(resp.Body, resp.ContentLength, 16<<20)
 	if err != nil {
 		return Result{}, err
 	}
