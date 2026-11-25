@@ -274,17 +274,28 @@ func TestDiscoveryHeaderNoDanglingRefreshWhenTimestampZero(t *testing.T) {
 		if !ok {
 			t.Fatalf("width=%d missing tabs", width)
 		}
+		lastTab, ok := tt.Find("最近更新")
+		if !ok {
+			t.Fatalf("width=%d missing last tab", width)
+		}
 		btn, ok := tt.Find("刷新榜单")
 		if !ok {
 			t.Fatalf("width=%d missing refresh icon button", width)
 		}
-		sameRow := btn.Y < tabsEl.Y+tabsEl.H && tabsEl.Y < btn.Y+btn.H
-		if !sameRow {
+		if btn.W < 30 || btn.H < 30 {
+			t.Fatalf("width=%d refresh button collapsed/clipped: tabs=%+v btn=%+v", width, tabsEl, btn)
+		}
+		sameBand := btn.Y < tabsEl.Y+tabsEl.H && tabsEl.Y < btn.Y+btn.H
+		if !sameBand {
 			t.Fatalf("width=%d refresh button dangled onto a separate empty row when Updated is zero: tabs=%+v btn=%+v",
 				width, tabsEl, btn)
 		}
-		if btn.X < tabsEl.X+tabsEl.W-0.5 || btn.X+btn.W > float32(width)+1 {
-			t.Fatalf("width=%d inline refresh button overlapped tabs or overflowed: tabs=%+v btn=%+v", width, tabsEl, btn)
+		if btn.X+btn.W > float32(width)+1 {
+			t.Fatalf("width=%d inline refresh button overflowed window: tabs=%+v btn=%+v", width, tabsEl, btn)
+		}
+		sameRowAsLast := btn.Y < lastTab.Y+lastTab.H && lastTab.Y < btn.Y+btn.H
+		if sameRowAsLast && btn.X < lastTab.X+lastTab.W-0.5 {
+			t.Fatalf("width=%d inline refresh button overlapped last tab: lastTab=%+v btn=%+v", width, lastTab, btn)
 		}
 	}
 }

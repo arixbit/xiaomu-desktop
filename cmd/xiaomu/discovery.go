@@ -307,8 +307,10 @@ func (a *app) homeView(c *ui.Context) {
 	d := &a.discovery
 	list := d.current()
 	hasMeta := d.tab != "sites" && !list.feed.Updated.IsZero()
-	wrapTabs := width < 1100
-	separateMetaRow := d.tab != "sites" && ((width < 1300 && hasMeta) || (wrapTabs && hasMeta))
+	// Wrap tabs below 1180px so wider CJK fallback/scaled fonts never crowd
+	// or clip the inline refresh icon button alongside all 9 tabs.
+	wrapTabs := width < 1180
+	separateMetaRow := hasMeta && width < 1300
 	headerReserve := float32(180)
 	if separateMetaRow {
 		headerReserve = 224
@@ -334,7 +336,7 @@ func (a *app) homeView(c *ui.Context) {
 			tip = "刷新中…"
 			iconColor = p.textMuted
 		}
-		btn := glassButton(c.Key("discovery-refresh"), "").Size(34, 34).Radius(17).Padding(0).Center().
+		btn := glassButton(c.Key("discovery-refresh"), "").Size(34, 34).Shrink(0).Radius(17).Padding(0).Center().
 			Label("刷新榜单").Tooltip(tip).Disabled(list.loading)
 		btn.Children(func() {
 			ui.Icon(c, iconRefresh).Size(16, 16).TextColor(iconColor).PassThrough()
@@ -390,14 +392,15 @@ func (a *app) homeView(c *ui.Context) {
 				}
 			})
 		} else {
-			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
 				if ui.Segmented(c, &tab, "实时热门", "热门电影", "热门剧集", "热门综艺", "热门动漫", "热门短剧", "热门纪录片", "Top 250", "最近更新").Label("榜单").Changed() {
 					d.tab = homeTabs[tab].key
 					a.loadDiscoveryTab(false)
 				}
-				if !separateMetaRow {
-					ui.Spacer(c)
-					renderDiscoveryMeta(false)
+				if !separateMetaRow && d.tab != "sites" {
+					ui.Row(c).Gap(10).AlignItems(ui.Center).Shrink(0).Children(func() {
+						renderDiscoveryMeta(false)
+					})
 				}
 			})
 		}
