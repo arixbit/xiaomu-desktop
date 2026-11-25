@@ -310,13 +310,13 @@ func TestPlayerAspectRotationLoopStatsAndScreenshot(t *testing.T) {
 	if err := tt.ChooseMenuItem("画面 · 铺满裁切"); err != nil {
 		t.Fatalf("choose fill aspect failed: %v (menu=%v)", err, tt.Menu())
 	}
-	if fp.props["panscan"] != "1" || a.playerVideoFit() != ui.Cover {
-		t.Fatalf("fill aspect not applied: props=%v fit=%v", fp.props, a.playerVideoFit())
+	if fp.panscan != 1 || fp.props["video-aspect-override"] != "-1" || a.playerVideoFit() != ui.Cover {
+		t.Fatalf("fill aspect not applied: panscan=%v props=%v fit=%v", fp.panscan, fp.props, a.playerVideoFit())
 	}
 
 	tt.Key(0, ui.KeyR)
-	if fp.props["video-rotate"] != "90" {
-		t.Fatalf("video-rotate = %q, want 90", fp.props["video-rotate"])
+	if fp.videoRotate != 90 {
+		t.Fatalf("videoRotate = %d, want 90", fp.videoRotate)
 	}
 
 	// Single-episode loop suppresses auto-next.
@@ -430,18 +430,18 @@ func TestSubtitleDelayPrefsChineseAutoSelectAndOnlineMatch(t *testing.T) {
 	if fp.activeSub != 2 {
 		t.Fatalf("PreferChinese did not auto-select Chinese subtitle track: activeSub=%d", fp.activeSub)
 	}
-	if !strings.Contains(fp.props["slang"], "zh") || fp.props["sub-scale"] != "1.00" || fp.props["sub-pos"] != "100" {
-		t.Fatalf("subtitle preference props not applied: %v", fp.props)
+	if !strings.Contains(fp.props["slang"], "zh") || fp.subScale != 1.0 || fp.subPos != 100 {
+		t.Fatalf("subtitle preference props not applied: props=%v scale=%v pos=%d", fp.props, fp.subScale, fp.subPos)
 	}
 
 	// Bracket keys adjust sub-delay by ±0.5s.
 	tt.Key(0, ui.KeyBracketRight)
-	if fp.props["sub-delay"] != "0.5" {
-		t.Fatalf("] did not set sub-delay +0.5: %q", fp.props["sub-delay"])
+	if fp.subDelay != 500*time.Millisecond {
+		t.Fatalf("] did not set subDelay +0.5s: %v", fp.subDelay)
 	}
 	tt.Key(0, ui.KeyBracketLeft)
-	if fp.props["sub-delay"] != "0.0" {
-		t.Fatalf("[ did not reset sub-delay to 0.0: %q", fp.props["sub-delay"])
+	if fp.subDelay != 0 {
+		t.Fatalf("[ did not reset subDelay to 0: %v", fp.subDelay)
 	}
 
 	// Open subtitle dialog, run Shooter hash match, click candidate to download and attach.
@@ -459,7 +459,7 @@ func TestSubtitleDelayPrefsChineseAutoSelectAndOnlineMatch(t *testing.T) {
 	if len(fp.addedSubs) != 1 || !strings.HasSuffix(fp.addedSubs[0], ".srt") {
 		t.Fatalf("online subtitle not attached: added=%v msg=%q", fp.addedSubs, a.playerExtra.subOnline.message)
 	}
-	if fp.props["sub-delay"] != "0.5" {
-		t.Fatalf("shooter delay hint not applied: %q", fp.props["sub-delay"])
+	if fp.subDelay != 500*time.Millisecond {
+		t.Fatalf("shooter delay hint not applied: %v", fp.subDelay)
 	}
 }

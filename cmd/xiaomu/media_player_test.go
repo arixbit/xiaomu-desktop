@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	mpvplayer "github.com/arixbit/mygo-player"
 	"github.com/egoist/mygo/ui"
@@ -20,6 +21,11 @@ type fakeTrackPlayer struct {
 	activeSub   int64
 	hwdec       string
 	loop        bool
+	subDelay    time.Duration
+	subScale    float64
+	subPos      int
+	videoRotate int
+	panscan     float64
 	props       map[string]string
 }
 
@@ -90,6 +96,26 @@ func (f *fakeTrackPlayer) AddSubtitleFile(path string) error {
 func (f *fakeTrackPlayer) CurrentHWDec() string { return f.hwdec }
 func (f *fakeTrackPlayer) SetLoop(loop bool) error {
 	f.loop = loop
+	return nil
+}
+func (f *fakeTrackPlayer) SetSubtitleDelay(d time.Duration) error {
+	f.subDelay = d
+	return nil
+}
+func (f *fakeTrackPlayer) SetSubtitleScale(scale float64) error {
+	f.subScale = scale
+	return nil
+}
+func (f *fakeTrackPlayer) SetSubtitlePos(pos int) error {
+	f.subPos = pos
+	return nil
+}
+func (f *fakeTrackPlayer) SetVideoRotate(deg int) error {
+	f.videoRotate = deg
+	return nil
+}
+func (f *fakeTrackPlayer) SetPanscan(v float64) error {
+	f.panscan = v
 	return nil
 }
 func (f *fakeTrackPlayer) SetPropertyString(name, value string) error {
@@ -192,5 +218,39 @@ func TestFormatTrackLabels(t *testing.T) {
 	sub := formatSubtitleTrackLabel(mediaTrack{ID: 2, Lang: "ja", Codec: "subrip", External: true}, 1)
 	if sub != "日语 · SRT · 外挂" {
 		t.Fatalf("sub label = %q", sub)
+	}
+	forced := formatSubtitleTrackLabel(mediaTrack{ID: 3, Lang: "en-US", Codec: "hdmv_pgs_subtitle", Forced: true}, 2)
+	if forced != "English · 强制 · PGS" {
+		t.Fatalf("forced sub label = %q", forced)
+	}
+	extNoisy := formatSubtitleTrackLabel(mediaTrack{
+		ID:               4,
+		Title:            "zh.srt",
+		Lang:             "zh-CN",
+		Codec:            "subrip",
+		External:         true,
+		ExternalFilename: "/tmp/movie.zh.srt",
+	}, 3)
+	if extNoisy != "movie.zh.srt · 中文 · SRT · 外挂" {
+		t.Fatalf("external noisy title label = %q", extNoisy)
+	}
+	extURL := formatSubtitleTrackLabel(mediaTrack{
+		ID:               5,
+		Title:            "ep01.ass?token=secret",
+		Codec:            "ass",
+		External:         true,
+		ExternalFilename: "https://example.com/subs/ep01.ass?token=secret",
+	}, 4)
+	if extURL != "ep01.ass · ASS · 外挂" {
+		t.Fatalf("external URL title label = %q", extURL)
+	}
+	if got := displayTrackLang("ita"); got != "Italian" {
+		t.Fatalf("displayTrackLang(ita) = %q, want Italian", got)
+	}
+	if got := displayTrackLang("pt-BR"); got != "Portuguese" {
+		t.Fatalf("displayTrackLang(pt-BR) = %q, want Portuguese", got)
+	}
+	if got := displayTrackLang("mul"); got != "" {
+		t.Fatalf("displayTrackLang(mul) = %q, want empty", got)
 	}
 }

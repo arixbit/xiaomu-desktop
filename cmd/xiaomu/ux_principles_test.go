@@ -242,8 +242,8 @@ func TestTrackSwitchOSDAndSleepTimerRadioAndRotationReset(t *testing.T) {
 	}
 
 	tt.Key(0, ui.KeyR)
-	if a.playerExtra.rotation != 90 {
-		t.Fatalf("rotation = %d, want 90", a.playerExtra.rotation)
+	if a.playerExtra.rotation != 90 || fp.videoRotate != 90 {
+		t.Fatalf("rotation = %d / player %d, want 90", a.playerExtra.rotation, fp.videoRotate)
 	}
 	if err := tt.Click("更多播放控制"); err != nil {
 		t.Fatal(err)
@@ -251,8 +251,8 @@ func TestTrackSwitchOSDAndSleepTimerRadioAndRotationReset(t *testing.T) {
 	if err := tt.ChooseMenuItem("恢复正常方向"); err != nil {
 		t.Fatalf("1-click rotation reset missing: %v (menu=%v)", err, tt.Menu())
 	}
-	if a.playerExtra.rotation != 0 || fp.props["video-rotate"] != "0" {
-		t.Fatalf("rotation reset failed: rot=%d prop=%q", a.playerExtra.rotation, fp.props["video-rotate"])
+	if a.playerExtra.rotation != 0 || fp.videoRotate != 0 {
+		t.Fatalf("rotation reset failed: rot=%d player=%d", a.playerExtra.rotation, fp.videoRotate)
 	}
 }
 

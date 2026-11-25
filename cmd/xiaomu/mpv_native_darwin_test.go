@@ -101,6 +101,26 @@ func TestNativeMPVPlaysMKVWithTracksAndProxiedStream(t *testing.T) {
 		if err := mpvP.SelectSubtitleTrack(subs[0].ID); err != nil {
 			t.Fatalf("SelectSubtitleTrack failed: %v", err)
 		}
+		if err := mpvP.SetSubtitleDelay(500 * time.Millisecond); err != nil {
+			t.Fatalf("SetSubtitleDelay failed: %v", err)
+		}
+		if err := mpvP.SetSubtitleScale(1.25); err != nil {
+			t.Fatalf("SetSubtitleScale failed: %v", err)
+		}
+		if err := mpvP.SetSubtitlePos(90); err != nil {
+			t.Fatalf("SetSubtitlePos failed: %v", err)
+		}
+		if err := mpvP.SetVideoRotate(90); err != nil {
+			t.Fatalf("SetVideoRotate failed: %v", err)
+		}
+		if err := mpvP.SetPanscan(1.0); err != nil {
+			t.Fatalf("SetPanscan failed: %v", err)
+		}
+		snap := mpvP.p.Snapshot()
+		if snap.SubDelay != 500*time.Millisecond || snap.SubScale != 1.25 || snap.SubPos != 90 || snap.VideoRotate != 90 || snap.Panscan != 1.0 {
+			t.Fatalf("mygo-player v0.5.1 tuning snapshot mismatch: delay=%v scale=%v pos=%d rot=%d panscan=%v",
+				snap.SubDelay, snap.SubScale, snap.SubPos, snap.VideoRotate, snap.Panscan)
+		}
 		t.Logf("mygo-player decoded local MKV %dx%d pos=%s dur=%s frames=%d hwdec=%q audios=%d subs=%d",
 			w, h, p.Position(), p.Duration(), mpvP.p.FramesRendered(), mpvP.CurrentHWDec(), len(audios), len(subs))
 	})

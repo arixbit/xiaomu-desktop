@@ -295,19 +295,19 @@ func (a *app) setVideoAspect(p mediaPlayer, mode videoAspectMode) {
 		switch mode {
 		case aspect16x9:
 			_ = ap.SetPropertyString("video-aspect-override", "16:9")
-			_ = ap.SetPropertyString("panscan", "0")
+			_ = ap.SetPanscan(0)
 		case aspect4x3:
 			_ = ap.SetPropertyString("video-aspect-override", "4:3")
-			_ = ap.SetPropertyString("panscan", "0")
+			_ = ap.SetPanscan(0)
 		case aspect21x9:
 			_ = ap.SetPropertyString("video-aspect-override", "21:9")
-			_ = ap.SetPropertyString("panscan", "0")
+			_ = ap.SetPanscan(0)
 		case aspectFill:
 			_ = ap.SetPropertyString("video-aspect-override", "-1")
-			_ = ap.SetPropertyString("panscan", "1")
+			_ = ap.SetPanscan(1)
 		default:
 			_ = ap.SetPropertyString("video-aspect-override", "-1")
-			_ = ap.SetPropertyString("panscan", "0")
+			_ = ap.SetPanscan(0)
 		}
 	}
 	a.showPlayerOSD("画面：" + mode.label())
@@ -316,7 +316,7 @@ func (a *app) setVideoAspect(p mediaPlayer, mode videoAspectMode) {
 func (a *app) rotateVideo(p mediaPlayer) {
 	a.playerExtra.rotation = (a.playerExtra.rotation + 90) % 360
 	if ap, ok := p.(advancedMediaPlayer); ok {
-		_ = ap.SetPropertyString("video-rotate", strconv.Itoa(a.playerExtra.rotation))
+		_ = ap.SetVideoRotate(a.playerExtra.rotation)
 	}
 	if a.playerExtra.rotation == 0 {
 		a.showPlayerOSD("画面已恢复正常方向")
@@ -328,7 +328,7 @@ func (a *app) rotateVideo(p mediaPlayer) {
 func (a *app) resetVideoRotation(p mediaPlayer) {
 	a.playerExtra.rotation = 0
 	if ap, ok := p.(advancedMediaPlayer); ok {
-		_ = ap.SetPropertyString("video-rotate", "0")
+		_ = ap.SetVideoRotate(0)
 	}
 	a.showPlayerOSD("画面已恢复正常方向")
 }
@@ -869,7 +869,7 @@ func (a *app) adjustSubtitleDelay(p mediaPlayer, delta time.Duration) {
 	// Round to nearest 100ms to prevent floating point drift.
 	next = time.Duration(math.Round(next.Seconds()*10)) * 100 * time.Millisecond
 	a.playerExtra.subDelay = next
-	_ = ap.SetPropertyString("sub-delay", fmt.Sprintf("%.1f", next.Seconds()))
+	_ = ap.SetSubtitleDelay(next)
 	if next == 0 {
 		a.showPlayerOSD("字幕已同步")
 	} else {
@@ -880,7 +880,7 @@ func (a *app) adjustSubtitleDelay(p mediaPlayer, delta time.Duration) {
 func (a *app) resetSubtitleDelay(p mediaPlayer) {
 	a.playerExtra.subDelay = 0
 	if ap, ok := p.(advancedMediaPlayer); ok {
-		_ = ap.SetPropertyString("sub-delay", "0")
+		_ = ap.SetSubtitleDelay(0)
 	}
 	a.showPlayerOSD("字幕偏移已重置")
 }
@@ -892,21 +892,21 @@ func (a *app) applySubtitlePreferences(p mediaPlayer) {
 	}
 	a.ensurePreferences()
 	sp := a.preferences.Subtitle.normalized()
-	_ = ap.SetPropertyString("sub-scale", fmt.Sprintf("%.2f", sp.Scale))
-	_ = ap.SetPropertyString("sub-pos", strconv.Itoa(sp.Pos))
+	_ = ap.SetSubtitleScale(sp.Scale)
+	_ = ap.SetSubtitlePos(sp.Pos)
 	if sp.PreferChinese {
 		_ = ap.SetPropertyString("slang", chineseSLangList)
 	} else {
 		_ = ap.SetPropertyString("slang", "")
 	}
 	if a.playerExtra.subDelay != 0 {
-		_ = ap.SetPropertyString("sub-delay", fmt.Sprintf("%.1f", a.playerExtra.subDelay.Seconds()))
+		_ = ap.SetSubtitleDelay(a.playerExtra.subDelay)
 	}
 }
 
 func chineseTrackRank(tr mediaTrack) int {
 	lang := strings.ToLower(strings.TrimSpace(tr.Lang))
-	title := strings.ToLower(strings.TrimSpace(tr.Title))
+	title := strings.ToLower(trackDisplayTitle(tr))
 	switch lang {
 	case "zh-cn", "zh-hans", "chs", "sc":
 		return 4
@@ -1104,7 +1104,7 @@ func (a *app) loadOnlineSubtitle(cand subtitle.Candidate) {
 			if cand.DelayMS != 0 {
 				a.playerExtra.subDelay = time.Duration(cand.DelayMS) * time.Millisecond
 				if ap, ok := a.player.(advancedMediaPlayer); ok {
-					_ = ap.SetPropertyString("sub-delay", fmt.Sprintf("%.1f", a.playerExtra.subDelay.Seconds()))
+					_ = ap.SetSubtitleDelay(a.playerExtra.subDelay)
 				}
 			}
 			so.failed = false
@@ -1353,7 +1353,7 @@ func (a *app) subtitleDialog(c *ui.Context, p mediaPlayer) {
 // --- More Controls Menu (画面比例/旋转/循环/定时关闭/截图/播放信息) ---
 
 func (a *app) morePlayerControls(c *ui.Context, p mediaPlayer) {
-	ui.MenuButton(c, "更多", func(m *ui.Menu) {
+	playerGlassMenuButton(c, "更多", func(m *ui.Menu) {
 		for _, mode := range []videoAspectMode{aspectOriginal, aspect16x9, aspect4x3, aspect21x9, aspectFill} {
 			if m.Item("画面 · " + mode.label()).ID(fmt.Sprintf("aspect-%d", mode)).Radio(a.playerExtra.aspect == mode).Chosen() {
 				a.setVideoAspect(p, mode)
