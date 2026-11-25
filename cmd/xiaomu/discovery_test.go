@@ -437,11 +437,16 @@ func TestDiscoveryHeaderLayoutWideAndCompact(t *testing.T) {
 	}
 	defer a.close()
 
-	for _, width := range []int{1360, 1300, 1120, 960} {
+	for _, width := range []int{1360, 1300, 1120, 1100, 960, 640} {
+		a.discovery.tab = string(douban.Hot)
 		tt := ui.NewTester(a.view, width, 700)
-		seg, ok := tt.Find("榜单")
+		tabsEl, ok := tt.Find("榜单")
 		if !ok {
-			t.Fatalf("width=%d missing segmented control", width)
+			t.Fatalf("width=%d missing tabs control", width)
+		}
+		lastTab, ok := tt.Find("最近更新")
+		if !ok {
+			t.Fatalf("width=%d missing last tab", width)
 		}
 		btn, ok := tt.Find("刷新榜单")
 		if !ok {
@@ -454,13 +459,22 @@ func TestDiscoveryHeaderLayoutWideAndCompact(t *testing.T) {
 		if btn.X+btn.W > float32(width)+1 {
 			t.Fatalf("width=%d refresh button overflow: btn=%+v", width, btn)
 		}
-		if width >= 1000 && seg.X+seg.W > float32(width)+1 {
-			t.Fatalf("width=%d tabs overflow without horizontal scroll: seg=%+v", width, seg)
+		if tabsEl.X+tabsEl.W > float32(width)+1 {
+			t.Fatalf("width=%d tabs overflow: tabs=%+v", width, tabsEl)
 		}
-		// Updated time and refresh button must not overlap segmented control on the same row.
-		sameRow := btn.Y < seg.Y+seg.H && seg.Y < btn.Y+btn.H
-		if sameRow && (meta.X < seg.X+seg.W-0.5 || btn.X < meta.X+meta.W-0.5) {
-			t.Fatalf("width=%d header items overlap: seg=%+v meta=%+v btn=%+v", width, seg, meta, btn)
+		if lastTab.X+lastTab.W > float32(width)+1 {
+			t.Fatalf("width=%d last tab outside window: lastTab=%+v", width, lastTab)
+		}
+		// Updated time and refresh button must not overlap tabs on the same row.
+		sameRow := btn.Y < tabsEl.Y+tabsEl.H && tabsEl.Y < btn.Y+btn.H
+		if sameRow && (meta.X < tabsEl.X+tabsEl.W-0.5 || btn.X < meta.X+meta.W-0.5) {
+			t.Fatalf("width=%d header items overlap: tabs=%+v meta=%+v btn=%+v", width, tabsEl, meta, btn)
+		}
+		if err := tt.Click("最近更新"); err != nil {
+			t.Fatalf("width=%d click last tab: %v", width, err)
+		}
+		if a.discovery.tab != "sites" {
+			t.Fatalf("width=%d clicking last tab did not switch to sites: got %q", width, a.discovery.tab)
 		}
 	}
 }

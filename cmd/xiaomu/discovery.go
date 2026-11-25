@@ -306,10 +306,13 @@ func (a *app) homeView(c *ui.Context) {
 	width, height := c.Size()
 	d := &a.discovery
 	compactHeader := width < 1300 && d.tab != "sites"
-	scrollTabs := width < 1000
+	wrapTabs := width < 1100
 	headerReserve := float32(180)
 	if compactHeader {
 		headerReserve = 224
+	}
+	if wrapTabs {
+		headerReserve += 44
 	}
 	recommendationHeight := max(float32(300), height-headerReserve)
 	tab := 0
@@ -360,19 +363,23 @@ func (a *app) homeView(c *ui.Context) {
 			})
 			return
 		}
-		renderTabs := func() {
-			if ui.Segmented(c, &tab, "实时热门", "热门电影", "热门剧集", "热门综艺", "热门动漫", "热门短剧", "热门纪录片", "Top 250", "最近更新").Label("榜单").Changed() {
-				d.tab = homeTabs[tab].key
-				a.loadDiscoveryTab(false)
-			}
-		}
-		if scrollTabs {
-			ui.ScrollHorizontal(c).Key("home-tabs-scroll").FillWidth().Scrollbars(false).Children(func() {
-				renderTabs()
+		if wrapTabs {
+			ui.Row(c).Label("榜单").FillWidth().Wrap().Gap(8).Children(func() {
+				for i, spec := range homeTabs {
+					if chip(c.Key("home-tab-"+spec.key), spec.label, tab == i).Clicked() {
+						if d.tab != spec.key {
+							d.tab = spec.key
+							a.loadDiscoveryTab(false)
+						}
+					}
+				}
 			})
 		} else {
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-				renderTabs()
+				if ui.Segmented(c, &tab, "实时热门", "热门电影", "热门剧集", "热门综艺", "热门动漫", "热门短剧", "热门纪录片", "Top 250", "最近更新").Label("榜单").Changed() {
+					d.tab = homeTabs[tab].key
+					a.loadDiscoveryTab(false)
+				}
 				if !compactHeader {
 					ui.Spacer(c)
 					renderDiscoveryMeta(false)
