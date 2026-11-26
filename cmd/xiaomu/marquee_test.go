@@ -101,7 +101,8 @@ func TestFloatingPanelHoverMarqueeScrollsLongEpisodeWithoutClicking(t *testing.T
 	}
 	doc := &config.Config{URL: "https://example.com/config.json"}
 	// 11–14 rune variety-show episode names produce the 2-column grid where
-	// shorter labels ("20261120先导片") fit cleanly and longer labels overflow.
+	// shorter labels ("先导片") fit cleanly across OS fallback fonts and longer
+	// labels overflow.
 	episodes := []catalog.Episode{
 		{Name: "20261027陪录1期完整", ID: "https://example.com/v1.mp4"},
 		{Name: "20261105候场花絮未播", ID: "https://example.com/v2.mp4"},
@@ -110,7 +111,7 @@ func TestFloatingPanelHoverMarqueeScrollsLongEpisodeWithoutClicking(t *testing.T
 		{Name: "20261118陪录1期连麦", ID: "https://example.com/v5.mp4"},
 		{Name: "20261118候场区游戏篇", ID: "https://example.com/v6.mp4"},
 		{Name: "20261118候场区1", ID: "https://example.com/v7.mp4"},
-		{Name: "20261120先导片", ID: "https://example.com/v8.mp4"},
+		{Name: "先导片", ID: "https://example.com/v8.mp4"},
 		{Name: "20261120初见特别企划", ID: "https://example.com/v9.mp4"},
 		{Name: "20261120第1期上完整", ID: "https://example.com/v10.mp4"},
 		{Name: "20261120第1期下加更", ID: "https://example.com/v11.mp4"},
@@ -154,8 +155,8 @@ func TestFloatingPanelHoverMarqueeScrollsLongEpisodeWithoutClicking(t *testing.T
 	tt.SetTitleBar(dragBar)
 	tt.Frame()
 
-	// Short label ("20261120先导片") fits completely and must not scroll on hover.
-	shortRect, ok := tt.Find("20261120先导片")
+	// Short label ("先导片") fits completely and must not scroll on hover.
+	shortRect, ok := tt.Find("先导片")
 	if !ok || shortRect.W <= 0 {
 		t.Fatalf("expected visible short episode button, got %+v ok=%v", shortRect, ok)
 	}
@@ -292,7 +293,7 @@ func TestLocalPlaylistUsesUnifiedFloatingStageAndHoverMarquee(t *testing.T) {
 	dir := t.TempDir()
 	files := make([]string, 16)
 	for i := range files {
-		name := fmt.Sprintf("[DEMO][Example.Show.Season1][E%03d(1080P)][KO_CN_SUB].mkv", i+1)
+		name := fmt.Sprintf("[DEMO][Example.Show.Season1][E%03d(1080P)][KO_CN_SUB].mp4", i+1)
 		p := filepath.Join(dir, name)
 		if err := os.WriteFile(p, []byte("video"), 0o644); err != nil {
 			t.Fatal(err)
