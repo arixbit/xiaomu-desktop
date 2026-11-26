@@ -83,6 +83,7 @@ type app struct {
 	siteHealth        siteHealthStore
 	showFailedSites   bool
 	homeResumeIdx     int
+	homeResumeDir     int
 	sourcesTab        int
 	sourcesSiteFilter int
 	speedTest         sourceSpeedTest
@@ -170,11 +171,17 @@ func (a *app) view(c *ui.Context) {
 	if c.Vibrancy() {
 		c.Root().Background(ui.Transparent)
 	}
-	if a.player != nil {
-		a.playerScreen(c)
-		return
-	}
-	a.shell(c)
+	ui.Box(c.Key("app-stage")).Fill().Children(func() {
+		if a.player != nil {
+			ui.Box(c.Key("player-stage")).Fill().Transition(transPlayerStage).Children(func() {
+				a.playerScreen(c)
+			})
+			return
+		}
+		ui.Box(c.Key("shell-stage")).Fill().Transition(transTabPage).Children(func() {
+			a.shell(c)
+		})
+	})
 }
 
 func (a *app) play() {

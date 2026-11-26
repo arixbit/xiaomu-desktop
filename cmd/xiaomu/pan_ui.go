@@ -154,9 +154,9 @@ func (a *app) panCredentialsSection(c *ui.Context) {
 			}
 		})
 		if a.armed.key == "pan-cleanup-temp" && c.Now().Before(a.armed.until) && len(cleanProviders) > 0 {
-			ui.Text(c, fmt.Sprintf("再次点击「确认清理？」将清空 %s 的「%s」目录（夸克/UC 含回收站），按 Esc 可取消。",
+			ui.Text(c.Key("pan-cleanup-warn"), fmt.Sprintf("再次点击「确认清理？」将清空 %s 的「%s」目录（夸克/UC 含回收站），按 Esc 可取消。",
 				strings.Join(cleanProviders, "、"), creds.EffectiveTempDir())).
-				FontSize(12).TextColor(p.warning)
+				FontSize(12).TextColor(p.warning).Transition(transInlineBanner)
 		}
 		ui.Row(c).FillWidth().Wrap().Gap(10).Children(func() {
 			for _, provider := range panAccountProviders {
@@ -169,12 +169,14 @@ func (a *app) panCredentialsSection(c *ui.Context) {
 						dotColor = p.success
 						statusColor = p.textMuted
 					}
+					animDot := tile.AnimateColor("pan-dot", dotColor, animColor)
+					animStatus := tile.AnimateColor("pan-st", statusColor, animColor)
 					ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-							ui.Box(c).Size(6, 6).Radius(3).Background(dotColor).PassThrough()
+							ui.Box(c).Size(6, 6).Radius(3).Background(animDot).PassThrough()
 							ui.Text(c, provider.Label()).FontSize(12.5).Bold().SingleLine()
 						})
-						ui.Text(c, creds.Masked(provider)).FontSize(11).TextColor(statusColor).SingleLine()
+						ui.Text(c, creds.Masked(provider)).FontSize(11).TextColor(animStatus).SingleLine().ContentTransition(ctReplace)
 					})
 					if signedIn {
 						if a.armedDangerButtonCompact(c, "pan-logout-"+string(provider), "退出", "确认退出？") {
@@ -223,11 +225,12 @@ func (a *app) panSiteEntries() []library.Entry {
 
 func (a *app) panAuthPromptDialog(c *ui.Context) {
 	pal := paletteFor(c)
-	ui.DialogBase(c, &a.panUI.promptOpen, func(backdrop, panel ui.Element) {
+	keyedDialog(c, "dlg-pan-auth", &a.panUI.promptOpen, func(backdrop, panel ui.Element) {
 		p := a.panUI.promptProvider
 		backdrop.Background(pal.dialogScrim).Transition(transDialogScrim)
-		panel.Width(520).MaxWidth(520).Padding(26).Gap(14).Radius(26).TextColor(pal.text).Transition(transDialogPanel)
+		panel.Width(520).MaxWidth(520).Padding(26).Gap(14).Radius(26).TextColor(pal.text)
 		applyPane(panel, pal, pal.dialogMat)
+		applyDialogPanelPose(c, panel)
 		ui.Text(c, "需要登录"+p.Label()).FontSize(22).Bold()
 		if a.panUI.promptReason != "" {
 			ui.Text(c, a.panUI.promptReason).TextColor(pal.textMuted)

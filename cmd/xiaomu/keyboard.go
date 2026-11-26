@@ -160,11 +160,15 @@ func (a *app) handleKeyboard(c *ui.Context) {
 	}
 }
 
+func (a *app) isEffectivelyMuted(p mediaPlayer) bool {
+	return a.muted || (p != nil && p.Volume() <= 0)
+}
+
 func (a *app) toggleMute(p mediaPlayer) {
 	if p == nil {
 		return
 	}
-	if a.muted {
+	if a.isEffectivelyMuted(p) {
 		a.muted = false
 		p.SetMuted(false)
 		vol := a.savedVolume

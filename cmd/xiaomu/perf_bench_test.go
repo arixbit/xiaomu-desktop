@@ -214,6 +214,65 @@ func BenchmarkHistoryView200(b *testing.B) {
 	}
 }
 
+func BenchmarkPlayerHUDMotionFrame(b *testing.B) {
+	a := &app{nav: []routeKind{routeHome}}
+	defer a.close()
+	a.preferences = defaultPlayerPreferences()
+	episodes := make([]catalog.Episode, 60)
+	for i := range episodes {
+		episodes[i] = catalog.Episode{Name: fmt.Sprintf("第%d集", i+1), ID: fmt.Sprintf("ep-%d", i+1)}
+	}
+	doc := &config.Config{URL: "https://example.com/config.json"}
+	site := config.Site{Key: "bench-site", Name: "示例站", Type: 1, Kind: config.KindJSON, API: "https://example.com/api"}
+	item := library.Item{
+		Entry: library.Entry{Config: doc, Site: site},
+		Video: catalog.Video{ID: "v1", Name: "基准测试影片"},
+	}
+	a.title = &titlePage{
+		name:   "基准测试影片",
+		item:   item,
+		seeds:  []library.Item{item},
+		failed: map[string]string{},
+		detail: &catalog.Detail{
+			Name:    "基准测试影片",
+			Sources: []catalog.Source{{Name: "主线路", Episodes: episodes}},
+		},
+	}
+	a.player = &unknownSizeMediaPlayer{playing: true, pos: 18 * time.Minute, dur: 45 * time.Minute, rate: 1, vol: 0.8}
+	a.playingSource, a.playingEpisode = "主线路", "第1集"
+	a.panelOpen = true
+	tt := ui.NewTester(a.view, 1280, 760)
+	tt.Frame()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := range b.N {
+		if i%16 == 0 {
+			a.showPlayerOSD(fmt.Sprintf("音量 %d%%", 50+(i/16)%50))
+			tt.Frame()
+		} else {
+			tt.Advance(16 * time.Millisecond)
+		}
+	}
+}
+
+func BenchmarkNavTabSwitchFrame(b *testing.B) {
+	a := &app{nav: []routeKind{routeHome}}
+	defer a.close()
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.Frame()
+	tabs := []routeKind{routeHome, routeFavorites, routeHistory, routeSources}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := range b.N {
+		if i%16 == 0 {
+			a.nav[0] = tabs[(i/16)%len(tabs)]
+			tt.Frame()
+		} else {
+			tt.Advance(16 * time.Millisecond)
+		}
+	}
+}
+
 func TestTitleKeyMatchesStdLower(t *testing.T) {
 	cases := []string{
 		"", "   ", "《示例》", "  《三体》 ", "三体2", "Test Movie",

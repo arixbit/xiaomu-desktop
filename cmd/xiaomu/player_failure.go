@@ -14,7 +14,10 @@ var (
 	iconFailureInterrupted = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 8V6.7A2.7 2.7 0 0 0 18.3 4H5.7A2.7 2.7 0 0 0 3 6.7v10.6A2.7 2.7 0 0 0 5.7 20h12.6A2.7 2.7 0 0 0 21 17.3V16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 8.4l5.6 3.6L9 15.6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M20.8 10v2.1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="20.8" cy="14.1" r=".75" fill="currentColor"/></svg>`))
 	iconFailureSwap        = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3.5 8h15.8l-4-4M20.5 16H4.7l4 4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>`))
 	iconFailureCopy        = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 5V4a1 1 0 0 0-1-1H5a2 2 0 0 0-2 2v10a1 1 0 0 0 1 1h1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`))
+	iconFailureCheck       = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>`))
 )
+
+const failureCopyResetDelay = 2200 * time.Millisecond
 
 var (
 	failureCoralBg       = ui.RGB(255, 134, 105)
@@ -47,9 +50,12 @@ var (
 type playerFailureUIState struct {
 	detailsOpen         bool
 	copied              bool
+	copiedUntil         time.Time
 	copyFailed          bool
 	copySeq             uint64
 	retrying            bool
+	wasRetrying         bool
+	shakeRun            int
 	retryJobGen         uint64
 	panelFromRecovery   bool
 	pendingSourceMenu   bool
@@ -276,17 +282,17 @@ func playerFailureActionButton(
 			fg = playerText
 		}
 	}
-	btn.Background(btn.AnimateColor(key+"-bg", bg, animColor)).Border(1, border)
+	animFg := animateButtonChrome(btn, key, bg, border, fg)
 	if !disabled {
 		applyPressPose(btn)
 	}
 	btn.Children(func() {
 		if spinning {
-			ui.Spinner(c).Size(13, 13).TextColor(fg).PassThrough()
+			loadingIndicator(c, 13, animFg)
 		} else if icon != nil {
-			ui.Icon(c, icon).Size(15, 15).TextColor(fg).PassThrough()
+			ui.Icon(c, icon).Size(15, 15).TextColor(animFg).PassThrough()
 		}
-		txt := ui.Text(c, label).FontSize(13).TextColor(fg).SingleLine().PassThrough()
+		txt := ui.Text(c, label).FontSize(13).TextColor(animFg).SingleLine().ContentTransition(ctReplace).PassThrough()
 		if primary {
 			txt.Bold()
 		} else {
@@ -452,9 +458,30 @@ func (a *app) playerFailureOverlay(c *ui.Context, p mediaPlayer, err error, avai
 	}
 	wrapActions := actionCount > 2 || narrow
 
+	if a.failureUI.wasRetrying && !retrying && retried {
+		a.failureUI.shakeRun++
+	}
+	a.failureUI.wasRetrying = retrying
+
+	// Auto-reset "已复制" back to "复制" cleanly after a brief confirmation beat.
+	if a.failureUI.copied {
+		now := c.Now()
+		if a.failureUI.copiedUntil.IsZero() {
+			a.failureUI.copiedUntil = now.Add(failureCopyResetDelay)
+		}
+		if !now.Before(a.failureUI.copiedUntil) {
+			a.failureUI.copied = false
+			a.failureUI.copiedUntil = time.Time{}
+		} else {
+			c.After(a.failureUI.copiedUntil.Sub(now))
+		}
+	} else {
+		a.failureUI.copiedUntil = time.Time{}
+	}
+
 	layer := ui.Box(c.Key("player-failure-layer")).Absolute().
 		Top(safeTop).Bottom(safeBottom).Left(safeLeft).Right(safeRight).
-		Padding(layerPadY, layerPadX).Center()
+		Padding(layerPadY, layerPadX).Center().Transition(transDialogPanel)
 	layer.Children(func() {
 		card := stylePlayerFloatingSurface(c,
 			ui.Scroll(c.Key("player-failure")).
@@ -462,7 +489,7 @@ func (a *app) playerFailureOverlay(c *ui.Context, p mediaPlayer, err error, avai
 				ScrollbarStyle(panelScrollbar).
 				Padding(padTop, padX, padBottom, padX).
 				Label("播放失败提示").
-				Transition(transDialogPanel),
+				Transition(ui.ElementTransition{Animation: &animSurface, Height: true}),
 		)
 		card.Children(func() {
 			ui.Column(c).FillWidth().Gap(0).Children(func() {
@@ -478,8 +505,11 @@ func (a *app) playerFailureOverlay(c *ui.Context, p mediaPlayer, err error, avai
 					routeDotColor = ui.RGBA(206, 210, 224, 0.85)
 				}
 				ui.Row(c).FillWidth().Gap(headGap).AlignItems(ui.Center).Children(func() {
-					ui.Box(c).Size(signSize, signSize).Radius(signRadius).Center().Shrink(0).
-						Border(1, failureSignBorder).LinearGradient(failureSignGrad).PassThrough().Children(func() {
+					signBox := ui.Box(c.Key("failure-sign")).Size(signSize, signSize).Radius(signRadius).Center().Shrink(0).
+						Border(1, failureSignBorder).LinearGradient(failureSignGrad).PassThrough()
+					applyPulseOpacity(c, signBox, "failure-sign-pulse", retrying || switching, 0.72)
+					applyShakePose(c, signBox, "failure-sign-shake", a.failureUI.shakeRun)
+					signBox.Children(func() {
 						ui.Icon(c, iconFailureInterrupted).Size(signIcon, signIcon).TextColor(failureSignIconColor).PassThrough()
 					})
 					ui.Column(c).Grow(1).MinWidth(0).Gap(headerTextGap).Children(func() {
@@ -498,7 +528,7 @@ func (a *app) playerFailureOverlay(c *ui.Context, p mediaPlayer, err error, avai
 							routeInnerW := max(float32(0), routeBadge.Bounds().W-2*routePadX-2-6-indicatorW)
 							routeBadge.Children(func() {
 								if switching {
-									ui.Spinner(c).Size(10, 10).TextColor(routeDotColor).Shrink(0).PassThrough()
+									loadingIndicator(c, 10, routeDotColor)
 								} else {
 									ui.Box(c).Size(5, 5).Radius(3).Background(routeDotColor).Shrink(0).PassThrough()
 								}
@@ -569,24 +599,28 @@ func (a *app) playerFailureOverlay(c *ui.Context, p mediaPlayer, err error, avai
 					} else if detailsBtn.Hovered() {
 						detailsFg = playerText
 					}
+					animDetailsFg := detailsBtn.AnimateColor("fdet-fg", detailsFg, animColor)
+					if !switching {
+						applyPressPose(detailsBtn)
+					}
 					detailsBtn.Children(func() {
-						ui.Text(c, "错误详情").FontSize(12).TextColor(detailsFg).SingleLine().PassThrough()
-						chev := ui.Icon(c, iconChevronDown).Size(12, 12).TextColor(detailsFg).PassThrough()
-						if a.failureUI.detailsOpen {
-							chev.Rotate(180)
-						}
+						ui.Text(c, "错误详情").FontSize(12).TextColor(animDetailsFg).SingleLine().PassThrough()
+						chev := ui.Icon(c.Key("fdet-chev"), iconChevronDown).Size(12, 12).TextColor(animDetailsFg).PassThrough()
+						applyChevronPose(chev, a.failureUI.detailsOpen)
 					})
 					if detailsBtn.Clicked() {
 						a.failureUI.detailsOpen = !a.failureUI.detailsOpen
 						a.failureUI.copySeq++
 						a.failureUI.copied = false
+						a.failureUI.copiedUntil = time.Time{}
 						a.failureUI.copyFailed = false
 					}
 				})
 
 				// Expandable error details: source/line, copy button, and selectable monospace error box.
 				if a.failureUI.detailsOpen {
-					ui.Column(c.Key("player-failure-details")).FillWidth().Padding(detailsGap, 0, 0, 0).Gap(6).Children(func() {
+					ui.Column(c.Key("player-failure-details")).FillWidth().Padding(detailsGap, 0, 0, 0).Gap(6).
+						Transition(transInlineReveal).Children(func() {
 						ui.Box(c).FillWidth().Height(1).Background(ui.RGBA(255, 255, 255, 0.12)).PassThrough()
 						ui.Row(c).FillWidth().Padding(4, 0, 0, 0).Gap(8).AlignItems(ui.Center).Children(func() {
 							if routeSummary != "" {
@@ -595,10 +629,12 @@ func (a *app) playerFailureOverlay(c *ui.Context, p mediaPlayer, err error, avai
 								ui.Spacer(c)
 							}
 							copyLabel := "复制"
+							copyIcon := iconFailureCopy
 							copyFg := ui.RGBA(196, 198, 210, 0.90)
 							switch {
 							case a.failureUI.copied:
 								copyLabel = "已复制"
+								copyIcon = iconFailureCheck
 								copyFg = ui.RGB(142, 232, 176)
 							case a.failureUI.copyFailed:
 								copyLabel = "复制失败"
@@ -611,14 +647,17 @@ func (a *app) playerFailureOverlay(c *ui.Context, p mediaPlayer, err error, avai
 							if copyBtn.Hovered() && !a.failureUI.copied && !a.failureUI.copyFailed {
 								copyFg = playerText
 							}
+							animCopyFg := copyBtn.AnimateColor("fcopy-fg", copyFg, animColor)
+							applyPressPose(copyBtn)
 							copyBtn.Children(func() {
-								ui.Icon(c, iconFailureCopy).Size(13, 13).TextColor(copyFg).PassThrough()
-								ui.Text(c, copyLabel).FontSize(12).TextColor(copyFg).SingleLine().ContentTransition(ctReplace).PassThrough()
+								ui.Icon(c, copyIcon).Size(13, 13).TextColor(animCopyFg).ContentTransition(ctIcon).PassThrough()
+								ui.Text(c, copyLabel).FontSize(12).TextColor(animCopyFg).SingleLine().ContentTransition(ctReplace).PassThrough()
 							})
 							if copyBtn.Clicked() {
 								a.failureUI.copySeq++
 								seq := a.failureUI.copySeq
 								a.failureUI.copied = false
+								a.failureUI.copiedUntil = time.Time{}
 								a.failureUI.copyFailed = false
 								textToCopy := rawErr
 								c.WriteClipboardThen(textToCopy, func(writeErr error) {
@@ -626,6 +665,7 @@ func (a *app) playerFailureOverlay(c *ui.Context, p mediaPlayer, err error, avai
 										return
 									}
 									a.failureUI.copied = writeErr == nil
+									a.failureUI.copiedUntil = time.Time{}
 									a.failureUI.copyFailed = writeErr != nil
 								})
 							}

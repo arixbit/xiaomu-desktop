@@ -339,14 +339,20 @@ func (a *app) homeView(c *ui.Context) {
 		btn := ui.ButtonBase(c.Key("discovery-refresh")).Size(30, 30).Shrink(0).Radius(8).Center().
 			Cursor(ui.CursorPointer).Label("刷新榜单").Tooltip(tip).Disabled(list.loading)
 		bg := p.controlBg
+		border := p.borderControl
 		if btn.Hovered() && !list.loading {
 			bg = p.controlHover
+			border = ui.RGBA(255, 255, 255, 0.20)
 			iconColor = p.text
 		}
-		btn.Background(btn.AnimateColor("disc-ref-bg", bg, animColor)).Border(1, p.borderControl)
+		animIconColor := animateButtonChrome(btn, "disc-ref", bg, border, iconColor)
 		applyPressPose(btn)
 		btn.Children(func() {
-			ui.Icon(c, iconRefresh).Size(14, 14).TextColor(iconColor).PassThrough()
+			if list.loading {
+				loadingIndicator(c, 13, p.textMuted)
+			} else {
+				ui.Icon(c, iconRefresh).Size(14, 14).TextColor(animIconColor).PassThrough()
+			}
 		})
 		if btn.Clicked() {
 			a.loadDiscoveryTab(true)
@@ -375,7 +381,7 @@ func (a *app) homeView(c *ui.Context) {
 		}
 		tabsBar.Children(func() {
 			for i, spec := range homeTabs {
-				if underlineTab(c, "home-tab-"+spec.key, spec.label, tab == i).Shrink(0).Clicked() {
+				if underlineTab(c, "home-disc", "home-tab-"+spec.key, spec.label, tab == i).Shrink(0).Clicked() {
 					if d.tab != spec.key {
 						d.tab = spec.key
 						a.loadDiscoveryTab(false)
@@ -445,12 +451,14 @@ func (a *app) homeView(c *ui.Context) {
 				})
 			}
 		})
-		ui.Column(c).Label("首页推荐").FillWidth().Height(recommendationHeight).MinHeight(recommendationHeight).Gap(12).Children(func() {
-			if d.tab == "sites" {
-				a.feedView(c)
-			} else {
-				a.discoveryView(c)
-			}
+		ui.Box(c.Key("home-disc-host")).Label("首页推荐").FillWidth().Height(recommendationHeight).MinHeight(recommendationHeight).Clip().Children(func() {
+			ui.Column(c.Key("home-disc-tab-"+d.tab)).Fill().Gap(12).Transition(transTabPage).Children(func() {
+				if d.tab == "sites" {
+					a.feedView(c)
+				} else {
+					a.discoveryView(c)
+				}
+			})
 		})
 	})
 }
@@ -475,7 +483,7 @@ func (a *app) discoveryView(c *ui.Context) {
 	list := a.discovery.listFor(kind)
 	p := paletteFor(c)
 	if list.message != "" {
-		ui.Row(c).Key("discovery-message").FillWidth().Padding(0, scrollGutter, 0, 0).Gap(10).AlignItems(ui.Center).Transition(transInlineBanner).Children(func() {
+		ui.Row(c).Key("discovery-message").FillWidth().Padding(0, scrollGutter, 0, 0).Gap(10).AlignItems(ui.Center).Transition(transInlineReveal).Children(func() {
 			ui.Text(c, list.message).FontSize(13).Grow(1)
 			if glassButton(c, "重试").Disabled(list.loading || list.loadingMore).Clicked() {
 				if list.moreFailed && list.feed.HasMore() {
@@ -522,13 +530,14 @@ func (a *app) discoveryView(c *ui.Context) {
 		a.loadMoreDiscovery()
 	}
 	if list.loadingMore {
-		ui.Row(c).Key("discovery-load-more").FillWidth().Gap(10).AlignItems(ui.Center).Padding(2, 0).Children(func() {
+		ui.Row(c).Key("discovery-load-more").FillWidth().Gap(8).AlignItems(ui.Center).Padding(2, 0).Transition(transInlineBanner).Children(func() {
 			ui.Spacer(c)
+			loadingIndicator(c, 12, p.textMuted)
 			status := "正在加载更多…"
 			if list.feed.Total > 0 {
 				status = fmt.Sprintf("正在加载更多…（已显示 %d / %d）", len(list.feed.Subjects), list.feed.Total)
 			}
-			ui.Text(c, status).FontSize(13).TextColor(p.textMuted)
+			ui.Text(c, status).FontSize(13).FontFeatures("tnum").TextColor(p.textMuted).ContentTransition(ctNumeric)
 			ui.Spacer(c)
 		})
 	} else if list.feed.HasMore() && !list.loading && list.scroll.MaxY <= 0 {

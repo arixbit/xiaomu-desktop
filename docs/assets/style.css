@@ -1,5 +1,6 @@
-/* 小幕官网样式：浅色页面 + 深色 Hero，红色点缀（与 App 图标的播放按钮呼应） */
+/* 小幕官网样式：浅色页面 + 深色 Hero，珊瑚红点缀（与桌面端原生界面统一动效语言） */
 :root {
+  color-scheme: light dark;
   --bg: #ffffff;
   --bg-alt: #f6f6f7;
   --text: #1d1d1f;
@@ -7,11 +8,13 @@
   --border: #e5e5e7;
   --accent: #e5484d;
   --accent-hover: #d13438;
+  --accent-solid: #d13438;
+  --accent-solid-hover: #b8292d;
+  --focus-ring: rgba(229, 72, 77, 0.48);
   --hero-bg: #17171a;
   --hero-text: #f5f5f7;
   --hero-muted: #a1a1a6;
   --top-bg: rgba(255, 255, 255, 0.86);
-  --card-shadow-hover: 0 8px 24px rgba(0, 0, 0, 0.08);
   --radius: 14px;
   --wrap: 1024px;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
@@ -26,8 +29,12 @@
     --text: #f5f5f7;
     --muted: #a1a1a6;
     --border: #2a2a30;
+    --accent: #ff5a40;
+    --accent-hover: #ff6e54;
+    --accent-solid: #cf3d24;
+    --accent-solid-hover: #bd331b;
+    --focus-ring: rgba(255, 90, 64, 0.56);
     --top-bg: rgba(17, 17, 20, 0.84);
-    --card-shadow-hover: 0 10px 28px rgba(0, 0, 0, 0.36);
   }
 }
 
@@ -45,8 +52,19 @@ body {
 }
 
 img { max-width: 100%; height: auto; display: block; }
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
+a {
+  color: var(--accent);
+  text-decoration: none;
+  transition: color var(--dur-micro) var(--ease-out);
+}
+a:focus-visible, .btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  a:hover { text-decoration: underline; }
+}
 
 .wrap { max-width: var(--wrap); margin: 0 auto; padding: 0 24px; }
 .wrap.narrow { max-width: 760px; }
@@ -75,6 +93,7 @@ a:hover { text-decoration: underline; }
   color: var(--text);
   font-size: 18px;
   font-weight: 700;
+  border-radius: 8px;
 }
 .brand:hover { text-decoration: none; }
 .brand img { border-radius: 8px; }
@@ -82,9 +101,12 @@ a:hover { text-decoration: underline; }
 .top nav a {
   color: var(--text);
   font-size: 15px;
+  border-radius: 6px;
   transition: color var(--dur-micro) var(--ease-out);
 }
-.top nav a:hover { color: var(--accent); text-decoration: none; }
+@media (hover: hover) and (pointer: fine) {
+  .top nav a:hover { color: var(--accent); text-decoration: none; }
+}
 
 /* Hero */
 .hero {
@@ -107,14 +129,17 @@ a:hover { text-decoration: underline; }
   border-radius: 999px;
   font-size: 16px;
   font-weight: 600;
-  transition: background var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out), transform var(--dur-micro) var(--ease-out);
+  transition: background var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out), transform var(--dur-micro) var(--ease-out);
 }
-.btn:hover { text-decoration: none; transform: translateY(-1px); }
 .btn:active { transform: scale(0.97); }
-.btn-primary { background: var(--accent); color: #fff; }
-.btn-primary:hover { background: var(--accent-hover); }
+.btn-primary { background: var(--accent-solid); color: #fff; }
 .btn-ghost { border: 1px solid #55555c; color: var(--hero-text); }
-.btn-ghost:hover { border-color: #a1a1a6; }
+@media (hover: hover) and (pointer: fine) {
+  .btn:hover { text-decoration: none; transform: translateY(-1px); }
+  .btn:active { transform: scale(0.97); }
+  .btn-primary:hover { background: var(--accent-solid-hover); }
+  .btn-ghost:hover { border-color: #a1a1a6; background: rgba(255, 255, 255, 0.08); }
+}
 .meta { color: var(--hero-muted); font-size: 14px; margin: 20px 0 40px; }
 .hero-shot {
   margin: 0;
@@ -122,6 +147,8 @@ a:hover { text-decoration: underline; }
 }
 .hero-shot img {
   border-radius: var(--radius) var(--radius) 0 0;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-bottom: 0;
   box-shadow: 0 -8px 48px rgba(0, 0, 0, 0.4);
 }
 
@@ -131,7 +158,7 @@ a:hover { text-decoration: underline; }
 .section h2 { font-size: 30px; margin: 0 0 8px; }
 .section-intro { color: var(--muted); font-size: 17px; margin: 0 0 32px; }
 
-/* 功能卡片 */
+/* 功能卡片（静态内容，不伪装可点击位移） */
 .grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -142,11 +169,6 @@ a:hover { text-decoration: underline; }
   border-radius: var(--radius);
   padding: 22px;
   background: var(--bg);
-  transition: transform var(--dur-ui) var(--ease-out), box-shadow var(--dur-ui) var(--ease-out), border-color var(--dur-ui) var(--ease-out);
-}
-.card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--card-shadow-hover);
 }
 .card h3 { margin: 0 0 6px; font-size: 18px; }
 .card p { margin: 0; color: var(--muted); font-size: 15px; }
@@ -158,7 +180,7 @@ a:hover { text-decoration: underline; }
   border-radius: 5px;
 }
 
-/* 截图 */
+/* 截图（静态展示，不伪装可点击位移） */
 .shots {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -169,11 +191,6 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-  transition: transform var(--dur-ui) var(--ease-out), box-shadow var(--dur-ui) var(--ease-out);
-}
-.shots img:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--card-shadow-hover);
 }
 .shots figcaption { margin-top: 10px; color: var(--muted); font-size: 14px; }
 
@@ -214,7 +231,7 @@ a:hover { text-decoration: underline; }
   width: 30px;
   height: 30px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--accent-solid);
   color: #fff;
   font-weight: 700;
   font-size: 15px;
@@ -267,10 +284,22 @@ footer {
   .top nav a { font-size: 14px; }
 }
 
+@media (max-width: 480px) {
+  .wrap { padding: 0 16px; }
+  .top nav { gap: 12px; }
+  .top nav a { font-size: 13.5px; }
+}
+
+/* 尊重系统减弱动态效果：停用位移/缩放/平滑滚动，仅保留克制的非位移色彩过渡 */
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+  .btn:hover, .btn:active { transform: none; }
+  a, .top, .top nav a, .btn {
+    transition-property: color, background, border-color;
+    transition-duration: 120ms;
   }
 }

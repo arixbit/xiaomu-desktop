@@ -617,9 +617,10 @@ func playerIconButton(c *ui.Context, key string, icon *ui.SVG, size float32, lab
 		bg = ui.RGBA(255, 255, 255, 0.12)
 	}
 	btn.Background(btn.AnimateColor("picon-bg", bg, animColor))
+	animFg := btn.AnimateColor("picon-fg", fg, animColor)
 	applyPressPose(btn)
 	btn.Children(func() {
-		ui.Icon(c, icon).Size(size, size).TextColor(fg).PassThrough()
+		ui.Icon(c, icon).Size(size, size).TextColor(animFg).ContentTransition(ctIcon).PassThrough()
 	})
 	return btn
 }
@@ -629,7 +630,8 @@ func stylePlayerPopoverPanel(panel ui.Element, width float32) ui.Element {
 		Background(playerPopoverBg).
 		Border(1, playerPopoverBorder).
 		Shadow(0, 14, 36, 0, ui.RGBA(0, 0, 0, 0.48)).
-		TextColor(playerText)
+		TextColor(playerText).
+		Transition(transPopoverUp)
 }
 
 func playerPopoverMenuOpts(open *bool) ui.PopoverMenuButtonOptions {
@@ -643,7 +645,8 @@ func playerPopoverMenuOpts(open *bool) ui.PopoverMenuButtonOptions {
 				Radius(14).
 				Padding(6).
 				NoShadow().
-				Shadow(0, 14, 36, 0, ui.RGBA(0, 0, 0, 0.48))
+				Shadow(0, 14, 36, 0, ui.RGBA(0, 0, 0, 0.48)).
+				Transition(transPopoverUp)
 		},
 		Item: func(item ui.Element) {
 			item.Padding(6, 10).Radius(8)
@@ -711,10 +714,11 @@ func playerHeaderTooltip(c *ui.Context, anchor ui.Element, text string, at, self
 	}
 	t := c.Theme()
 	ui.TooltipBase(c, anchor, func(tip ui.Element) {
-		tip.MaxWidth(t.Space(80)).Padding(5, 9).Radius(8).
+		tip.Key("tip-player-header-"+text).MaxWidth(t.Space(80)).Padding(5, 9).Radius(8).
 			Background(bg).Border(1, border).
 			TextColor(playerText).FontSize(max(float32(11), t.FontSize-1)).
-			Shadow(0, 6, 18, 0, ui.RGBA(0, 0, 0, 0.45))
+			Shadow(0, 6, 18, 0, ui.RGBA(0, 0, 0, 0.45)).
+			Transition(transTooltip)
 		tip.Children(func() { ui.Text(c, text) })
 		tip.AttachTo(anchor, at, self).Margin(6, 0, 0, 0).AttachEdgeMargin(8)
 	})
@@ -797,10 +801,12 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool, floatingRec
 		title.Children(func() {
 			ui.Text(c, name).SingleLine().TextColor(playerText).TextShadow(0, 1, 4, playerInk).ContentTransition(ctReplace)
 			if badge := a.sleepTimerBadge(c.Now()); badge != "" {
-				ui.Text(c, " · "+badge).FontSize(12).SingleLine().TextColor(ui.RGB(255, 198, 130)).ContentTransition(ctNumeric)
+				ui.Text(c.Key("sleep-badge"), " · "+badge).FontSize(12).FontFeatures("tnum").SingleLine().
+					TextColor(ui.RGB(255, 198, 130)).ContentTransition(ctCountdown).Transition(transMicroBadge)
 			}
 			if a.playerExtra.loop {
-				ui.Text(c, " · 循环").FontSize(12).SingleLine().TextColor(ui.RGB(142, 230, 178))
+				ui.Text(c.Key("loop-badge"), " · 循环").FontSize(12).SingleLine().
+					TextColor(ui.RGB(142, 230, 178)).Transition(transMicroBadge)
 			}
 		})
 
@@ -817,6 +823,7 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool, floatingRec
 				pinIcon := iconPin
 				pinFg := playerText
 				pinBg := ui.Transparent
+				pinBorder := ui.Transparent
 				pinTip := "切换窗口置顶 (P)"
 				pinBtn := ui.ButtonBase(c.Key("player-pin")).Size(toolBtnSize, toolBtnSize).Radius(toolBtnSize/2).Center().
 					Cursor(ui.CursorPointer).Label("窗口置顶")
@@ -824,16 +831,16 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool, floatingRec
 					pinIcon = iconPinFilled
 					pinFg = playerCoral
 					pinBg = ui.RGBA(255, 90, 64, 0.22)
+					pinBorder = playerCoralBorder
 					pinTip = "窗口已置顶 · 点击取消 (P)"
-					pinBtn.Border(1, playerCoralBorder)
 				} else if pinBtn.Hovered() {
 					pinBg = ui.RGBA(255, 255, 255, 0.14)
 				}
-				pinBtn.Background(pinBtn.AnimateColor("pin-bg", pinBg, animColor))
+				animPinFg := animateButtonChrome(pinBtn, "pin", pinBg, pinBorder, pinFg)
 				playerHeaderTooltip(c, pinBtn, pinTip, ui.AnchorBottom, ui.AnchorTop)
 				applyPressPose(pinBtn)
 				pinBtn.Children(func() {
-					ui.Icon(c, pinIcon).Size(15, 15).TextColor(pinFg).PassThrough()
+					ui.Icon(c, pinIcon).Size(15, 15).TextColor(animPinFg).ContentTransition(ctIcon).PassThrough()
 				})
 				if pinBtn.Clicked() {
 					a.toggleAlwaysOnTop()
@@ -880,13 +887,18 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool, floatingRec
 			playerHeaderTooltip(c, panelBtn, tip, ui.AnchorBottomEnd, ui.AnchorTopEnd)
 			if floatingRect != nil {
 				stylePlayerFloatingPill(c, panelBtn, pillRadius, true)
+				if panelShown {
+					panelBtn.Background(panelBtn.AnimateColor("ptog-bg", ui.RGBA(255, 255, 255, 0.16), animColor)).
+						Border(1, panelBtn.AnimateColor("ptog-bd", ui.RGBA(255, 255, 255, 0.28), animColor))
+				}
 			} else {
 				panelBtn.Radius(18).Material(glass.Glass{Style: glass.Regular, Interactive: true})
-			}
-			if panelShown {
-				panelBtn.Background(ui.RGBA(255, 255, 255, 0.16)).Border(1, ui.RGBA(255, 255, 255, 0.28))
-			} else if floatingRect == nil {
-				panelBtn.Border(1, ui.RGBA(255, 255, 255, 0.12))
+				ptogBg, ptogBd := ui.Transparent, ui.RGBA(255, 255, 255, 0.12)
+				if panelShown {
+					ptogBg, ptogBd = ui.RGBA(255, 255, 255, 0.16), ui.RGBA(255, 255, 255, 0.28)
+				}
+				panelBtn.Background(panelBtn.AnimateColor("ptog-bg", ptogBg, animColor)).
+					Border(1, panelBtn.AnimateColor("ptog-bd", ptogBd, animColor))
 			}
 			applyPressPose(panelBtn)
 			panelBtn.Children(func() {
@@ -937,9 +949,13 @@ func (a *app) playerState(c *ui.Context, p mediaPlayer, availW, availH, safeTop,
 		return
 	}
 	top := float32(84)
+	loadingState := a.running(jobPlay) || (!p.Ready() && p.Err() == nil) || p.Buffering()
 	ui.Row(c).Key("player-state-pill").Absolute().Top(top).Left(24).Right(24).Center().Transition(transOSD).Children(func() {
 		ui.Row(c).Padding(9, 14).Gap(10).Radius(14).MaxWidth(640).AlignItems(ui.Center).
 			Material(glass.Glass{Style: glass.Regular}).TextColor(playerText).Children(func() {
+			if loadingState {
+				loadingIndicator(c, 13, playerText)
+			}
 			ui.Text(c, message).Selectable().ContentTransition(ctReplace)
 			if dismissible {
 				if playerGlassButton(c, "关闭").Label("关闭播放提示").Padding(3, 9).Clicked() {
@@ -1062,14 +1078,14 @@ func (a *app) resolutionBadgeButton(c *ui.Context, w, h int) {
 	}
 	tip := fmt.Sprintf("真实画面 %d×%d · 点击查看播放信息 (I)", w, h)
 	btn := ui.ButtonBase(c.Key("res-badge")).Padding(2, 6).Radius(5).Center().
-		Cursor(ui.CursorPointer).Label("视频分辨率").Tooltip(tip).Border(1, border)
+		Cursor(ui.CursorPointer).Label("视频分辨率").Tooltip(tip)
 	if btn.Hovered() {
 		bg = ui.RGBA(255, 255, 255, 0.16)
 	}
-	btn.Background(btn.AnimateColor("res-bg", bg, animColor))
+	animFg := animateButtonChrome(btn, "res", bg, border, fg)
 	applyPressPose(btn)
 	btn.Children(func() {
-		t := ui.Text(c, label).FontSize(10).TextColor(fg).SingleLine().PassThrough()
+		t := ui.Text(c, label).FontSize(10).TextColor(animFg).SingleLine().ContentTransition(ctReplace).PassThrough()
 		if bold {
 			t.Bold()
 		}
@@ -1101,7 +1117,7 @@ func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact 
 			switch {
 			case a.isLiveStream():
 				ui.Row(c).Grow(1).Height(20).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Box(c).Size(7, 7).Radius(4).Background(ui.RGB(239, 68, 68)).PassThrough()
+					ui.Box(c.Key("live-onair-dot")).Size(7, 7).Radius(4).Background(ui.RGB(239, 68, 68)).PassThrough()
 					ui.Text(c, "直播").FontSize(12).SingleLine()
 				})
 			case duration > 0:
@@ -1112,14 +1128,17 @@ func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact 
 					clockW = 54
 				}
 				ui.Row(c).Width(clockW).Height(20).Justify(ui.End).AlignItems(ui.Center).Shrink(0).Children(func() {
-					ui.Text(c, playerClock(p.Position())).FontSize(12).TextColor(ui.RGBA(248, 249, 255, 0.88)).SingleLine().ContentTransition(ctNumeric)
+					ui.Text(c, playerClock(p.Position())).FontSize(12).FontFeatures("tnum").
+						TextColor(ui.RGBA(248, 249, 255, 0.88)).SingleLine().ContentTransition(ctNumeric)
 				})
 				a.playerSeekBar(c, p, duration)
 				ui.Row(c).Height(20).AlignItems(ui.Center).Shrink(0).Children(func() {
-					ui.Text(c, playerClock(duration)).FontSize(12).TextColor(ui.RGBA(248, 249, 255, 0.78)).SingleLine().ContentTransition(ctNumeric)
+					ui.Text(c, playerClock(duration)).FontSize(12).FontFeatures("tnum").
+						TextColor(ui.RGBA(248, 249, 255, 0.78)).SingleLine().ContentTransition(ctNumeric)
 				})
 			default:
-				ui.Row(c).Grow(1).Height(20).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Grow(1).Height(20).Gap(6).AlignItems(ui.Center).Children(func() {
+					loadingIndicator(c, 11, ui.RGBA(248, 249, 255, 0.72))
 					ui.Text(c, "加载中…").FontSize(12).TextColor(ui.RGBA(248, 249, 255, 0.72)).SingleLine()
 				})
 			}
@@ -1132,7 +1151,8 @@ func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact 
 			if !a.playingFile && !a.playingDirectMPV {
 				if speed := a.playbackSpeed(c); speed != "" && speed != "—" {
 					ui.Row(c).Height(20).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, "↓ "+speed).FontSize(11).TextColor(ui.RGBA(248, 249, 255, 0.68)).SingleLine().ContentTransition(ctNumeric)
+						ui.Text(c, "↓ "+speed).FontSize(11).FontFeatures("tnum").
+							TextColor(ui.RGBA(248, 249, 255, 0.68)).SingleLine().ContentTransition(ctNumeric)
 					})
 				}
 			}
@@ -1175,21 +1195,25 @@ func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact 
 			}
 			playLabel := "暂停"
 			playIcon := iconPause
+			playTip := "暂停 (Space)"
 			if !p.Playing() {
 				playLabel = "播放"
 				playIcon = iconPlay
+				playTip = "播放 (Space)"
 			}
 			playBtn := ui.ButtonBase(c.Key("player-play-toggle")).Size(playBtnSize, playBtnSize).Radius(playBtnSize/2).Center().
-				Cursor(ui.CursorPointer).Label(playLabel).Tooltip("播放 / 暂停 (Space)").
-				Border(1, ui.RGBA(255, 255, 255, 0.14))
+				Cursor(ui.CursorPointer).Label(playLabel).Tooltip(playTip)
 			playBg := ui.RGBA(255, 255, 255, 0.16)
+			playBd := ui.RGBA(255, 255, 255, 0.14)
 			if playBtn.Hovered() {
 				playBg = ui.RGBA(255, 255, 255, 0.26)
+				playBd = ui.RGBA(255, 255, 255, 0.26)
 			}
-			playBtn.Background(playBtn.AnimateColor("play-bg", playBg, animColor))
+			playBtn.Background(playBtn.AnimateColor("play-bg", playBg, animColor)).
+				Border(1, playBtn.AnimateColor("play-bd", playBd, animColor))
 			applyPressPose(playBtn)
 			playBtn.Children(func() {
-				ui.Icon(c, playIcon).Size(16, 16).TextColor(playerText).PassThrough()
+				ui.Icon(c, playIcon).Size(16, 16).TextColor(playerText).ContentTransition(ctIcon).PassThrough()
 			})
 			if playBtn.Clicked() {
 				togglePlayback(p)
@@ -1215,10 +1239,12 @@ func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact 
 			}
 			playerBarDivider(c)
 			volIcon := iconVolumeHigh
-			if a.muted || p.Volume() <= 0 {
+			volTip := "静音 (M)"
+			if a.isEffectivelyMuted(p) {
 				volIcon = iconVolumeMute
+				volTip = "取消静音 (M)"
 			}
-			if playerIconButton(c, "player-mute", volIcon, 16, "静音切换", "静音 / 取消静音 (M)", false, false).Size(iconBtnSize, iconBtnSize).Clicked() {
+			if playerIconButton(c, "player-mute", volIcon, 16, "静音切换", volTip, false, false).Size(iconBtnSize, iconBtnSize).Clicked() {
 				a.toggleMute(p)
 			}
 			volume := p.Volume()
@@ -1255,11 +1281,13 @@ func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact 
 				playerBarDivider(c)
 				fullLabel := "全屏"
 				fullIcon := iconFullscreenEnter
+				fullTip := "进入全屏 (F)"
 				if a.fullScreen {
 					fullLabel = "退出全屏"
 					fullIcon = iconFullscreenExit
+					fullTip = "退出全屏 (F)"
 				}
-				if playerIconButton(c, "player-fullscreen", fullIcon, 16, fullLabel, "全屏切换 (F)", false, false).Size(iconBtnSize, iconBtnSize).Clicked() {
+				if playerIconButton(c, "player-fullscreen", fullIcon, 16, fullLabel, fullTip, false, false).Size(iconBtnSize, iconBtnSize).Clicked() {
 					a.togglePlayerFullScreen()
 					a.playerFocus.Focus(c)
 				}
@@ -1348,7 +1376,8 @@ func panelSectionHeader(c *ui.Context, title, count string) {
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, title).FontSize(12).Bold().TextColor(playerMutedText).Grow(1).SingleLine()
 		if count != "" {
-			ui.Text(c, count).FontSize(11).TextColor(ui.RGBA(248, 249, 255, 0.48)).SingleLine().ContentTransition(ctNumeric)
+			ui.Text(c, count).FontSize(11).FontFeatures("tnum").TextColor(ui.RGBA(248, 249, 255, 0.48)).
+				SingleLine().ContentTransition(ctNumeric)
 		}
 	})
 }
@@ -1375,9 +1404,10 @@ func (a *app) panelListRowButton(c *ui.Context, key, label, a11yLabel string, se
 		fg = playerText
 	} else if hovered {
 		bg = ui.RGBA(255, 255, 255, 0.10)
+		border = ui.RGBA(255, 255, 255, 0.16)
 		fg = playerText
 	}
-	btn.Background(btn.AnimateColor("prow-bg", bg, animColor)).Border(1, border)
+	animFg := animateButtonChrome(btn, "prow", bg, border, fg)
 	applyPressPose(btn)
 	dotReserve := float32(0)
 	if selected {
@@ -1386,14 +1416,15 @@ func (a *app) panelListRowButton(c *ui.Context, key, label, a11yLabel string, se
 	innerW := max(float32(0), btn.Bounds().W-2*padX-2-dotReserve)
 	btn.Children(func() {
 		if selected {
-			ui.Box(c).Size(6, 6).Radius(3).Background(playerCoral).Shrink(0).PassThrough()
+			ui.Box(c.Key("prow-dot-"+key)).Size(6, 6).Radius(3).Background(playerCoral).Shrink(0).
+				Transition(transMicroBadge).PassThrough()
 		}
 		a.hoverMarqueeText(c, marqueeTextOptions{
 			key:        key,
 			text:       label,
 			fontSize:   fontSize,
 			bold:       selected,
-			color:      fg,
+			color:      animFg,
 			hovered:    hovered,
 			grow:       true,
 			knownWidth: innerW,
@@ -1427,9 +1458,10 @@ func (a *app) panelLineChip(c *ui.Context, key, label string, selected, medium, 
 		fg = ui.RGB(255, 163, 137)
 	} else if hovered {
 		bg = ui.RGBA(255, 255, 255, 0.13)
+		border = ui.RGBA(255, 255, 255, 0.20)
 		fg = playerText
 	}
-	btn.Background(btn.AnimateColor("pline-bg", bg, animColor)).Border(1, border)
+	animFg := animateButtonChrome(btn, "pline", bg, border, fg)
 	applyPressPose(btn)
 	innerW := max(float32(0), btn.Bounds().W-2*padX-2)
 	btn.Children(func() {
@@ -1438,7 +1470,7 @@ func (a *app) panelLineChip(c *ui.Context, key, label string, selected, medium, 
 			text:       label,
 			fontSize:   fontSize,
 			bold:       selected,
-			color:      fg,
+			color:      animFg,
 			hovered:    hovered,
 			centered:   true,
 			fixedWidth: innerW,
@@ -1518,7 +1550,8 @@ func (a *app) panelEpisodes(c *ui.Context, panelBounds ui.Rect, panelW, panelH, 
 		ui.Row(c).Grow(1).MinWidth(0).Gap(7).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "选集").FontSize(headingSize).Bold().TextColor(playerText).SingleLine()
 			if epTotal > 0 {
-				ui.Text(c, fmt.Sprintf("共 %d 集", epTotal)).FontSize(metaSize).TextColor(playerMutedText).SingleLine().ContentTransition(ctNumeric)
+				ui.Text(c, fmt.Sprintf("共 %d 集", epTotal)).FontSize(metaSize).FontFeatures("tnum").
+					TextColor(playerMutedText).SingleLine().ContentTransition(ctNumeric)
 			}
 		})
 		if playerIconButton(c, "panel-close", iconClose, 14, "收起选集", "收起选集 (Esc)", false, false).Size(closeSize, closeSize).Radius(8).Clicked() {
@@ -1558,7 +1591,8 @@ func (a *app) panelEpisodes(c *ui.Context, panelBounds ui.Rect, panelW, panelH, 
 				border = ui.RGBA(248, 113, 113, 0.45)
 				fg = ui.RGB(254, 202, 202)
 			}
-			ui.Column(c).FillWidth().Padding(7, 9).Gap(4).Radius(9).Background(bg).Border(1, border).Shrink(0).Children(func() {
+			ui.Column(c.Key("panel-choice-msg")).FillWidth().Padding(7, 9).Gap(4).Radius(9).
+				Background(bg).Border(1, border).Shrink(0).Transition(transInlineReveal).Children(func() {
 				ui.Text(c, choice.message).FontSize(11.5).TextColor(fg)
 				if playing := a.playingSourceSummary(); playing != "" {
 					statusPrefix := "仍在播放："
@@ -1632,7 +1666,7 @@ func (a *app) panelEpisodes(c *ui.Context, panelBounds ui.Rect, panelW, panelH, 
 								lblSize, cntSize = 11.5, 10
 							}
 							ui.Text(c, "线路").FontSize(lblSize).Bold().TextColor(ui.RGBA(222, 222, 228, 0.96)).SingleLine()
-							ui.Text(c, lineCount).FontSize(cntSize).TextColor(playerMutedText).SingleLine().ContentTransition(ctNumeric)
+							ui.Text(c, lineCount).FontSize(cntSize).FontFeatures("tnum").TextColor(playerMutedText).SingleLine().ContentTransition(ctNumeric)
 						})
 						ui.Box(c).Grow(1).MinWidth(0).Children(renderLineChips)
 					})
@@ -1689,7 +1723,7 @@ func (a *app) panelEpisodes(c *ui.Context, panelBounds ui.Rect, panelW, panelH, 
 					border = ui.RGBA(255, 255, 255, 0.20)
 					fg = playerText
 				}
-				btn.Background(btn.AnimateColor("ep-bg", bg, animColor)).Border(1, border)
+				animEpFg := animateButtonChrome(btn, "ep", bg, border, fg)
 				applyPressPose(btn)
 				innerW := max(float32(0), btn.Bounds().W-2*epPadX-2)
 				btn.Children(func() {
@@ -1698,7 +1732,7 @@ func (a *app) panelEpisodes(c *ui.Context, panelBounds ui.Rect, panelW, panelH, 
 						text:       epLabel,
 						fontSize:   epFontSize,
 						bold:       active,
-						color:      fg,
+						color:      animEpFg,
 						hovered:    hovered,
 						centered:   true,
 						fillHeight: true,
@@ -1882,7 +1916,8 @@ func (a *app) panelSources(c *ui.Context, candidates []library.Item, panelBounds
 			} else if srcHovered {
 				bg = ui.RGBA(255, 255, 255, 0.10)
 			}
-			srcBtn.Background(srcBtn.AnimateColor("psrc-bg", bg, animColor)).Border(1, border)
+			srcBtn.Background(srcBtn.AnimateColor("psrc-bg", bg, animColor)).
+				Border(1, srcBtn.AnimateColor("psrc-bd", border, animColor))
 			applyPressPose(srcBtn)
 			srcLabelW := max(float32(0), srcBounds.W-2*triggerPadX-2-8-14)
 			srcBtn.Children(func() {
@@ -1896,7 +1931,8 @@ func (a *app) panelSources(c *ui.Context, candidates []library.Item, panelBounds
 					fillHeight: true,
 					knownWidth: srcLabelW,
 				})
-				ui.Icon(c, iconChevronDown).Size(14, 14).TextColor(playerMutedText).PassThrough()
+				chev := ui.Icon(c.Key("psrc-chev"), iconChevronDown).Size(14, 14).TextColor(playerMutedText).PassThrough()
+				applyChevronPose(chev, a.playerPopovers.source)
 			})
 			menuW := srcBounds.W
 			if menuW <= 0 {
@@ -1947,7 +1983,8 @@ func (a *app) panelSources(c *ui.Context, candidates []library.Item, panelBounds
 						Radius(12).
 						Padding(5).
 						NoShadow().
-						Shadow(0, 10, 28, 0, ui.RGBA(0, 0, 0, 0.54))
+						Shadow(0, 10, 28, 0, ui.RGBA(0, 0, 0, 0.54)).
+						Transition(transPopoverDown)
 				},
 				Item: func(item ui.Element) {
 					item.Padding(8, 14, 8, 10).Radius(7)
@@ -1988,7 +2025,7 @@ func (a *app) panelSources(c *ui.Context, candidates []library.Item, panelBounds
 				}
 				ui.Text(c, "来源").FontSize(lblSize).Bold().TextColor(ui.RGBA(222, 222, 228, 0.96)).SingleLine()
 				if count != "" {
-					ui.Text(c, count).FontSize(cntSize).TextColor(playerMutedText).SingleLine().ContentTransition(ctNumeric)
+					ui.Text(c, count).FontSize(cntSize).FontFeatures("tnum").TextColor(playerMutedText).SingleLine().ContentTransition(ctNumeric)
 				}
 			})
 			ui.Box(c).Grow(1).MinWidth(0).Children(renderControl)
@@ -2034,7 +2071,7 @@ func (a *app) panelChannels(c *ui.Context, pad, panelContentH float32) {
 	} else {
 		ui.Row(c).FillWidth().Padding(0, pad).Gap(8).AlignItems(ui.Center).Shrink(0).Children(func() {
 			ui.Box(c).Grow(1).Children(func() {
-				ui.Segmented(c, &live.panelTab, "频道", "节目单").FillEqually().Label("直播面板")
+				slidingSegmented(c, "live-panel-tab", &live.panelTab, "频道", "节目单").FillWidth().Label("直播面板")
 			})
 			if playerIconButton(c, "panel-close", iconClose, 14, "收起面板", "收起面板 (Esc)", false, false).Size(closeSize, closeSize).Radius(8).Clicked() {
 				a.closeEpisodePanel()
@@ -2042,7 +2079,9 @@ func (a *app) panelChannels(c *ui.Context, pad, panelContentH float32) {
 		})
 	}
 	if live.panelTab == 1 && hasEPG {
-		a.panelChannelEPG(c, pad)
+		ui.Column(c.Key("live-panel-epg")).FillWidth().Grow(1).MinHeight(0).Transition(transTabPage).Children(func() {
+			a.panelChannelEPG(c, pad)
+		})
 		return
 	}
 	if len(live.state.favorites) == 0 && live.group == liveGroupFavorites {
@@ -2076,7 +2115,8 @@ func (a *app) panelChannels(c *ui.Context, pad, panelContentH float32) {
 			} else if hovered {
 				bg = ui.RGBA(255, 255, 255, 0.10)
 			}
-			btn.Background(btn.AnimateColor("pch-bg", bg, animColor)).Border(1, border)
+			btn.Background(btn.AnimateColor("pch-bg", bg, animColor)).
+				Border(1, btn.AnimateColor("pch-bd", border, animColor))
 			applyPressPose(btn)
 			btnBounds := btn.Bounds()
 			btn.Children(func() {
@@ -2447,7 +2487,7 @@ func (a *app) streamControls(c *ui.Context) {
 	btn.Background(btn.AnimateColor("stream-bg", bg, animColor))
 	applyPressPose(btn)
 	btn.Children(func() {
-		ui.Text(c, currentLabel).FontSize(12).TextColor(playerText).SingleLine().PassThrough()
+		ui.Text(c, currentLabel).FontSize(12).TextColor(playerText).SingleLine().ContentTransition(ctReplace).PassThrough()
 	})
 	btn.PopoverMenuButton(func(m *ui.Menu) {
 		for i, s := range a.playingStreams {
@@ -2486,20 +2526,21 @@ func (a *app) speedControls(c *ui.Context, p mediaPlayer) {
 	btn := ui.ButtonBase(c.Key("player-speed-btn")).Height(30).MinWidth(38).Padding(0, 8).Radius(8).Center().
 		Cursor(ui.CursorPointer).Label("播放速度").Tooltip("播放倍速 · 长按 → 键临时 2× 加速")
 	bg := ui.Transparent
+	border := ui.Transparent
 	fg := playerText
 	if custom {
 		bg = playerCoralSoft
+		border = playerCoralBorder
 		fg = ui.RGB(255, 168, 146)
-		btn.Border(1, playerCoralBorder)
 	} else if a.playerPopovers.speed {
 		bg = ui.RGBA(255, 255, 255, 0.14)
 	} else if btn.Hovered() {
 		bg = ui.RGBA(255, 255, 255, 0.12)
 	}
-	btn.Background(btn.AnimateColor("speed-bg", bg, animColor))
+	animFg := animateButtonChrome(btn, "speed", bg, border, fg)
 	applyPressPose(btn)
 	btn.Children(func() {
-		t := ui.Text(c, rateLabel).FontSize(12).TextColor(fg).SingleLine().ContentTransition(ctNumeric).PassThrough()
+		t := ui.Text(c, rateLabel).FontSize(12).FontFeatures("tnum").TextColor(animFg).SingleLine().ContentTransition(ctNumeric).PassThrough()
 		if custom {
 			t.Bold()
 		}
@@ -2510,7 +2551,7 @@ func (a *app) speedControls(c *ui.Context, p mediaPlayer) {
 	if a.playerPopovers.speed {
 		a.playerOverlay.keepVisible = true
 	}
-	ui.PopoverBase(c, btn, &a.playerPopovers.speed, func(panel ui.Element) {
+	keyedPopover(c, "pop-speed", btn, &a.playerPopovers.speed, func(panel ui.Element) {
 		stylePlayerPopoverPanel(panel, 240).
 			AttachTo(btn, ui.AnchorTopEnd, ui.AnchorBottomEnd).Margin(0, 0, a.popoverDockOffset(p), 0).AttachEdgeMargin(12)
 		ui.Text(c, "播放倍速").FontSize(13).Bold()
@@ -2606,16 +2647,24 @@ func (a *app) subtitleTrackControls(c *ui.Context, p mediaPlayer) {
 	btn.Background(btn.AnimateColor("sub-btn-bg", bg, animColor))
 	applyPressPose(btn)
 	btn.Children(func() {
-		badge := ui.Box(c).Size(22, 16).Radius(4).Center().PassThrough()
+		badgeBg := ui.Transparent
+		badgeBd := ui.RGBA(248, 249, 255, 0.65)
+		iconFg := ui.RGBA(248, 249, 255, 0.78)
 		if hasActive {
-			badge.Background(playerText).Children(func() {
-				ui.Icon(c, iconCCLetters).Size(15, 9).TextColor(playerInk).PassThrough()
-			})
-			ui.Box(c).Size(4, 4).Radius(2).Absolute().Bottom(2).Left(15).Background(playerCoral).PassThrough()
-		} else {
-			badge.Border(1.4, ui.RGBA(248, 249, 255, 0.65)).Children(func() {
-				ui.Icon(c, iconCCLetters).Size(15, 9).TextColor(ui.RGBA(248, 249, 255, 0.78)).PassThrough()
-			})
+			badgeBg = playerText
+			badgeBd = playerText
+			iconFg = playerInk
+		}
+		badge := ui.Box(c.Key("sub-cc-badge")).Size(22, 16).Radius(4).Center().PassThrough()
+		badge.Background(badge.AnimateColor("sub-cc-bg", badgeBg, animColor)).
+			Border(1.4, badge.AnimateColor("sub-cc-bd", badgeBd, animColor))
+		animCC := badge.AnimateColor("sub-cc-fg", iconFg, animColor)
+		badge.Children(func() {
+			ui.Icon(c, iconCCLetters).Size(15, 9).TextColor(animCC).PassThrough()
+		})
+		if hasActive {
+			ui.Box(c.Key("sub-cc-dot")).Size(4, 4).Radius(2).Absolute().Bottom(2).Left(15).
+				Background(playerCoral).Transition(transMicroBadge).PassThrough()
 		}
 	})
 	if btn.Clicked() {
@@ -2624,7 +2673,7 @@ func (a *app) subtitleTrackControls(c *ui.Context, p mediaPlayer) {
 	if a.playerPopovers.subtitle {
 		a.playerOverlay.keepVisible = true
 	}
-	ui.PopoverBase(c, btn, &a.playerPopovers.subtitle, func(panel ui.Element) {
+	keyedPopover(c, "pop-subtitle", btn, &a.playerPopovers.subtitle, func(panel ui.Element) {
 		stylePlayerPopoverPanel(panel, 288).
 			AttachTo(btn, ui.AnchorTopEnd, ui.AnchorBottomEnd).Margin(0, 0, a.popoverDockOffset(p), 0).AttachEdgeMargin(12)
 		ui.Text(c, "字幕").FontSize(14).Bold()
@@ -2646,20 +2695,22 @@ func (a *app) subtitleTrackControls(c *ui.Context, p mediaPlayer) {
 					row := ui.ButtonBase(c.Key(fmt.Sprintf("sub-pop-%d", tr.ID))).FillWidth().Padding(7, 10).Gap(8).
 						Radius(9).AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(label)
 					rowBg := ui.Transparent
+					rowBd := ui.Transparent
 					if selected {
 						rowBg = playerCoralSoft
-						row.Border(1, playerCoralBorder)
+						rowBd = playerCoralBorder
 					} else if row.Hovered() {
 						rowBg = ui.RGBA(255, 255, 255, 0.08)
 					}
-					row.Background(row.AnimateColor("sub-row-bg", rowBg, animColor))
+					row.Background(row.AnimateColor("sub-row-bg", rowBg, animColor)).
+						Border(1, row.AnimateColor("sub-row-bd", rowBd, animColor))
 					applyPressPose(row)
 					row.Children(func() {
 						dotColor := ui.Transparent
 						if selected {
 							dotColor = playerCoral
 						}
-						ui.Box(c).Size(6, 6).Radius(3).Background(dotColor).PassThrough()
+						ui.Box(c).Size(6, 6).Radius(3).Background(row.AnimateColor("sub-row-dot", dotColor, animColor)).PassThrough()
 						t := ui.Text(c, label).FontSize(12).TextColor(playerText).SingleLine().Grow(1).PassThrough()
 						if selected {
 							t.Bold()
@@ -2682,7 +2733,7 @@ func (a *app) subtitleTrackControls(c *ui.Context, p mediaPlayer) {
 					if playerPopoverSmallChip(c, "−0.5s", "字幕提前 0.5s", "字幕提前 0.5 秒 ([)").Clicked() {
 						a.adjustSubtitleDelay(p, -500*time.Millisecond)
 					}
-					ui.Text(c, formatSubtitleDelay(a.playerExtra.subDelay)).FontSize(11).TextColor(playerText).
+					ui.Text(c, formatSubtitleDelay(a.playerExtra.subDelay)).FontSize(11).FontFeatures("tnum").TextColor(playerText).
 						TextAlign(ui.Center).Grow(1).SingleLine().ContentTransition(ctNumeric)
 					if playerPopoverSmallChip(c, "+0.5s", "字幕推迟 0.5s", "字幕推迟 0.5 秒 (])").Clicked() {
 						a.adjustSubtitleDelay(p, 500*time.Millisecond)
@@ -2752,7 +2803,8 @@ func (a *app) livePlayerRightControls(c *ui.Context) {
 		lineBtn.Background(lineBtn.AnimateColor("line-bg", bg, animColor))
 		applyPressPose(lineBtn)
 		lineBtn.Children(func() {
-			ui.Text(c, chipText).FontSize(12).TextColor(playerText).SingleLine().PassThrough()
+			ui.Text(c, chipText).FontSize(12).FontFeatures("tnum").TextColor(playerText).
+				SingleLine().ContentTransition(ctNumeric).PassThrough()
 		})
 		if lineBtn.Clicked() {
 			a.playLiveChannel(live.playingChannel, (live.playingStream+1)%count)
@@ -2774,9 +2826,10 @@ func (a *app) livePlayerRightControls(c *ui.Context) {
 		favBg = ui.RGBA(255, 255, 255, 0.12)
 	}
 	favBtn.Background(favBtn.AnimateColor("fav-bg", favBg, animColor))
+	animStar := favBtn.AnimateColor("fav-ico", starColor, animColor)
 	applyPressPose(favBtn)
 	favBtn.Children(func() {
-		ui.Icon(c, starIcon).Size(17, 17).TextColor(starColor).PassThrough()
+		ui.Icon(c, starIcon).Size(17, 17).TextColor(animStar).ContentTransition(ctIcon).PassThrough()
 	})
 	if favBtn.Clicked() {
 		a.toggleLiveChannelFavorite(ch)

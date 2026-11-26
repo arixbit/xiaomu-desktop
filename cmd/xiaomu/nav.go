@@ -45,24 +45,31 @@ var librarySearchIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/20
 
 func glassButton(c *ui.Context, label string) ui.Element {
 	p := paletteFor(c)
-	btn := ui.Button(c, label).Radius(9).Padding(7, 14).TextColor(p.text)
+	btn := ui.Button(c, label).Radius(9).Padding(7, 14)
 	bg := p.controlBg
+	border := p.borderControl
 	if btn.Hovered() {
 		bg = p.controlHover
+		border = ui.RGBA(255, 255, 255, 0.20)
 	}
-	btn.Background(btn.AnimateColor("glass-bg", bg, animColor)).Border(1, p.borderControl)
+	btn.Background(btn.AnimateColor("glass-bg", bg, animColor)).
+		Border(1, btn.AnimateColor("glass-bd", border, animColor)).
+		TextColor(p.text)
 	return applyPressPose(btn)
 }
 
 func ghostButton(c *ui.Context, label string) ui.Element {
 	p := paletteFor(c)
-	btn := ui.Button(c, label).Radius(9).Padding(7, 13).TextColor(p.textMuted)
+	btn := ui.Button(c, label).Radius(9).Padding(7, 13)
 	bg := p.surfaceSubtle
+	border := p.border
+	fg := p.textMuted
 	if btn.Hovered() {
 		bg = p.surfaceHover
-		btn.TextColor(p.text)
+		border = p.borderControl
+		fg = p.text
 	}
-	btn.Background(btn.AnimateColor("ghost-bg", bg, animColor)).Border(1, p.border)
+	btn.TextColor(animateButtonChrome(btn, "ghost", bg, border, fg))
 	return applyPressPose(btn)
 }
 
@@ -198,59 +205,52 @@ func activeSidebarWidth(windowWidth float32) (width float32, rail bool) {
 }
 
 // shell is every page but the player: the adaptive backdrop, floating sidebar,
-// toolbar and the active page.
+// persistent page host (so routeDetail push/pop and toolbar-back never lose
+// continuity), and unified toolbar.
 func (a *app) shell(c *ui.Context) {
 	ui.Themed(c.Key("app-shell"), appDarkTheme(c)).Fill().Background(ui.Transparent).Children(func() {
 		p := paletteFor(c)
+		tb := a.toolbarLayout(c)
 		ui.Box(c).Fill().LinearGradient(p.backdrop).TextColor(p.text).Children(func() {
 			ui.Row(c).Fill().Padding(10).Gap(10).Children(func() {
 				a.sidebar(c)
-				if a.route() == routeDetail {
-					ui.Box(c).Grow(1).FillHeight().MinWidth(0).Clip().Children(func() {
-						rt := routeTransition(a.navDir)
-						pageHost := ui.Box(c).Fill()
-						if rt.Exit != nil {
-							pageHost.ChildExit(*rt.Exit)
+				ui.Box(c.Key("shell-main")).Grow(1).FillHeight().MinWidth(0).Clip().Children(func() {
+					rt := routeTransition(a.navDir)
+					pageHost := ui.Box(c.Key("page-host")).Fill().Clip()
+					if rt.Exit != nil {
+						pageHost.ChildExit(*rt.Exit)
+					}
+					pageHost.Children(func() {
+						route := a.route()
+						page := ui.Box(c.Key(route)).Fill().Transition(rt)
+						if route != routeDetail {
+							page.Padding(4+tb.height+14, 8, 8, 8)
 						}
-						pageHost.Children(func() {
-							ui.Box(c.Key(a.route())).Fill().Transition(rt).Children(func() {
+						page.Children(func() {
+							switch route {
+							case routeDetail:
 								a.detailView(c)
-							})
-						})
-						ui.Box(c).Absolute().Top(4).Left(8).Right(8).Children(func() {
-							a.toolbar(c)
-						})
-					})
-				} else {
-					ui.Column(c).Grow(1).FillHeight().MinWidth(0).Padding(4, 8, 8, 8).Gap(14).Children(func() {
-						a.toolbar(c)
-						rt := routeTransition(a.navDir)
-						pageHost := ui.Box(c).Grow(1).FillWidth().MinHeight(0)
-						if rt.Exit != nil {
-							pageHost.ChildExit(*rt.Exit)
-						}
-						pageHost.Children(func() {
-							ui.Box(c.Key(a.route())).Fill().Transition(rt).Children(func() {
-								switch a.route() {
-								case routeLive:
-									a.liveView(c)
-								case routeHistory:
-									a.historyView(c)
-								case routeFavorites:
-									a.favoritesView(c)
-								case routeSources:
-									a.sourcesView(c)
-								case routeSearch:
-									a.searchView(c)
-								case routeSite:
-									a.siteView(c)
-								default:
-									a.homeView(c)
-								}
-							})
+							case routeLive:
+								a.liveView(c)
+							case routeHistory:
+								a.historyView(c)
+							case routeFavorites:
+								a.favoritesView(c)
+							case routeSources:
+								a.sourcesView(c)
+							case routeSearch:
+								a.searchView(c)
+							case routeSite:
+								a.siteView(c)
+							default:
+								a.homeView(c)
+							}
 						})
 					})
-				}
+					ui.Box(c.Key("toolbar-host")).Absolute().Top(4).Left(8).Right(8).Children(func() {
+						a.toolbar(c, tb)
+					})
+				})
 			})
 			a.statusView(c)
 			a.importDialog(c)
@@ -277,8 +277,7 @@ func (a *app) sidebar(c *ui.Context) {
 	if shortWin {
 		gap = 2
 	}
-	side := ui.Column(c.Key("sidebar")).Width(sideW).FillHeight().Radius(18).Padding(top, padX, 10, padX).Gap(gap).
-		Transition(ui.ElementTransition{Animation: &animSurface, Width: true})
+	side := ui.Column(c.Key("sidebar")).Width(sideW).FillHeight().Radius(18).Padding(top, padX, 10, padX).Gap(gap)
 	if p.reduceTransparency {
 		side.Background(p.sidebarBg).Border(1, p.sidebarBorder)
 	} else if p.highContrast {
@@ -378,21 +377,22 @@ func sidebarUtilityTabRow(c *ui.Context, kind routeKind, label string, selected 
 	row := ui.Row(c.Key(label)).FillWidth().Height(34).Padding(0, 12).Gap(10).Radius(8).
 		AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(label)
 	targetBg := ui.Transparent
+	targetBorder := ui.Transparent
 	targetFg := p.textMuted
 	if selected {
 		targetBg = p.surfaceSelected
+		targetBorder = p.border
 		targetFg = p.text
-		row.Border(1, p.border)
 	} else if row.Hovered() {
 		targetBg = p.surfaceHover
 		targetFg = p.text
 	}
-	row.Background(row.AnimateColor("side-util-bg", targetBg, animColor))
+	fg := animateButtonChrome(row, "side-util", targetBg, targetBorder, targetFg)
 	applyPressPose(row)
-	fg := row.AnimateColor("side-util-fg", targetFg, animColor)
 	row.Children(func() {
 		if selected {
-			ui.Box(c).Absolute().Left(0).Top(8).Bottom(8).Width(3).Radius(2).Background(p.accent).PassThrough()
+			ui.Box(c.Key("sidebar-ind-util")).Absolute().Left(0).Top(8).Bottom(8).Width(3).Radius(2).
+				Background(p.accent).Transition(transMatchIndicator(sidebarIndicatorMatch{rail: false}, true)).PassThrough()
 		}
 		ui.Icon(c, tabIcon(kind)).Size(16, 16).TextColor(fg).PassThrough()
 		text := ui.Text(c, label).FontSize(13).SingleLine().TextColor(fg).Grow(1)
@@ -414,10 +414,11 @@ func sidebarActionButton(c *ui.Context, icon *ui.SVG, label, tooltip string) ui.
 		fg = p.text
 	}
 	btn.Background(btn.AnimateColor("side-act-bg", bg, animColor))
+	animFg := btn.AnimateColor("side-act-fg", fg, animColor)
 	applyPressPose(btn)
 	btn.Children(func() {
-		ui.Icon(c, icon).Size(16, 16).TextColor(fg).PassThrough()
-		ui.Text(c, label).FontSize(13).TextColor(fg).SingleLine().PassThrough()
+		ui.Icon(c, icon).Size(16, 16).TextColor(animFg).PassThrough()
+		ui.Text(c, label).FontSize(13).TextColor(animFg).SingleLine().PassThrough()
 	})
 	return btn
 }
@@ -430,21 +431,22 @@ func navTabRow(c *ui.Context, kind routeKind, label string, selected, hasBadge b
 		row.Tooltip("追剧有新集更新")
 	}
 	targetBg := ui.Transparent
+	targetBorder := ui.Transparent
 	targetFg := p.textMuted
 	if selected {
 		targetBg = p.surfaceSelected
+		targetBorder = p.border
 		targetFg = p.text
-		row.Border(1, p.border)
 	} else if row.Hovered() {
 		targetBg = p.surfaceHover
 		targetFg = p.text
 	}
-	row.Background(row.AnimateColor("row-bg", targetBg, animColor))
+	fg := animateButtonChrome(row, "row", targetBg, targetBorder, targetFg)
 	applyPressPose(row)
-	fg := row.AnimateColor("row-fg", targetFg, animColor)
 	row.Children(func() {
 		if selected {
-			ui.Box(c).Absolute().Left(0).Top(9).Bottom(9).Width(3).Radius(2).Background(p.accent).PassThrough()
+			ui.Box(c.Key("sidebar-ind-"+label)).Absolute().Left(0).Top(9).Bottom(9).Width(3).Radius(2).
+				Background(p.accent).Transition(transMatchIndicator(sidebarIndicatorMatch{rail: false}, true)).PassThrough()
 		}
 		ui.Icon(c, tabIcon(kind)).Size(16, 16).TextColor(fg).PassThrough()
 		text := ui.Text(c, label).FontSize(13.5).SingleLine().TextColor(fg).Grow(1)
@@ -452,7 +454,8 @@ func navTabRow(c *ui.Context, kind routeKind, label string, selected, hasBadge b
 			text.Bold()
 		}
 		if hasBadge {
-			ui.Box(c).Size(7, 7).Radius(4).Background(p.accent).Label("追剧有新集").PassThrough()
+			ui.Box(c.Key("nav-follow-badge")).Size(7, 7).Radius(4).Background(p.accent).
+				Label("追剧有新集").Transition(transMicroBadge).PassThrough()
 		}
 	})
 	return row
@@ -467,25 +470,27 @@ func railNavButton(c *ui.Context, kind routeKind, label string, selected, hasBad
 	row := ui.Row(c.Key("rail-" + label)).FillWidth().Height(height).Radius(12).
 		Center().Cursor(ui.CursorPointer).Label(label).Tooltip(tip)
 	targetBg := ui.Transparent
+	targetBorder := ui.Transparent
 	targetFg := p.textMuted
 	if selected {
 		targetBg = p.surfaceSelected
+		targetBorder = p.border
 		targetFg = p.text
-		row.Border(1, p.border)
 	} else if row.Hovered() {
 		targetBg = p.surfaceHover
 		targetFg = p.text
 	}
-	row.Background(row.AnimateColor("rail-bg", targetBg, animColor))
+	fg := animateButtonChrome(row, "rail", targetBg, targetBorder, targetFg)
 	applyPressPose(row)
-	fg := row.AnimateColor("rail-fg", targetFg, animColor)
 	row.Children(func() {
 		if selected {
-			ui.Box(c).Absolute().Left(0).Top(8).Bottom(8).Width(3).Radius(2).Background(p.accent).PassThrough()
+			ui.Box(c.Key("rail-ind-"+label)).Absolute().Left(0).Top(8).Bottom(8).Width(3).Radius(2).
+				Background(p.accent).Transition(transMatchIndicator(sidebarIndicatorMatch{rail: true}, true)).PassThrough()
 		}
 		ui.Icon(c, tabIcon(kind)).Size(19, 19).TextColor(fg).PassThrough()
 		if hasBadge {
-			ui.Box(c).Size(7, 7).Radius(4).Absolute().Right(10).Top(8).Background(p.accent).Label("追剧有新集").PassThrough()
+			ui.Box(c.Key("rail-follow-badge")).Size(7, 7).Radius(4).Absolute().Right(10).Top(8).
+				Background(p.accent).Label("追剧有新集").Transition(transMicroBadge).PassThrough()
 		}
 	})
 	return row
@@ -505,14 +510,23 @@ func railIconButton(c *ui.Context, icon *ui.SVG, label, tooltip string, height f
 		fg = p.text
 	}
 	btn.Background(btn.AnimateColor("rail-btn-bg", bg, animColor))
+	animFg := btn.AnimateColor("rail-btn-fg", fg, animColor)
 	applyPressPose(btn)
 	btn.Children(func() {
-		ui.Icon(c, icon).Size(17, 17).TextColor(fg).PassThrough()
+		ui.Icon(c, icon).Size(17, 17).TextColor(animFg).PassThrough()
 	})
 	return btn
 }
 
-func (a *app) toolbar(c *ui.Context) {
+type toolbarMetrics struct {
+	height      float32
+	navWidth    float32
+	searchTop   float32
+	searchLeft  float32
+	searchWidth float32
+}
+
+func (a *app) toolbarLayout(c *ui.Context) toolbarMetrics {
 	width, _ := c.Size()
 	sideW, _ := activeSidebarWidth(width)
 	// Match shell's outer padding, sidebar, gap and content padding.
@@ -520,22 +534,31 @@ func (a *app) toolbar(c *ui.Context) {
 	// Equal space on either side keeps search centered as back appears.
 	searchWidth := min(float32(560), contentWidth-2*192)
 	compact := searchWidth < 280
-	height, searchTop, searchLeft := float32(44), float32(2), (contentWidth-searchWidth)/2
-	navWidth := contentWidth
+	m := toolbarMetrics{
+		height:      44,
+		navWidth:    contentWidth,
+		searchTop:   2,
+		searchLeft:  (contentWidth - searchWidth) / 2,
+		searchWidth: searchWidth,
+	}
 	if a.library.root != nil {
 		if compact {
-			height, searchTop, searchLeft, searchWidth = 92, 52, 0, contentWidth
+			m.height, m.searchTop, m.searchLeft, m.searchWidth = 92, 52, 0, contentWidth
 		} else {
-			navWidth = searchLeft - 12
+			m.navWidth = m.searchLeft - 12
 		}
 	}
-	ui.Box(c).Key("toolbar").FillWidth().Height(height).Children(func() {
+	return m
+}
+
+func (a *app) toolbar(c *ui.Context, m toolbarMetrics) {
+	ui.Box(c).Key("toolbar").FillWidth().Height(m.height).Children(func() {
 		bar := ui.Row(c).FillWidth().Height(44).AlignItems(ui.Center)
 		if dragStripHeight(c) > 0 {
 			bar.DragWindow().Label("拖动窗口")
 		}
 		bar.Children(func() {
-			ui.Row(c).Width(navWidth).MinWidth(0).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Width(m.navWidth).MinWidth(0).Gap(10).AlignItems(ui.Center).Children(func() {
 				if len(a.nav) > 1 {
 					p := paletteFor(c)
 					backBtn := glassButton(c.Key("toolbar-back"), "").Size(34, 34).Radius(9).Padding(0).Center().
@@ -556,7 +579,7 @@ func (a *app) toolbar(c *ui.Context) {
 		if a.library.root != nil {
 			// Keep the same parent at both sizes so editing and the popup
 			// survive resizing. Input sits above the draggable toolbar.
-			a.librarySearch(c).Absolute().Top(searchTop).Left(searchLeft).Width(searchWidth)
+			a.librarySearch(c).Absolute().Top(m.searchTop).Left(m.searchLeft).Width(m.searchWidth)
 		}
 	})
 }
@@ -582,8 +605,16 @@ func (a *app) librarySearch(c *ui.Context) ui.Element {
 	return ui.Box(c).Key("library-search").Height(40).Children(func() {
 		field := ui.Autocomplete(c, &a.browser.query, a.searchSuggestions()).Label("片名").Placeholder("搜索整个片库").
 			Fill().Padding(0, 54, 0, 38).FontSize(14).Radius(11).
-			Border(1, p.borderControl).
 			FocusBind(&a.searchFocused, true).Bind(&a.searchFocus)
+		borderTarget := p.borderControl
+		iconTarget := p.textMuted
+		if a.searchFocused {
+			borderTarget = p.accentBorder
+			iconTarget = p.text
+		} else if field.Hovered() {
+			borderTarget = ui.RGBA(255, 255, 255, 0.22)
+		}
+		field.Border(1, field.AnimateColor("search-bd", borderTarget, animColor))
 		if p.reduceTransparency {
 			field.Background(p.surface)
 		} else {
@@ -595,11 +626,18 @@ func (a *app) librarySearch(c *ui.Context) ui.Element {
 		if field.Submitted() {
 			a.searchLibrary()
 		}
-		ui.Icon(c, librarySearchIcon).Size(16, 16).Absolute().Left(13).Top(12).TextColor(p.textMuted).PassThrough()
+		ui.Icon(c, librarySearchIcon).Size(16, 16).Absolute().Left(13).Top(12).
+			TextColor(field.AnimateColor("search-ico", iconTarget, animColor)).PassThrough()
 		if a.browser.query != "" {
 			clearBtn := ui.Button(c.Key("clear-search"), "×").Label("清空搜索").Tooltip("清空搜索").
 				Absolute().Right(9).Top(9).Size(22, 22).Radius(6).Padding(0).FontSize(14).
-				Background(p.surfaceSubtle).TextColor(p.textMuted)
+				Transition(transMicroBadge)
+			cBg, cFg := p.surfaceSubtle, p.textMuted
+			if clearBtn.Hovered() {
+				cBg, cFg = p.surfaceHover, p.text
+			}
+			clearBtn.Background(clearBtn.AnimateColor("clr-bg", cBg, animColor)).
+				TextColor(clearBtn.AnimateColor("clr-fg", cFg, animColor))
 			applyPressPose(clearBtn)
 			if clearBtn.Clicked() {
 				a.browser.query = ""
@@ -607,7 +645,8 @@ func (a *app) librarySearch(c *ui.Context) ui.Element {
 				a.searchFocused = true
 			}
 		} else if !a.searchFocused {
-			ui.Text(c, searchShortcutHint()).FontSize(11).TextColor(p.textFaint).Absolute().Right(13).Top(12).PassThrough()
+			ui.Text(c.Key("search-shortcut-hint"), searchShortcutHint()).FontSize(11).TextColor(p.textFaint).
+				Absolute().Right(13).Top(12).Transition(transMicroBadge).PassThrough()
 		}
 	})
 }
@@ -653,10 +692,11 @@ func (a *app) statusView(c *ui.Context) {
 func (a *app) linkDialog(c *ui.Context) {
 	p := paletteFor(c)
 	_, winH := c.Size()
-	ui.DialogBase(c, &a.linkOpen, func(backdrop, panel ui.Element) {
+	keyedDialog(c, "dlg-link", &a.linkOpen, func(backdrop, panel ui.Element) {
 		backdrop.Background(p.dialogScrim).Transition(transDialogScrim)
-		panel.Width(520).MaxWidth(520).MaxHeight(max(float32(260), winH-32)).Padding(24).Gap(12).Radius(26).TextColor(p.text).Transition(transDialogPanel)
+		panel.Width(520).MaxWidth(520).MaxHeight(max(float32(260), winH-32)).Padding(24).Gap(12).Radius(26).TextColor(p.text)
 		applyPane(panel, p, p.dialogMat)
+		applyDialogPanelPose(c, panel)
 		ui.Text(c, "打开链接").FontSize(24).Bold()
 		hint := "粘贴视频直链（mp4 / m3u8）或夸克、UC、阿里云盘、百度网盘分享链接"
 		if mpvBackendSupported() || a.openMPV != nil {
@@ -674,7 +714,7 @@ func (a *app) linkDialog(c *ui.Context) {
 				})
 			})
 			if a.linkErr != "" {
-				ui.Text(c, a.linkErr).FontSize(13).TextColor(p.warning)
+				ui.Text(c.Key("link-err"), a.linkErr).FontSize(13).TextColor(p.warning).Transition(transInlineBanner)
 			}
 		})
 		ui.Row(c).FillWidth().Gap(8).Justify(ui.End).Children(func() {

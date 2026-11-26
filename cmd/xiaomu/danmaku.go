@@ -582,21 +582,35 @@ func (a *app) danmakuButton(c *ui.Context) {
 	btn.Background(btn.AnimateColor("dm-btn-bg", bg, animColor))
 	applyPressPose(btn)
 	btn.Children(func() {
-		badge := ui.Box(c).Size(22, 17).Radius(4.5).Center().PassThrough()
+		fill := playerCoral
+		if a.danmaku.failed {
+			fill = ui.RGBA(245, 158, 11, 0.88)
+		}
+		badgeBg := ui.Transparent
+		badgeBd := ui.RGBA(248, 249, 255, 0.52)
+		txtFg := ui.RGBA(248, 249, 255, 0.62)
 		if enabled {
-			fill := playerCoral
-			if a.danmaku.failed {
-				fill = ui.RGBA(245, 158, 11, 0.88)
+			badgeBg = fill
+			badgeBd = fill
+			txtFg = ui.RGB(255, 255, 255)
+		}
+		badge := ui.Box(c.Key("dm-badge")).Size(22, 17).Radius(4.5).Center().PassThrough()
+		badge.Background(badge.AnimateColor("dm-b-bg", badgeBg, animColor)).
+			Border(1.4, badge.AnimateColor("dm-b-bd", badgeBd, animColor))
+		animTxt := badge.AnimateColor("dm-b-fg", txtFg, animColor)
+		badge.Children(func() {
+			t := ui.Text(c, "弹").FontSize(11).TextColor(animTxt).SingleLine().PassThrough()
+			if enabled {
+				t.Bold()
 			}
-			badge.Background(fill).Children(func() {
-				ui.Text(c, "弹").FontSize(11).Bold().TextColor(ui.RGB(255, 255, 255)).SingleLine().PassThrough()
-			})
-			ui.Box(c).Size(4, 4).Radius(2).Absolute().Bottom(2).Left(15).Background(fill).PassThrough()
-		} else {
-			badge.Border(1.4, ui.RGBA(248, 249, 255, 0.52)).Children(func() {
-				ui.Text(c, "弹").FontSize(11).TextColor(ui.RGBA(248, 249, 255, 0.62)).SingleLine().PassThrough()
-				ui.Icon(c, iconDanmakuSlash).Absolute().Fill().TextColor(ui.RGBA(248, 249, 255, 0.72)).PassThrough()
-			})
+			if !enabled {
+				ui.Icon(c.Key("dm-slash"), iconDanmakuSlash).Absolute().Fill().
+					TextColor(ui.RGBA(248, 249, 255, 0.72)).Transition(transMicroBadge).PassThrough()
+			}
+		})
+		if enabled {
+			ui.Box(c.Key("dm-dot")).Size(4, 4).Radius(2).Absolute().Bottom(2).Left(15).
+				Background(btn.AnimateColor("dm-dot-bg", fill, animColor)).Transition(transMicroBadge).PassThrough()
 		}
 	})
 	if btn.RightClicked() {
@@ -623,14 +637,16 @@ func danmakuPopoverChip(c *ui.Context, label, a11yLabel string, active bool) ui.
 		fg = ui.RGB(255, 168, 146)
 	}
 	btn := ui.ButtonBase(c.Key("dm-pop-chip-"+a11yLabel)).Padding(4, 7).Radius(12).Center().
-		Cursor(ui.CursorPointer).Label(a11yLabel).Border(1, border)
+		Cursor(ui.CursorPointer).Label(a11yLabel)
 	if !active && btn.Hovered() {
 		bg = ui.RGBA(255, 255, 255, 0.14)
+		border = ui.RGBA(255, 255, 255, 0.20)
+		fg = playerText
 	}
-	btn.Background(btn.AnimateColor("dm-chip-bg", bg, animColor))
+	animFg := animateButtonChrome(btn, "dm-chip", bg, border, fg)
 	applyPressPose(btn)
 	btn.Children(func() {
-		ui.Text(c, label).FontSize(11).TextColor(fg).SingleLine().PassThrough()
+		ui.Text(c, label).FontSize(11).TextColor(animFg).SingleLine().PassThrough()
 	})
 	return btn
 }
@@ -639,7 +655,7 @@ func (a *app) danmakuPopover(c *ui.Context, anchor ui.Element) {
 	if a.playerPopovers.danmaku {
 		a.playerOverlay.keepVisible = true
 	}
-	ui.PopoverBase(c, anchor, &a.playerPopovers.danmaku, func(panel ui.Element) {
+	keyedPopover(c, "pop-danmaku", anchor, &a.playerPopovers.danmaku, func(panel ui.Element) {
 		a.ensurePreferences()
 		s := &a.danmaku
 		dp := &a.preferences.Danmaku
@@ -701,21 +717,21 @@ func (a *app) danmakuPopover(c *ui.Context, anchor ui.Element) {
 				if ui.Slider(c, &dp.Opacity, 0.1, 1).Label("弹幕不透明度").Grow(1).Changed() {
 					a.savePreferences()
 				}
-				ui.Text(c, fmt.Sprintf("%.0f%%", dp.Opacity*100)).FontSize(11).Width(36).TextAlign(ui.End).TextColor(playerMutedText).ContentTransition(ctNumeric)
+				ui.Text(c, fmt.Sprintf("%.0f%%", dp.Opacity*100)).FontSize(11).FontFeatures("tnum").Width(36).TextAlign(ui.End).TextColor(playerMutedText).ContentTransition(ctNumeric)
 			})
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "字号").FontSize(12).TextColor(playerMutedText).Width(54)
 				if ui.Slider(c, &dp.Size, 14, 36).Label("弹幕字号").Grow(1).Changed() {
 					a.savePreferences()
 				}
-				ui.Text(c, strconv.Itoa(int(math.Round(dp.Size)))+" pt").FontSize(11).Width(36).TextAlign(ui.End).TextColor(playerMutedText).ContentTransition(ctNumeric)
+				ui.Text(c, strconv.Itoa(int(math.Round(dp.Size)))+" pt").FontSize(11).FontFeatures("tnum").Width(36).TextAlign(ui.End).TextColor(playerMutedText).ContentTransition(ctNumeric)
 			})
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "显示区域").FontSize(12).TextColor(playerMutedText).Width(54)
 				if ui.Slider(c, &dp.Area, 0.25, 1).Label("弹幕显示区域").Grow(1).Changed() {
 					a.savePreferences()
 				}
-				ui.Text(c, fmt.Sprintf("%.0f%%", dp.Area*100)).FontSize(11).Width(36).TextAlign(ui.End).TextColor(playerMutedText).ContentTransition(ctNumeric)
+				ui.Text(c, fmt.Sprintf("%.0f%%", dp.Area*100)).FontSize(11).FontFeatures("tnum").Width(36).TextAlign(ui.End).TextColor(playerMutedText).ContentTransition(ctNumeric)
 			})
 
 			// Density segmented
@@ -730,7 +746,7 @@ func (a *app) danmakuPopover(c *ui.Context, anchor ui.Element) {
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "密度").FontSize(12).TextColor(playerMutedText).Width(54)
 				ui.Box(c).Grow(1).Children(func() {
-					if ui.Segmented(c, &densityIndex, "稀疏", "适中", "密集").FillEqually().Label("弹幕密度").Changed() {
+					if slidingSegmented(c, "danmaku-density", &densityIndex, "稀疏", "适中", "密集").FillWidth().Label("弹幕密度").Changed() {
 						switch densityIndex {
 						case 0:
 							dp.Density = "low"
@@ -784,7 +800,8 @@ func (a *app) danmakuPopover(c *ui.Context, anchor ui.Element) {
 						s.offset = clampDanmakuOffset(s.offset + step.delta)
 					}
 				}
-				ui.Text(c, formatDanmakuOffset(s.offset)).FontSize(11).TextColor(playerText).TextAlign(ui.Center).Grow(1).SingleLine().ContentTransition(ctNumeric)
+				ui.Text(c, formatDanmakuOffset(s.offset)).FontSize(11).FontFeatures("tnum").TextColor(playerText).
+					TextAlign(ui.Center).Grow(1).SingleLine().ContentTransition(ctNumeric)
 				for _, step := range []struct {
 					label string
 					a11y  string
@@ -840,90 +857,96 @@ func danmakuEpisodeButton(c *ui.Context, label string, selected bool) ui.Element
 
 func (a *app) danmakuDialog(c *ui.Context) {
 	s := &a.danmaku
-	if !s.open {
-		return
-	}
-	ui.Themed(c, appDarkTheme(c)).Absolute().Left(0).Right(0).Top(0).Bottom(0).
-		Background(ui.Transparent).PassThrough().Children(func() {
-		p := paletteFor(c)
-		ui.DialogBase(c, &s.open, func(backdrop, panel ui.Element) {
-			// Translucent scrim lets viewers preview live danmaku behind the sheet while adjusting sliders.
-			backdrop.Background(ui.RGBA(2, 8, 22, 0.24)).Transition(transDialogScrim)
-			_, height := c.Size()
-			panel.Width(548).MaxWidth(548).Height(min(float32(720), height-32)).
-				Padding(18, 8, 16, 20).Gap(10).Radius(24).
-				Material(glass.Glass{Style: glass.Regular, Tint: ui.RGBA(18, 22, 38, 0.84)}).
-				TextColor(playerText).Transition(transDialogPanel)
-			ui.Row(c).FillWidth().Padding(0, 16, 0, 0).Gap(10).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "弹幕设置").FontSize(20).Bold().Grow(1)
-				ui.Text(c, "按 D 键可快捷开关").FontSize(12).TextColor(p.textMuted)
-			})
-			ui.Scroll(c).Label("弹幕设置内容").FillWidth().Grow(1).MinHeight(0).
-				Padding(4, 16, 4, 0).Gap(10).
-				ScrollbarStyle(danmakuScrollbar).ScrollbarInsets(4, 0, 4, 0).
-				Children(func() {
-					danmakuSection(c, func() {
-						ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, "显示弹幕").Grow(1)
-							if ui.Switch(c, &a.preferences.Danmaku.Enabled).Label("弹幕开关").Changed() {
-								a.applyDanmakuEnabled()
-								a.savePreferences()
-							}
-						})
-						a.danmakuStatusRow(c)
-						ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, "字号").Width(64)
-							if ui.Slider(c, &a.preferences.Danmaku.Size, 14, 36).Label("弹幕字号").Grow(1).Changed() {
-								a.savePreferences()
-							}
-							ui.Text(c, strconv.Itoa(int(math.Round(a.preferences.Danmaku.Size)))+" pt").Width(46).TextAlign(ui.End).TextColor(p.textMuted).ContentTransition(ctNumeric)
-						})
-						ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, "不透明度").Width(64)
-							if ui.Slider(c, &a.preferences.Danmaku.Opacity, 0.1, 1).Label("弹幕不透明度").Grow(1).Changed() {
-								a.savePreferences()
-							}
-							ui.Text(c, fmt.Sprintf("%.0f%%", a.preferences.Danmaku.Opacity*100)).Width(46).TextAlign(ui.End).TextColor(p.textMuted).ContentTransition(ctNumeric)
-						})
-						ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, "滚动速度").Width(64)
-							if ui.Slider(c, &a.preferences.Danmaku.Speed, 0.25, 1.5).Label("弹幕滚动速度").Grow(1).Changed() {
-								a.savePreferences()
-							}
-							ui.Text(c, fmt.Sprintf("%.2f×", a.preferences.Danmaku.Speed)).Width(46).TextAlign(ui.End).TextColor(p.textMuted).ContentTransition(ctNumeric)
-						})
-						ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, "显示区域").Width(64)
-							if ui.Slider(c, &a.preferences.Danmaku.Area, 0.25, 1).Label("弹幕显示区域").Grow(1).Changed() {
-								a.savePreferences()
-							}
-							ui.Text(c, fmt.Sprintf("%.0f%%", a.preferences.Danmaku.Area*100)).Width(46).TextAlign(ui.End).TextColor(p.textMuted).ContentTransition(ctNumeric)
-						})
-						a.danmakuOffsetControls(c)
-					})
-					danmakuSection(c, func() {
-						a.danmakuSearchControls(c)
-						a.danmakuEpisodeResults(c, height)
-						advPrefix := "▸ "
-						if s.advanced {
-							advPrefix = "▾ "
-						}
-						if glassButton(c, advPrefix+"服务设置（可选）").Label("服务设置（可选）").FillWidth().Clicked() {
-							s.advanced = !s.advanced
-						}
-						if s.advanced {
-							a.manualDanmaku(c)
+	p := paletteFor(c)
+	keyedDialog(c, "dlg-danmaku", &s.open, func(backdrop, panel ui.Element) {
+		// Translucent scrim lets viewers preview live danmaku behind the sheet while adjusting sliders.
+		backdrop.Background(ui.RGBA(2, 8, 22, 0.24)).Transition(transDialogScrim)
+		_, height := c.Size()
+		panel.Width(548).MaxWidth(548).Height(min(float32(720), height-32)).
+			Padding(18, 8, 16, 20).Gap(10).Radius(24).
+			Material(glass.Glass{Style: glass.Regular, Tint: ui.RGBA(18, 22, 38, 0.84)}).
+			TextColor(playerText)
+		applyDialogPanelPose(c, panel)
+		ui.Row(c).FillWidth().Padding(0, 16, 0, 0).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "弹幕设置").FontSize(20).Bold().Grow(1)
+			ui.Text(c, "按 D 键可快捷开关").FontSize(12).TextColor(p.textMuted)
+		})
+		ui.Scroll(c).Label("弹幕设置内容").FillWidth().Grow(1).MinHeight(0).
+			Padding(4, 16, 4, 0).Gap(10).
+			ScrollbarStyle(danmakuScrollbar).ScrollbarInsets(4, 0, 4, 0).
+			Children(func() {
+				danmakuSection(c, func() {
+					ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "显示弹幕").Grow(1)
+						if ui.Switch(c, &a.preferences.Danmaku.Enabled).Label("弹幕开关").Changed() {
+							a.applyDanmakuEnabled()
+							a.savePreferences()
 						}
 					})
-					danmakuSection(c, func() {
-						a.danmakuFilterControls(c)
+					a.danmakuStatusRow(c)
+					ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "字号").Width(64)
+						if ui.Slider(c, &a.preferences.Danmaku.Size, 14, 36).Label("弹幕字号").Grow(1).Changed() {
+							a.savePreferences()
+						}
+						ui.Text(c, strconv.Itoa(int(math.Round(a.preferences.Danmaku.Size)))+" pt").Width(46).FontFeatures("tnum").TextAlign(ui.End).TextColor(p.textMuted).ContentTransition(ctNumeric)
 					})
+					ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "不透明度").Width(64)
+						if ui.Slider(c, &a.preferences.Danmaku.Opacity, 0.1, 1).Label("弹幕不透明度").Grow(1).Changed() {
+							a.savePreferences()
+						}
+						ui.Text(c, fmt.Sprintf("%.0f%%", a.preferences.Danmaku.Opacity*100)).Width(46).FontFeatures("tnum").TextAlign(ui.End).TextColor(p.textMuted).ContentTransition(ctNumeric)
+					})
+					ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "滚动速度").Width(64)
+						if ui.Slider(c, &a.preferences.Danmaku.Speed, 0.25, 1.5).Label("弹幕滚动速度").Grow(1).Changed() {
+							a.savePreferences()
+						}
+						ui.Text(c, fmt.Sprintf("%.2f×", a.preferences.Danmaku.Speed)).Width(46).FontFeatures("tnum").TextAlign(ui.End).TextColor(p.textMuted).ContentTransition(ctNumeric)
+					})
+					ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "显示区域").Width(64)
+						if ui.Slider(c, &a.preferences.Danmaku.Area, 0.25, 1).Label("弹幕显示区域").Grow(1).Changed() {
+							a.savePreferences()
+						}
+						ui.Text(c, fmt.Sprintf("%.0f%%", a.preferences.Danmaku.Area*100)).Width(46).FontFeatures("tnum").TextAlign(ui.End).TextColor(p.textMuted).ContentTransition(ctNumeric)
+					})
+					a.danmakuOffsetControls(c)
 				})
-			ui.Row(c).FillWidth().Padding(0, 16, 0, 0).Justify(ui.End).Children(func() {
-				if glassButton(c, "完成").Clicked() {
-					s.open = false
-				}
+				danmakuSection(c, func() {
+					a.danmakuSearchControls(c)
+					a.danmakuEpisodeResults(c, height)
+					advBtn := ui.ButtonBase(c.Key("danmaku-advanced-toggle")).FillWidth().Padding(4, 2).Gap(6).
+						AlignItems(ui.Center).Cursor(ui.CursorPointer).Label("服务设置（可选）")
+					advFgTarget := p.textMuted
+					if s.advanced || advBtn.Hovered() {
+						advFgTarget = playerText
+					}
+					advFg := advBtn.AnimateColor("dm-adv-fg", advFgTarget, animColor)
+					applyPressPose(advBtn)
+					advBtn.Children(func() {
+						chev := ui.Icon(c.Key("dm-adv-chev"), iconChevronDown).Size(12, 12).TextColor(advFg).PassThrough()
+						applyChevronPose(chev, s.advanced)
+						ui.Text(c, "服务设置（可选）").FontSize(12.5).TextColor(advFg).SingleLine().PassThrough()
+					})
+					if advBtn.Clicked() {
+						s.advanced = !s.advanced
+					}
+					if s.advanced {
+						ui.Column(c.Key("danmaku-advanced-body")).FillWidth().Gap(8).Transition(transInlineReveal).Children(func() {
+							a.manualDanmaku(c)
+						})
+					}
+				})
+				danmakuSection(c, func() {
+					a.danmakuFilterControls(c)
+				})
 			})
+		ui.Row(c).FillWidth().Padding(0, 16, 0, 0).Justify(ui.End).Children(func() {
+			if glassButton(c, "完成").Clicked() {
+				s.open = false
+			}
 		})
 	})
 }
@@ -1022,7 +1045,8 @@ func (a *app) danmakuOffsetControls(c *ui.Context) {
 				s.offset = clampDanmakuOffset(s.offset + step.delta)
 			}
 		}
-		ui.Text(c, formatDanmakuOffset(s.offset)).FontSize(12).TextColor(paletteFor(c).textMuted).TextAlign(ui.End).Grow(1).ContentTransition(ctNumeric)
+		ui.Text(c, formatDanmakuOffset(s.offset)).FontSize(12).FontFeatures("tnum").TextColor(paletteFor(c).textMuted).
+			TextAlign(ui.End).Grow(1).ContentTransition(ctNumeric)
 		if glassButton(c, "重置").Label("重置弹幕时间偏移").Padding(5, 9).Disabled(s.offset == 0).Clicked() {
 			s.offset = 0
 		}
@@ -1051,7 +1075,7 @@ func (a *app) danmakuFilterControls(c *ui.Context) {
 	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "密度").Width(64)
 		ui.Box(c).Grow(1).Children(func() {
-			if ui.Segmented(c, &densityIndex, "稀疏", "适中", "密集").FillEqually().Label("弹幕密度").Changed() {
+			if slidingSegmented(c, "danmaku-dialog-density", &densityIndex, "稀疏", "适中", "密集").FillWidth().Label("弹幕密度").Changed() {
 				switch densityIndex {
 				case 0:
 					p.Density = "low"

@@ -714,22 +714,6 @@ func (s *libraryScan) summary() string {
 	return text
 }
 
-func scanSpinner(c *ui.Context, p appPalette) {
-	ring := ui.Box(c).Key("scan-spinner").Size(14, 14).Shrink(0).Radius(7).
-		Border(1.75, ui.Transparent).
-		BorderConicGradient(ui.ConicGradient{
-			Stops: []ui.GradientStop{
-				{Color: p.accent, At: 0},
-				{Color: p.accent.Alpha(0.18), At: 0.72},
-				{Color: ui.RGBA(255, 255, 255, 0.12), At: 1},
-			},
-		}).PassThrough()
-	if !c.Preferences().ReduceMotion {
-		deg := ring.Loop("scan-spin", 900*time.Millisecond, ui.Linear) * 360
-		ring.Transform(ui.Rotation(deg))
-	}
-}
-
 // scanBar is a single-line compact matte status strip showing scan progress
 // and stop/reload actions without crowding the poster grid below.
 func (a *app) scanBar(c *ui.Context, s *libraryScan) {
@@ -737,9 +721,10 @@ func (a *app) scanBar(c *ui.Context, s *libraryScan) {
 	bar := ui.Row(c).Key("scan-bar").FillWidth().Height(40).Padding(0, 12).Gap(10).AlignItems(ui.Center)
 	applySurface(bar, p, 10).Children(func() {
 		if s.running {
-			scanSpinner(c, p)
+			loadingIndicator(c.Key("scan-spinner"), 13, p.accent)
 		}
-		ui.Text(c, s.summary()).FontSize(12.5).TextColor(p.textMuted).SingleLine().Grow(1).MinWidth(0).ContentTransition(ctNumeric)
+		ui.Text(c, s.summary()).FontSize(12.5).FontFeatures("tnum").TextColor(p.textMuted).
+			SingleLine().Grow(1).MinWidth(0).ContentTransition(ctNumeric)
 		if s.running {
 			value := -1.0
 			if s.progress.Total > 0 {
@@ -817,7 +802,7 @@ func (a *app) feedView(c *ui.Context) {
 	})
 	if len(s.groups) == 0 {
 		if s.running {
-			emptyState(c, "正在汇集影片", "可直接输入片名搜索，影片返回后会立即显示。")
+			emptyState(c, "正在汇集影片…", "可直接输入片名搜索，影片返回后会立即显示。")
 		} else {
 			emptyStateWithAction(c, "暂时没有影片", "试试直接搜索片名，或重新加载片库。", "重新加载", func() {
 				a.reloadScan(s)
@@ -836,7 +821,7 @@ func (a *app) searchView(c *ui.Context) {
 		})
 		if len(s.groups) == 0 {
 			if s.running {
-				emptyState(c, "正在搜索", "找到的影片会立即显示。")
+				emptyState(c, "正在搜索…", "找到的影片会立即显示。")
 			} else if s.progress.Failed+s.progress.Cooling+s.progress.SkippedHealth > 0 {
 				emptyStateWithAction(c, "没有找到匹配的影片", "部分站点暂未响应，可重新加载全部站点，或换个关键词再搜。", "重试全部站点", func() {
 					a.reloadScan(s)

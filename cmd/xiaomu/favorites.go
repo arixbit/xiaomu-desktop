@@ -182,12 +182,14 @@ func (a *app) favoriteButton(c *ui.Context) {
 		AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(a11yLabel).Tooltip(tip)
 	if !followed && btn.Hovered() {
 		bg = p.controlHover
+		border = ui.RGBA(255, 255, 255, 0.20)
 	}
-	btn.Background(btn.AnimateColor("fav-btn-bg", bg, animColor)).Border(1, border)
+	animFg := animateButtonChrome(btn, "fav-btn", bg, border, fg)
+	animIconColor := btn.AnimateColor("fav-btn-ico", iconColor, animColor)
 	applyPressPose(btn)
 	btn.Children(func() {
-		ui.Icon(c, icon).Size(15, 15).TextColor(iconColor).PassThrough()
-		t := ui.Text(c, label).FontSize(13).TextColor(fg).SingleLine().PassThrough()
+		ui.Icon(c, icon).Size(15, 15).TextColor(animIconColor).ContentTransition(ctIcon).PassThrough()
+		t := ui.Text(c, label).FontSize(13).TextColor(animFg).SingleLine().ContentTransition(ctReplace).PassThrough()
 		if followed {
 			t.Bold()
 		}
@@ -285,33 +287,32 @@ func (a *app) homeFavoritesHeader(c *ui.Context) {
 		ui.Text(c, "我的追剧").FontSize(15).Bold().TextColor(p.text).SingleLine().Shrink(0)
 		ui.Spacer(c)
 		if a.library.root != nil {
-			if a.favorites.refreshing {
-				refBtn := ui.ButtonBase(c.Key("home-fav-cancel")).Padding(3, 6).Radius(6).
-					Cursor(ui.CursorPointer).Label("取消检查更新").Shrink(0)
-				refFg := p.accentLightText
-				if refBtn.Hovered() {
+			refreshing := a.favorites.refreshing
+			refA11y, refText := "刷新追剧", "刷新"
+			refFg := p.textFaint
+			if refreshing {
+				refA11y, refText = "取消检查更新", "取消检查"
+				refFg = p.accentLightText
+			}
+			refBtn := ui.ButtonBase(c.Key("home-fav-refresh")).Padding(3, 6).Radius(6).
+				Cursor(ui.CursorPointer).Label(refA11y).Shrink(0)
+			if refBtn.Hovered() {
+				if refreshing {
 					refFg = p.accent
-				}
-				applyPressPose(refBtn)
-				refBtn.Children(func() {
-					ui.Text(c, "取消检查").FontSize(11.5).TextColor(refFg).SingleLine().PassThrough()
-				})
-				if refBtn.Clicked() {
-					a.cancelFollowingRefresh()
-					a.setNotice("已取消检查更新")
-				}
-			} else {
-				refBtn := ui.ButtonBase(c.Key("home-fav-refresh")).Padding(3, 6).Radius(6).
-					Cursor(ui.CursorPointer).Label("刷新追剧").Shrink(0)
-				refFg := p.textFaint
-				if refBtn.Hovered() {
+				} else {
 					refFg = p.text
 				}
-				applyPressPose(refBtn)
-				refBtn.Children(func() {
-					ui.Text(c, "刷新").FontSize(11.5).TextColor(refFg).SingleLine().PassThrough()
-				})
-				if refBtn.Clicked() {
+			}
+			animRefFg := refBtn.AnimateColor("hfav-ref-fg", refFg, animColor)
+			applyPressPose(refBtn)
+			refBtn.Children(func() {
+				ui.Text(c, refText).FontSize(11.5).TextColor(animRefFg).SingleLine().ContentTransition(ctReplace).PassThrough()
+			})
+			if refBtn.Clicked() {
+				if refreshing {
+					a.cancelFollowingRefresh()
+					a.setNotice("已取消检查更新")
+				} else {
 					a.refreshFollowingMode(true)
 				}
 			}
@@ -322,9 +323,11 @@ func (a *app) homeFavoritesHeader(c *ui.Context) {
 		if allBtn.Hovered() {
 			allFg = p.text
 		}
+		animAllFg := allBtn.AnimateColor("hfav-all-fg", allFg, animColor)
 		applyPressPose(allBtn)
 		allBtn.Children(func() {
-			ui.Text(c, fmt.Sprintf("全部 %d ›", len(a.favorites.entries))).FontSize(12).TextColor(allFg).SingleLine().PassThrough()
+			ui.Text(c, fmt.Sprintf("全部 %d ›", len(a.favorites.entries))).FontSize(12).FontFeatures("tnum").
+				TextColor(animAllFg).SingleLine().ContentTransition(ctNumeric).PassThrough()
 		})
 		if allBtn.Clicked() {
 			a.switchTab(routeFavorites)
@@ -381,10 +384,10 @@ func (a *app) homeFavoriteCard(c *ui.Context, e favoriteEntry, fixedWidth float3
 					actBorder = p.accent
 					actFg = p.accentText
 				}
-				actBtn.Background(actBtn.AnimateColor("hfav-act-bg", actBg, animColor)).Border(1, actBorder)
+				animActFg := animateButtonChrome(actBtn, "hfav-act", actBg, actBorder, actFg)
 				applyPressPose(actBtn)
 				actBtn.Children(func() {
-					ui.Text(c, action).FontSize(11.5).TextColor(actFg).SingleLine().PassThrough()
+					ui.Text(c, action).FontSize(11.5).TextColor(animActFg).SingleLine().PassThrough()
 				})
 				if actBtn.Clicked() {
 					a.openFollowing(e)
@@ -396,9 +399,10 @@ func (a *app) homeFavoriteCard(c *ui.Context, e favoriteEntry, fixedWidth float3
 				if detailLink.Hovered() {
 					detailFg = p.text
 				}
+				animDetailFg := detailLink.AnimateColor("hfav-det-fg", detailFg, animColor)
 				applyPressPose(detailLink)
 				detailLink.Children(func() {
-					ui.Text(c, "详情 ›").FontSize(11.5).TextColor(detailFg).SingleLine().PassThrough()
+					ui.Text(c, "详情 ›").FontSize(11.5).TextColor(animDetailFg).SingleLine().PassThrough()
 				})
 				if detailLink.Clicked() {
 					a.openFavorite(e)
@@ -477,7 +481,7 @@ func (a *app) favoritesView(c *ui.Context) {
 			if !hasLib {
 				note = fmt.Sprintf("当前未添加片源 · 共追 %d 部剧仍保存在本机", len(a.favorites.entries))
 			}
-			ui.Text(c, note).FontSize(13).TextColor(p.textMuted).Grow(1)
+			ui.Text(c, note).FontSize(13).FontFeatures("tnum").TextColor(p.textMuted).Grow(1).ContentTransition(ctNumeric)
 			if !hasLib {
 				if primaryButton(c, "添加片源").Clicked() {
 					a.openImportDialog()

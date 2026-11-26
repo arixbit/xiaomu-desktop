@@ -554,11 +554,12 @@ func chip(c *ui.Context, label string, selected bool) ui.Element {
 		fg = p.accentLightText
 	} else if btn.Hovered() {
 		bg = p.controlHover
+		border = p.borderControl
 		fg = p.text
 	}
-	btn.Background(btn.AnimateColor("chip-bg", bg, animColor)).Border(1, border)
+	animFg := animateButtonChrome(btn, "chip", bg, border, fg)
 	btn.Children(func() {
-		t := ui.Text(c, label).FontSize(12.5).TextColor(fg).SingleLine().PassThrough()
+		t := ui.Text(c, label).FontSize(12.5).TextColor(animFg).SingleLine().PassThrough()
 		if selected {
 			t.Bold()
 		}
@@ -566,26 +567,28 @@ func chip(c *ui.Context, label string, selected bool) ui.Element {
 	return applyPressPose(btn)
 }
 
-// underlineTab renders a clean Apple TV style borderless text tab with a crisp
-// coral underline indicator when selected.
-func underlineTab(c *ui.Context, key, label string, selected bool) ui.Element {
+// underlineTab renders a clean Apple TV style borderless text tab with a
+// spring-gliding coral underline shared across tabs in the same group.
+func underlineTab(c *ui.Context, group, key, label string, selected bool) ui.Element {
 	p := paletteFor(c)
 	btn := ui.ButtonBase(c.Key(key)).Padding(4, 2, 0, 2).Cursor(ui.CursorPointer).Label(label)
-	fg := p.textMuted
+	fgTarget := p.textMuted
 	if selected || btn.Hovered() {
-		fg = p.text
+		fgTarget = p.text
 	}
+	fg := btn.AnimateColor("utab-fg", fgTarget, animColor)
 	btn.Children(func() {
 		ui.Column(c).Gap(6).AlignItems(ui.Center).PassThrough().Children(func() {
 			t := ui.Text(c, label).FontSize(13).TextColor(fg).SingleLine().PassThrough()
 			if selected {
 				t.Bold()
 			}
-			barColor := ui.Transparent
-			if selected {
-				barColor = p.accent
-			}
-			ui.Box(c).FillWidth().Height(2.5).Radius(1.5).Background(barColor).PassThrough()
+			ui.Box(c).FillWidth().Height(2.5).PassThrough().Children(func() {
+				if selected {
+					ui.Box(c.Key("utab-bar-"+group+"-"+key)).Fill().Radius(1.5).Background(p.accent).
+						Transition(transMatchIndicator(tabUnderlineMatch{group: group}, false)).PassThrough()
+				}
+			})
 		})
 	})
 	return applyPressPose(btn)
@@ -665,10 +668,11 @@ func sourceStatusChip(c *ui.Context, key, name string, isPan bool, latencyText s
 			border = p.borderControl
 		}
 	}
-	btn.Background(btn.AnimateColor("src-chip-bg", bg, animColor)).Border(1, border)
+	animName := animateButtonChrome(btn, "src-chip", bg, border, nameColor)
+	animDot := btn.AnimateColor("src-chip-dot", dot, animColor)
 	btn.Children(func() {
-		ui.Box(c).Size(6, 6).Radius(3).Background(dot).PassThrough()
-		nt := ui.Text(c, name).FontSize(12).TextColor(nameColor).SingleLine().PassThrough()
+		ui.Box(c).Size(6, 6).Radius(3).Background(animDot).PassThrough()
+		nt := ui.Text(c, name).FontSize(12).TextColor(animName).SingleLine().PassThrough()
 		if boldName {
 			nt.Bold()
 		}
@@ -685,7 +689,9 @@ func sourceStatusChip(c *ui.Context, key, name string, isPan bool, latencyText s
 			case tier == 3:
 				lc = p.warning
 			}
-			ui.Text(c, latencyText).FontSize(11).TextColor(lc).SingleLine().ContentTransition(ctNumeric).PassThrough()
+			ui.Text(c, latencyText).FontSize(11).FontFeatures("tnum").
+				TextColor(btn.AnimateColor("src-chip-lat", lc, animColor)).
+				SingleLine().ContentTransition(ctNumeric).PassThrough()
 		}
 	})
 	return applyPressPose(btn)
@@ -699,7 +705,7 @@ func (a *app) siteView(c *ui.Context) {
 		if len(b.categories) > 0 {
 			ui.ScrollHorizontal(c).FillWidth().Padding(0, scrollGutter, 0, 0).Gap(18).Scrollbars(false).Children(func() {
 				for i, category := range b.categories {
-					if underlineTab(c, fmt.Sprintf("category-%d", i), category.Name, b.category == string(category.ID)).Clicked() {
+					if underlineTab(c, "site-cat", fmt.Sprintf("category-%d", i), category.Name, b.category == string(category.ID)).Clicked() {
 						a.loadPage(string(category.ID), 1)
 					}
 				}
@@ -712,7 +718,7 @@ func (a *app) siteView(c *ui.Context) {
 			} else if b.page > 0 {
 				state = fmt.Sprintf("第 %d 页", b.page)
 			}
-			ui.Text(c, state).FontSize(12.5).TextColor(p.textMuted).Grow(1).ContentTransition(ctNumeric)
+			ui.Text(c, state).FontSize(12.5).FontFeatures("tnum").TextColor(p.textMuted).Grow(1).ContentTransition(ctNumeric)
 			if b.page > 0 {
 				if glassButton(c, "上一页").Padding(5, 12).Disabled(b.page <= 1).Clicked() {
 					a.loadPage(b.category, b.page-1)
@@ -808,10 +814,11 @@ func (a *app) importDialog(c *ui.Context) {
 	}
 	p := paletteFor(c)
 	_, winH := c.Size()
-	ui.DialogBase(c, &b.importOpen, func(backdrop, panel ui.Element) {
+	keyedDialog(c, "dlg-import", &b.importOpen, func(backdrop, panel ui.Element) {
 		backdrop.Background(p.dialogScrim).Transition(transDialogScrim)
-		panel.Width(520).MaxWidth(520).MaxHeight(max(float32(260), winH-32)).Padding(24).Gap(12).Radius(26).TextColor(p.text).Transition(transDialogPanel)
+		panel.Width(520).MaxWidth(520).MaxHeight(max(float32(260), winH-32)).Padding(24).Gap(12).Radius(26).TextColor(p.text)
 		applyPane(panel, p, p.dialogMat)
+		applyDialogPanelPose(c, panel)
 		title := "添加片源"
 		hint := "粘贴影视配置或直播频道表地址（自动识别），导入后即可全库搜索与观看。"
 		if a.library.root != nil {
@@ -832,7 +839,7 @@ func (a *app) importDialog(c *ui.Context) {
 				})
 			})
 			if b.importErr != "" {
-				ui.Text(c, b.importErr).FontSize(13).TextColor(p.warning)
+				ui.Text(c.Key("import-err"), b.importErr).FontSize(13).TextColor(p.warning).Transition(transInlineBanner)
 			}
 		})
 		ui.Row(c).FillWidth().Gap(8).Justify(ui.End).Children(func() {

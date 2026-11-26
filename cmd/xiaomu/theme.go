@@ -187,24 +187,25 @@ func applySurface(el ui.Element, p appPalette, radius float32) ui.Element {
 
 // applyInteractiveSurface styles a hoverable card container (favorites, history,
 // live channels) using the same dark-tinted glass without clobbering Material
-// with a flat Background call.
+// with a flat Background call, smoothly tinting border & background in Oklab.
 func applyInteractiveSurface(el ui.Element, p appPalette, radius float32, hovered bool) ui.Element {
+	borderTarget := p.border
+	if hovered {
+		borderTarget = p.borderControl
+	}
+	border := el.AnimateColor("surf-bd", borderTarget, animColor)
 	if p.reduceTransparency {
-		bg := p.surface
-		border := p.border
+		bgTarget := p.surface
 		if hovered {
-			bg = p.surfaceCardHover
-			border = p.borderControl
+			bgTarget = p.surfaceCardHover
 		}
-		return el.Radius(radius).Background(bg).Border(1, border).
+		return el.Radius(radius).Background(el.AnimateColor("surf-bg", bgTarget, animColor)).Border(1, border).
 			Shadow(0, 8, 22, 0, ui.RGBA(0, 0, 0, 0.30))
 	}
 	mat := p.surfaceMat
-	border := p.border
 	shadow := ui.RGBA(0, 0, 0, 0.28)
 	if hovered {
 		mat = p.surfaceHoverMat
-		border = p.borderControl
 		shadow = ui.RGBA(0, 0, 0, 0.36)
 	}
 	return el.Radius(radius).Material(mat).Border(1, border).Shadow(0, 8, 22, 0, shadow)

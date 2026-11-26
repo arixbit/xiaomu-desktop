@@ -649,50 +649,7 @@ func (a *app) resume(e historyEntry) {
 }
 
 func (a *app) historyClearButton(c *ui.Context) bool {
-	const key = "clear-history"
-	p := paletteFor(c)
-	now := c.Now()
-	armed := a.armed.key == key && now.Before(a.armed.until)
-	if a.armed.key == key && !armed {
-		a.armed = armedConfirmState{}
-	}
-	if armed {
-		c.After(a.armed.until.Sub(now))
-	}
-	shownLabel := "清空历史"
-	if armed {
-		shownLabel = "确认清空？"
-	}
-	var btn ui.Element
-	if armed {
-		btn = ui.Button(c.Key("armed-"+key), "").Label(shownLabel).Radius(9).Padding(6, 13).
-			Background(p.danger).TextColor(p.dangerText)
-		applyPressPose(btn)
-		btn.Children(func() {
-			ui.Text(c, shownLabel).FontSize(12.5).Bold().SingleLine().ContentTransition(ctReplace).PassThrough()
-		})
-	} else {
-		btn = ghostButton(c.Key("armed-"+key), "").Label(shownLabel).Padding(6, 13)
-		btn.Children(func() {
-			fg := p.textMuted
-			if btn.Hovered() {
-				fg = p.text
-			}
-			ui.Text(c, shownLabel).FontSize(12.5).TextColor(fg).SingleLine().ContentTransition(ctReplace).PassThrough()
-		})
-	}
-	if btn.Clicked() {
-		if armed {
-			a.armed = armedConfirmState{}
-			return true
-		}
-		a.armed = armedConfirmState{
-			key:   key,
-			until: now.Add(armedConfirmTTL),
-		}
-		c.After(armedConfirmTTL)
-	}
-	return false
+	return a.armedDangerButtonStyled(c, "clear-history", "清空历史", "确认清空？", "", 6, 13, 12.5)
 }
 
 func (a *app) historyView(c *ui.Context) {
@@ -830,10 +787,10 @@ func (a *app) historyRow(c *ui.Context, i int, e historyEntry) {
 				rmBorder = p.borderControl
 				rmFg = p.text
 			}
-			removeBtn.Background(removeBtn.AnimateColor("hrm-bg", rmBg, animColor)).Border(1, rmBorder)
+			animRmFg := animateButtonChrome(removeBtn, "hrm", rmBg, rmBorder, rmFg)
 			applyPressPose(removeBtn)
 			removeBtn.Children(func() {
-				ui.Icon(c, iconClose).Size(13, 13).TextColor(removeBtn.AnimateColor("hrm-fg", rmFg, animColor)).PassThrough()
+				ui.Icon(c, iconClose).Size(13, 13).TextColor(animRmFg).PassThrough()
 			})
 			if removeBtn.Clicked() {
 				idx := i

@@ -171,23 +171,25 @@ func (a *app) armedDangerButtonStyled(c *ui.Context, key, label, confirmLabel, t
 		btn.Tooltip(tooltip)
 	}
 	targetBg := p.surfaceSubtle
+	targetBorder := p.border
 	targetText := p.textMuted
 	if armed {
 		targetBg = p.danger
+		targetBorder = p.danger
 		targetText = p.dangerText
 	} else if btn.Hovered() {
 		targetBg = p.surfaceHover
+		targetBorder = p.borderControl
 		targetText = p.text
 	}
-	bg := btn.AnimateColor("armed-bg", targetBg, animColor)
-	fg := btn.AnimateColor("armed-fg", targetText, animColor)
-	btn.Background(bg).TextColor(fg)
-	if !armed {
-		btn.Border(1, p.border)
-	}
+	fg := animateButtonChrome(btn, "armed", targetBg, targetBorder, targetText)
+	btn.TextColor(fg)
 	applyPressPose(btn)
 	btn.Children(func() {
-		ui.Text(c, shownLabel).FontSize(fontSize).SingleLine().ContentTransition(ctReplace)
+		t := ui.Text(c, shownLabel).FontSize(fontSize).SingleLine().ContentTransition(ctReplace)
+		if armed {
+			t.Bold()
+		}
 	})
 	if btn.Clicked() {
 		if armed {
@@ -273,7 +275,7 @@ func (a *app) skipUndoPill(c *ui.Context, p mediaPlayer, showControls bool) {
 		}
 	}
 	ui.Row(c.Key("skip-undo")).Absolute().Left(0).Right(0).Bottom(bottom).Justify(ui.Center).PassThrough().
-		Transition(transToast).Children(func() {
+		Transition(transFloatingPill).Children(func() {
 		ui.Row(c).Padding(8, 14).Gap(10).Radius(18).
 			Material(glass.Glass{Style: glass.Regular, Tint: ui.RGBA(12, 16, 28, 0.80)}).
 			Border(1, ui.RGBA(255, 255, 255, 0.14)).
@@ -372,10 +374,15 @@ func (a *app) upNextPill(c *ui.Context, p mediaPlayer, showControls bool, panelR
 	}
 	ui.Row(c.Key("up-next-pill")).Absolute().Right(right).Bottom(bottom).Padding(10, 14).Gap(10).Radius(18).
 		Material(glass.Glass{Style: glass.Regular, Tint: ui.RGBA(12, 16, 28, 0.84)}).
-		TextColor(playerText).AlignItems(ui.Center).Transition(transToast).Children(func() {
-		ui.Text(c, fmt.Sprintf("%d 秒后播放 %s", secs, nextName)).FontSize(13).SingleLine().ContentTransition(ctNumeric)
-		playBtn := ui.Button(c, "立即播放").Radius(9).Padding(5, 12).Bold().
-			Background(playerCoral).TextColor(ui.RGB(255, 255, 255))
+		TextColor(playerText).AlignItems(ui.Center).Transition(transFloatingPill).Children(func() {
+		ui.Text(c, fmt.Sprintf("%d 秒后播放 %s", secs, nextName)).FontSize(13).FontFeatures("tnum").
+			SingleLine().ContentTransition(ctCountdown)
+		playBtn := ui.Button(c, "立即播放").Radius(9).Padding(5, 12).Bold().TextColor(ui.RGB(255, 255, 255))
+		playBg := playerCoral
+		if playBtn.Hovered() {
+			playBg = ui.RGB(255, 108, 82)
+		}
+		playBtn.Background(playBtn.AnimateColor("upnext-bg", playBg, animColor))
 		applyPressPose(playBtn)
 		if playBtn.Clicked() {
 			playNext()
@@ -385,7 +392,7 @@ func (a *app) upNextPill(c *ui.Context, p mediaPlayer, showControls bool, panelR
 		applyPressPose(cancelBtn)
 		if cancelBtn.Clicked() {
 			a.autoNextCanceled = true
-			a.showPlayerOSD("本集已取消自动连播")
+			a.showPlayerOSD("本集不连播")
 		}
 	})
 }
