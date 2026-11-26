@@ -2,32 +2,89 @@ name: ci
 
 on:
   push:
+    branches: [main]
+    tags: ['**']
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.diff.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - id: diff
+        name: Check paths in the PR merge
+        run: |
+          # Compare GitHub's tested merge tree with its base parent, including deletions.
+          if git diff --quiet HEAD^1 HEAD -- . ':(top,exclude,glob)*.md' ':(top,exclude,glob)docs/**'; then
+            echo 'docs_only=true' >> "$GITHUB_OUTPUT"
+          else
+            code=$?
+            [ "$code" -eq 1 ] || exit "$code"
+            echo 'docs_only=false' >> "$GITHUB_OUTPUT"
+          fi
+
   test:
+    needs: changes
+    if: >-
+      !cancelled() && (github.event_name == 'push' ||
+      (needs.changes.result == 'success' && needs.changes.outputs.docs_only == 'false'))
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            race: true
+            partition: run
+          - os: ubuntu-latest
+            partition: skip
           - os: macos-latest
-            race: true
+            partition: run
+          - os: macos-latest
+            partition: skip
           - os: windows-latest
-            race: false
           - os: windows-11-arm
-            race: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.27.3"
+          go-version-file: go.mod
       - name: Vet
+        if: runner.os == 'Linux' && matrix.partition == 'skip'
         run: go vet ./...
-      - name: Test
-        run: go test -count=1 ./...
       - name: Race Test
-        if: matrix.race
-        run: go test -race -timeout 20m -count=1 ./...
+        if: matrix.partition
+        env:
+          PARTITION: ${{ matrix.partition }}
+        # Complementary -run / -skip cover new tests, examples and fuzz seeds too.
+        run: go test -race -vet=off -count=1 -timeout 20m -"$PARTITION" '^Test(Floating|Player)' ./...
+      - name: Test
+        if: runner.os == 'Windows'
+        run: go test -count=1 ./...
+
+  required:
+    name: CI result
+    needs: [changes, test]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify test result or documentation-only skip
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+        run: |
+          [ "$TEST_RESULT" = success ] || { [ "$DOCS_ONLY" = true ] && [ "$TEST_RESULT" = skipped ]; }
