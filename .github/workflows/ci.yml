@@ -57,14 +57,15 @@ jobs:
         with:
           persist-credentials: false
       # Linux covers the minimum. Desktop images often include a newer patch of that Go release.
-      - id: go-patch
-        if: runner.os != 'Linux'
+      - name: Select Go version
+        id: go-version
         shell: bash
-        run: awk '$1 == "go" { print "range=~" $2 }' go.mod >> "$GITHUB_OUTPUT"
+        env:
+          PATCH_RANGE: ${{ runner.os != 'Linux' && '~' || '' }}
+        run: awk '$1 == "go" { print "version=" ENVIRON["PATCH_RANGE"] $2 }' go.mod >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v5
         with:
-          go-version: ${{ steps.go-patch.outputs.range }}
-          go-version-file: go.mod
+          go-version: ${{ steps.go-version.outputs.version }}
       - name: Vet
         if: runner.os == 'Linux' && matrix.suite == 'remaining'
         run: go vet ./...
