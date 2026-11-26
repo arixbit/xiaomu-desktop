@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>小幕 Xiaomu — 全格式原生多源影视播放器</title>
-<meta name="description" content="小幕是一款面向 macOS 与 Windows x64 的原生多源影视播放器：内置 libmpv 全格式硬解、弹幕、聚合网盘/AList、本地视频续播连播、IPTV 直播、豆瓣热播与跨站搜索。免费开源。">
+<meta name="description" content="小幕是一款面向 macOS 与 Windows（x64 / ARM64）的原生多源影视播放器：内置 libmpv 全格式硬解、弹幕、聚合网盘/AList、本地视频续播连播、IPTV 直播、豆瓣热播与跨站搜索。免费开源。">
 <link rel="icon" href="assets/icon.svg">
 <link rel="stylesheet" href="assets/style.css">
 </head>
@@ -38,7 +38,7 @@
         <a class="btn btn-ghost" href="https://github.com/arixbit/xiaomu-desktop/releases/latest">GitHub Releases</a>
         <a class="btn btn-ghost" href="https://github.com/arixbit/xiaomu-desktop">查看源码</a>
       </div>
-      <p class="meta">macOS 13+（Apple Silicon / Intel）· Windows 10/11（x64）· 免费开源</p>
+      <p class="meta">macOS 13+（Apple Silicon / Intel）· Windows 10/11（x64 / ARM64）· 免费开源</p>
       <figure class="hero-shot">
         <img src="screenshots/home.webp" alt="小幕首页，展示继续观看、追剧和热播榜单" width="1440" height="998">
       </figure>
@@ -148,13 +148,13 @@
           </ol>
         </div>
         <div class="platform-card">
-          <h3>Windows（10 / 11 x64）</h3>
-          <p class="platform-meta">x64 原生安装器，内置 <code>mpv-2.dll</code>，安装到当前用户目录无需管理员权限。</p>
-          <p><a class="btn btn-primary btn-sm" href="https://github.com/arixbit/xiaomu-desktop/releases/latest">下载 Windows x64 安装包</a></p>
+          <h3>Windows（10 / 11 x64 / ARM64）</h3>
+          <p class="platform-meta">按架构提供 x64 与 ARM64 原生安装器，均内置对应架构 <code>mpv-2.dll</code>，安装到当前用户目录无需管理员权限。</p>
+          <p><a class="btn btn-primary btn-sm" href="https://github.com/arixbit/xiaomu-desktop/releases/latest">下载 Windows 安装包</a></p>
           <ol class="steps">
             <li>
               <h4>运行安装器</h4>
-              <p>在 GitHub Releases 下载 <code>xiaomu-setup-*-amd64.exe</code>，双击按提示完成安装，自动注册视频文件关联与 <code>xiaomu://</code> 协议。</p>
+              <p>在 GitHub Releases 下载对应架构 <code>xiaomu-setup-*-amd64.exe</code> 或 <code>xiaomu-setup-*-arm64.exe</code>，双击按提示完成安装，自动注册视频文件关联与 <code>xiaomu://</code> 协议。</p>
             </li>
             <li>
               <h4>首次打开</h4>
