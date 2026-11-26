@@ -30,7 +30,7 @@ var tabs = []struct {
 	{routeLive, "直播"},
 	{routeHistory, "历史"},
 	{routeFavorites, "追剧"},
-	{routeSources, "片源"},
+	{routeSources, "片源管理"},
 }
 
 const (
@@ -45,30 +45,35 @@ var librarySearchIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/20
 
 func glassButton(c *ui.Context, label string) ui.Element {
 	p := paletteFor(c)
-	btn := ui.Button(c, label).Radius(20).Padding(9, 16).TextColor(p.text)
-	if p.reduceTransparency {
-		bg := p.surfaceSubtle
-		if btn.Hovered() {
-			bg = p.surfaceHover
-		}
-		btn.Background(btn.AnimateColor("glass-bg", bg, animColor)).Border(1, p.border)
-	} else {
-		btn.Material(p.controlMat)
-		if p.highContrast {
-			btn.Border(1, p.border)
-		}
+	btn := ui.Button(c, label).Radius(9).Padding(7, 14).TextColor(p.text)
+	bg := p.controlBg
+	if btn.Hovered() {
+		bg = p.controlHover
 	}
+	btn.Background(btn.AnimateColor("glass-bg", bg, animColor)).Border(1, p.borderControl)
+	return applyPressPose(btn)
+}
+
+func ghostButton(c *ui.Context, label string) ui.Element {
+	p := paletteFor(c)
+	btn := ui.Button(c, label).Radius(9).Padding(7, 13).TextColor(p.textMuted)
+	bg := p.surfaceSubtle
+	if btn.Hovered() {
+		bg = p.surfaceHover
+		btn.TextColor(p.text)
+	}
+	btn.Background(btn.AnimateColor("ghost-bg", bg, animColor)).Border(1, p.border)
 	return applyPressPose(btn)
 }
 
 func primaryButton(c *ui.Context, label string) ui.Element {
 	p := paletteFor(c)
-	btn := ui.Button(c, label).Radius(20).Padding(9, 18).TextColor(p.accentText)
-	if p.reduceTransparency {
-		btn.Background(p.accent)
-	} else {
-		btn.Material(p.primaryMat)
+	btn := ui.Button(c, label).Radius(9).Padding(7, 16).Bold().TextColor(p.accentText)
+	bg := p.accent
+	if btn.Hovered() {
+		bg = p.accentHover
 	}
+	btn.Background(btn.AnimateColor("primary-bg", bg, animColor))
 	return applyPressPose(btn)
 }
 
@@ -147,6 +152,10 @@ func (a *app) switchTab(kind routeKind) {
 		a.loadDiscoveryTab(false)
 	case routeLive:
 		a.showLive()
+	case routeSources:
+		if a.library.root == nil && (a.live.url != "" || len(a.live.sources) > 0) {
+			a.sourcesTab = 1
+		}
 	}
 }
 
@@ -155,7 +164,7 @@ func (a *app) pageTitle() string {
 	case routeSearch:
 		return "搜索结果"
 	case routeDetail:
-		return "影片详情"
+		return ""
 	case routeSite:
 		return a.browser.site.Label()
 	}
@@ -196,36 +205,52 @@ func (a *app) shell(c *ui.Context) {
 		ui.Box(c).Fill().LinearGradient(p.backdrop).TextColor(p.text).Children(func() {
 			ui.Row(c).Fill().Padding(10).Gap(10).Children(func() {
 				a.sidebar(c)
-				ui.Column(c).Grow(1).FillHeight().MinWidth(0).Padding(4, 8, 8, 8).Gap(14).Children(func() {
-					a.toolbar(c)
-					rt := routeTransition(a.navDir)
-					pageHost := ui.Box(c).Grow(1).FillWidth().MinHeight(0)
-					if rt.Exit != nil {
-						pageHost.ChildExit(*rt.Exit)
-					}
-					pageHost.Children(func() {
-						ui.Box(c.Key(a.route())).Fill().Transition(rt).Children(func() {
-							switch a.route() {
-							case routeLive:
-								a.liveView(c)
-							case routeHistory:
-								a.historyView(c)
-							case routeFavorites:
-								a.favoritesView(c)
-							case routeSources:
-								a.sourcesView(c)
-							case routeSearch:
-								a.searchView(c)
-							case routeDetail:
+				if a.route() == routeDetail {
+					ui.Box(c).Grow(1).FillHeight().MinWidth(0).Clip().Children(func() {
+						rt := routeTransition(a.navDir)
+						pageHost := ui.Box(c).Fill()
+						if rt.Exit != nil {
+							pageHost.ChildExit(*rt.Exit)
+						}
+						pageHost.Children(func() {
+							ui.Box(c.Key(a.route())).Fill().Transition(rt).Children(func() {
 								a.detailView(c)
-							case routeSite:
-								a.siteView(c)
-							default:
-								a.homeView(c)
-							}
+							})
+						})
+						ui.Box(c).Absolute().Top(4).Left(8).Right(8).Children(func() {
+							a.toolbar(c)
 						})
 					})
-				})
+				} else {
+					ui.Column(c).Grow(1).FillHeight().MinWidth(0).Padding(4, 8, 8, 8).Gap(14).Children(func() {
+						a.toolbar(c)
+						rt := routeTransition(a.navDir)
+						pageHost := ui.Box(c).Grow(1).FillWidth().MinHeight(0)
+						if rt.Exit != nil {
+							pageHost.ChildExit(*rt.Exit)
+						}
+						pageHost.Children(func() {
+							ui.Box(c.Key(a.route())).Fill().Transition(rt).Children(func() {
+								switch a.route() {
+								case routeLive:
+									a.liveView(c)
+								case routeHistory:
+									a.historyView(c)
+								case routeFavorites:
+									a.favoritesView(c)
+								case routeSources:
+									a.sourcesView(c)
+								case routeSearch:
+									a.searchView(c)
+								case routeSite:
+									a.siteView(c)
+								default:
+									a.homeView(c)
+								}
+							})
+						})
+					})
+				}
 			})
 			a.statusView(c)
 			a.importDialog(c)
@@ -242,6 +267,9 @@ func (a *app) sidebar(c *ui.Context) {
 	sideW, rail := activeSidebarWidth(winW)
 	shortWin := winH > 0 && winH < 480
 	top := max(float32(52), c.TitleBar().Bottom+14)
+	if p.reduceTransparency {
+		top = max(float32(51), c.TitleBar().Bottom+13)
+	}
 	padX, gap := float32(10), float32(4)
 	if rail {
 		padX = 8
@@ -249,9 +277,13 @@ func (a *app) sidebar(c *ui.Context) {
 	if shortWin {
 		gap = 2
 	}
-	side := ui.Column(c.Key("sidebar")).Width(sideW).FillHeight().Radius(22).Padding(top, padX, 10, padX).Gap(gap).
+	side := ui.Column(c.Key("sidebar")).Width(sideW).FillHeight().Radius(18).Padding(top, padX, 10, padX).Gap(gap).
 		Transition(ui.ElementTransition{Animation: &animSurface, Width: true})
-	applyPane(side, p, p.paneMat)
+	if p.reduceTransparency {
+		side.Background(p.sidebarBg).Border(1, p.sidebarBorder)
+	} else if p.highContrast {
+		side.Border(1, p.sidebarBorder)
+	}
 	if dragStripHeight(c) > 0 {
 		side.DragWindow().Label("拖动窗口（侧边栏）")
 	}
@@ -268,6 +300,9 @@ func (a *app) sidebar(c *ui.Context) {
 			}
 			hasNewFollow := a.hasAnyFollowingNew()
 			for _, tab := range tabs {
+				if tab.kind == routeSources {
+					continue
+				}
 				badge := tab.kind == routeFavorites && hasNewFollow
 				if railNavButton(c, tab.kind, tab.label, a.root() == tab.kind, badge, rowH).Clicked() {
 					a.switchTab(tab.kind)
@@ -277,6 +312,9 @@ func (a *app) sidebar(c *ui.Context) {
 			btnH := float32(38)
 			if shortWin {
 				btnH = 32
+			}
+			if railNavButton(c, routeSources, "片源管理", a.root() == routeSources, false, btnH).Clicked() {
+				a.switchTab(routeSources)
 			}
 			if railIconButton(c, navIconFile, "打开文件", "打开本地视频 ("+openFileShortcutHint()+")", btnH).Clicked() {
 				a.openLocalFileDialog()
@@ -297,6 +335,9 @@ func (a *app) sidebar(c *ui.Context) {
 		ui.Text(c, "小幕").FontSize(20).Bold().Padding(0, 12, titleBottom, 12)
 		hasNewFollow := a.hasAnyFollowingNew()
 		for _, tab := range tabs {
+			if tab.kind == routeSources {
+				continue
+			}
 			row := navTabRow(c, tab.kind, tab.label, a.root() == tab.kind, tab.kind == routeFavorites && hasNewFollow)
 			if shortWin {
 				row.Height(32)
@@ -306,13 +347,18 @@ func (a *app) sidebar(c *ui.Context) {
 			}
 		}
 		ui.Spacer(c)
+		sourcesBtn := sidebarUtilityTabRow(c, routeSources, "片源管理", a.root() == routeSources)
 		openFileBtn := sidebarActionButton(c, navIconFile, "打开文件", "打开本地视频 ("+openFileShortcutHint()+")")
 		openLinkBtn := sidebarActionButton(c, navIconLink, "打开链接", "粘贴视频直链或网盘分享链接")
 		updBtn := updateButton(c, a.availableUpdate)
 		if shortWin {
-			openFileBtn.Padding(6, 12)
-			openLinkBtn.Padding(6, 12)
-			updBtn.Padding(6, 12)
+			sourcesBtn.Height(32)
+			openFileBtn.Height(32)
+			openLinkBtn.Height(32)
+			updBtn.Height(32)
+		}
+		if sourcesBtn.Clicked() {
+			a.switchTab(routeSources)
 		}
 		if openFileBtn.Clicked() {
 			a.openLocalFileDialog()
@@ -327,19 +373,58 @@ func (a *app) sidebar(c *ui.Context) {
 	})
 }
 
+func sidebarUtilityTabRow(c *ui.Context, kind routeKind, label string, selected bool) ui.Element {
+	p := paletteFor(c)
+	row := ui.Row(c.Key(label)).FillWidth().Height(34).Padding(0, 12).Gap(10).Radius(8).
+		AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(label)
+	targetBg := ui.Transparent
+	targetFg := p.textMuted
+	if selected {
+		targetBg = p.surfaceSelected
+		targetFg = p.text
+		row.Border(1, p.border)
+	} else if row.Hovered() {
+		targetBg = p.surfaceHover
+		targetFg = p.text
+	}
+	row.Background(row.AnimateColor("side-util-bg", targetBg, animColor))
+	applyPressPose(row)
+	fg := row.AnimateColor("side-util-fg", targetFg, animColor)
+	row.Children(func() {
+		if selected {
+			ui.Box(c).Absolute().Left(0).Top(8).Bottom(8).Width(3).Radius(2).Background(p.accent).PassThrough()
+		}
+		ui.Icon(c, tabIcon(kind)).Size(16, 16).TextColor(fg).PassThrough()
+		text := ui.Text(c, label).FontSize(13).SingleLine().TextColor(fg).Grow(1)
+		if selected {
+			text.Bold()
+		}
+	})
+	return row
+}
+
 func sidebarActionButton(c *ui.Context, icon *ui.SVG, label, tooltip string) ui.Element {
 	p := paletteFor(c)
-	btn := glassButton(c, "").FillWidth().Gap(8).Label(label).Tooltip(tooltip)
+	btn := ui.ButtonBase(c.Key("side-act-"+label)).FillWidth().Height(34).Padding(0, 12).Gap(10).Radius(8).
+		Justify(ui.Start).AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(label).Tooltip(tooltip)
+	bg := ui.Transparent
+	fg := p.textMuted
+	if btn.Hovered() {
+		bg = p.surfaceHover
+		fg = p.text
+	}
+	btn.Background(btn.AnimateColor("side-act-bg", bg, animColor))
+	applyPressPose(btn)
 	btn.Children(func() {
-		ui.Icon(c, icon).Size(16, 16).TextColor(p.text).PassThrough()
-		ui.Text(c, label).SingleLine()
+		ui.Icon(c, icon).Size(16, 16).TextColor(fg).PassThrough()
+		ui.Text(c, label).FontSize(13).TextColor(fg).SingleLine().PassThrough()
 	})
 	return btn
 }
 
 func navTabRow(c *ui.Context, kind routeKind, label string, selected, hasBadge bool) ui.Element {
 	p := paletteFor(c)
-	row := ui.Row(c.Key(label)).FillWidth().Height(38).Padding(0, 12).Gap(10).Radius(11).
+	row := ui.Row(c.Key(label)).FillWidth().Height(36).Padding(0, 12).Gap(10).Radius(9).
 		AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(label)
 	if hasBadge {
 		row.Tooltip("追剧有新集更新")
@@ -349,6 +434,7 @@ func navTabRow(c *ui.Context, kind routeKind, label string, selected, hasBadge b
 	if selected {
 		targetBg = p.surfaceSelected
 		targetFg = p.text
+		row.Border(1, p.border)
 	} else if row.Hovered() {
 		targetBg = p.surfaceHover
 		targetFg = p.text
@@ -357,8 +443,11 @@ func navTabRow(c *ui.Context, kind routeKind, label string, selected, hasBadge b
 	applyPressPose(row)
 	fg := row.AnimateColor("row-fg", targetFg, animColor)
 	row.Children(func() {
-		ui.Icon(c, tabIcon(kind)).Size(17, 17).TextColor(fg).PassThrough()
-		text := ui.Text(c, label).SingleLine().TextColor(fg).Grow(1)
+		if selected {
+			ui.Box(c).Absolute().Left(0).Top(9).Bottom(9).Width(3).Radius(2).Background(p.accent).PassThrough()
+		}
+		ui.Icon(c, tabIcon(kind)).Size(16, 16).TextColor(fg).PassThrough()
+		text := ui.Text(c, label).FontSize(13.5).SingleLine().TextColor(fg).Grow(1)
 		if selected {
 			text.Bold()
 		}
@@ -382,6 +471,7 @@ func railNavButton(c *ui.Context, kind routeKind, label string, selected, hasBad
 	if selected {
 		targetBg = p.surfaceSelected
 		targetFg = p.text
+		row.Border(1, p.border)
 	} else if row.Hovered() {
 		targetBg = p.surfaceHover
 		targetFg = p.text
@@ -390,6 +480,9 @@ func railNavButton(c *ui.Context, kind routeKind, label string, selected, hasBad
 	applyPressPose(row)
 	fg := row.AnimateColor("rail-fg", targetFg, animColor)
 	row.Children(func() {
+		if selected {
+			ui.Box(c).Absolute().Left(0).Top(8).Bottom(8).Width(3).Radius(2).Background(p.accent).PassThrough()
+		}
 		ui.Icon(c, tabIcon(kind)).Size(19, 19).TextColor(fg).PassThrough()
 		if hasBadge {
 			ui.Box(c).Size(7, 7).Radius(4).Absolute().Right(10).Top(8).Background(p.accent).Label("追剧有新集").PassThrough()
@@ -403,23 +496,18 @@ func railIconButton(c *ui.Context, icon *ui.SVG, label, tooltip string, height f
 	if tooltip == "" {
 		tooltip = label
 	}
-	btn := ui.Button(c.Key("rail-action-"+label), "").FillWidth().Height(height).Radius(14).
-		Center().Label(label).Tooltip(tooltip).TextColor(p.text)
-	if p.reduceTransparency {
-		bg := p.surfaceSubtle
-		if btn.Hovered() {
-			bg = p.surfaceHover
-		}
-		btn.Background(btn.AnimateColor("rail-btn-bg", bg, animColor)).Border(1, p.border)
-	} else {
-		btn.Material(p.controlMat)
-		if p.highContrast {
-			btn.Border(1, p.border)
-		}
+	btn := ui.ButtonBase(c.Key("rail-action-"+label)).FillWidth().Height(height).Radius(9).
+		Center().Cursor(ui.CursorPointer).Label(label).Tooltip(tooltip).TextColor(p.textMuted)
+	bg := ui.Transparent
+	fg := p.textMuted
+	if btn.Hovered() {
+		bg = p.surfaceHover
+		fg = p.text
 	}
+	btn.Background(btn.AnimateColor("rail-btn-bg", bg, animColor))
 	applyPressPose(btn)
 	btn.Children(func() {
-		ui.Icon(c, icon).Size(17, 17).TextColor(p.text).PassThrough()
+		ui.Icon(c, icon).Size(17, 17).TextColor(fg).PassThrough()
 	})
 	return btn
 }
@@ -450,17 +538,19 @@ func (a *app) toolbar(c *ui.Context) {
 			ui.Row(c).Width(navWidth).MinWidth(0).Gap(10).AlignItems(ui.Center).Children(func() {
 				if len(a.nav) > 1 {
 					p := paletteFor(c)
-					backBtn := glassButton(c.Key("toolbar-back"), "").Size(36, 36).Radius(18).Padding(0).Center().
+					backBtn := glassButton(c.Key("toolbar-back"), "").Size(34, 34).Radius(9).Padding(0).Center().
 						Label("返回").Tooltip("返回上一页 (Esc)").Transition(transBackButton)
 					backBtn.Children(func() {
-						ui.Icon(c, iconBack).Size(18, 18).TextColor(p.text).PassThrough()
+						ui.Icon(c, iconBack).Size(17, 17).TextColor(p.text).PassThrough()
 					})
 					if backBtn.Clicked() {
 						a.pop()
 					}
 				}
-				ui.Text(c, a.pageTitle()).FontSize(22).Bold().SingleLine().Grow(1).MinWidth(0).
-					ContentTransition(ctReplace)
+				if title := a.pageTitle(); title != "" {
+					ui.Text(c, title).FontSize(20).Bold().SingleLine().Grow(1).MinWidth(0).
+						ContentTransition(ctReplace)
+				}
 			})
 		})
 		if a.library.root != nil {
@@ -491,15 +581,13 @@ func (a *app) librarySearch(c *ui.Context) ui.Element {
 	p := paletteFor(c)
 	return ui.Box(c).Key("library-search").Height(40).Children(func() {
 		field := ui.Autocomplete(c, &a.browser.query, a.searchSuggestions()).Label("片名").Placeholder("搜索整个片库").
-			Fill().Padding(0, 58, 0, 40).FontSize(16).Radius(20).
+			Fill().Padding(0, 54, 0, 38).FontSize(14).Radius(11).
+			Border(1, p.borderControl).
 			FocusBind(&a.searchFocused, true).Bind(&a.searchFocus)
 		if p.reduceTransparency {
-			field.Background(p.surface).Border(1, p.border)
+			field.Background(p.surface)
 		} else {
-			field.Material(p.controlMat)
-			if p.highContrast {
-				field.Border(1, p.border)
-			}
+			field.Material(p.searchMat).Shadow(0, 6, 18, 0, ui.RGBA(0, 0, 0, 0.24))
 		}
 		if field.Changed() {
 			a.focusSearchGrid = false
@@ -507,10 +595,10 @@ func (a *app) librarySearch(c *ui.Context) ui.Element {
 		if field.Submitted() {
 			a.searchLibrary()
 		}
-		ui.Icon(c, librarySearchIcon).Size(18, 18).Absolute().Left(14).Top(11).TextColor(p.textMuted).PassThrough()
+		ui.Icon(c, librarySearchIcon).Size(16, 16).Absolute().Left(13).Top(12).TextColor(p.textMuted).PassThrough()
 		if a.browser.query != "" {
 			clearBtn := ui.Button(c.Key("clear-search"), "×").Label("清空搜索").Tooltip("清空搜索").
-				Absolute().Right(10).Top(8).Size(24, 24).Radius(12).Padding(0).FontSize(15).
+				Absolute().Right(9).Top(9).Size(22, 22).Radius(6).Padding(0).FontSize(14).
 				Background(p.surfaceSubtle).TextColor(p.textMuted)
 			applyPressPose(clearBtn)
 			if clearBtn.Clicked() {
@@ -519,7 +607,7 @@ func (a *app) librarySearch(c *ui.Context) ui.Element {
 				a.searchFocused = true
 			}
 		} else if !a.searchFocused {
-			ui.Text(c, searchShortcutHint()).FontSize(12).TextColor(p.textMuted).Absolute().Right(14).Top(11).PassThrough()
+			ui.Text(c, searchShortcutHint()).FontSize(11).TextColor(p.textFaint).Absolute().Right(13).Top(12).PassThrough()
 		}
 	})
 }
@@ -574,7 +662,7 @@ func (a *app) linkDialog(c *ui.Context) {
 		if mpvBackendSupported() || a.openMPV != nil {
 			hint = "粘贴视频直链（mp4 / m3u8 / rtsp / rtmp）或夸克、UC、阿里云盘、百度网盘分享链接"
 		}
-		ui.Scroll(c).FillWidth().MaxHeight(max(float32(120), winH-176)).Gap(12).Children(func() {
+		ui.Scroll(c).FillWidth().MaxHeight(max(float32(120), winH-176)).Gap(12).ScrollbarStyle(appScrollbar).Children(func() {
 			ui.Text(c, hint).TextColor(p.textMuted)
 			if ui.TextInput(c, &a.rawURL).Label("地址").Placeholder("https://example.com/video.mp4 或网盘分享链接").FillWidth().AutoFocus().Submitted() {
 				a.play()

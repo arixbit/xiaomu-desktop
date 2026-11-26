@@ -541,52 +541,183 @@ func unsupported(kind config.Kind) string {
 	return fmt.Sprintf("当前版本暂不支持 %s 站点，请选择其他站点", kind)
 }
 
-// chip is one choice among several: a category, a play line or an episode.
+// chip is a compact matte selectable control used for toggle pills.
 func chip(c *ui.Context, label string, selected bool) ui.Element {
 	p := paletteFor(c)
-	button := ui.Button(c, label).Radius(18).Padding(7, 14)
+	btn := ui.ButtonBase(c).Padding(6, 12).Radius(9).AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(label)
+	bg := p.controlBg
+	border := p.border
+	fg := p.textMuted
 	if selected {
-		return applyPressPose(button.Background(p.chipSelectedBg).TextColor(p.chipSelectedText))
+		bg = p.accentSoft
+		border = p.accentBorder
+		fg = p.accentLightText
+	} else if btn.Hovered() {
+		bg = p.controlHover
+		fg = p.text
 	}
-	if p.reduceTransparency {
-		bg := p.surfaceSubtle
-		if button.Hovered() {
-			bg = p.surfaceHover
+	btn.Background(btn.AnimateColor("chip-bg", bg, animColor)).Border(1, border)
+	btn.Children(func() {
+		t := ui.Text(c, label).FontSize(12.5).TextColor(fg).SingleLine().PassThrough()
+		if selected {
+			t.Bold()
 		}
-		return applyPressPose(button.Background(button.AnimateColor("chip-bg", bg, animColor)).Border(1, p.border).TextColor(p.text))
+	})
+	return applyPressPose(btn)
+}
+
+// underlineTab renders a clean Apple TV style borderless text tab with a crisp
+// coral underline indicator when selected.
+func underlineTab(c *ui.Context, key, label string, selected bool) ui.Element {
+	p := paletteFor(c)
+	btn := ui.ButtonBase(c.Key(key)).Padding(4, 2, 0, 2).Cursor(ui.CursorPointer).Label(label)
+	fg := p.textMuted
+	if selected || btn.Hovered() {
+		fg = p.text
 	}
-	button.Material(p.controlMat).TextColor(p.text)
-	if p.highContrast {
-		button.Border(1, p.border)
+	btn.Children(func() {
+		ui.Column(c).Gap(6).AlignItems(ui.Center).PassThrough().Children(func() {
+			t := ui.Text(c, label).FontSize(13).TextColor(fg).SingleLine().PassThrough()
+			if selected {
+				t.Bold()
+			}
+			barColor := ui.Transparent
+			if selected {
+				barColor = p.accent
+			}
+			ui.Box(c).FillWidth().Height(2.5).Radius(1.5).Background(barColor).PassThrough()
+		})
+	})
+	return applyPressPose(btn)
+}
+
+// specMicroBadge renders a crisp player-HUD-style 5px hairline metadata badge (e.g. 网盘).
+func specMicroBadge(c *ui.Context, label string, accent bool) {
+	p := paletteFor(c)
+	bg := ui.RGBA(255, 255, 255, 0.05)
+	border := ui.RGBA(255, 255, 255, 0.22)
+	fg := ui.RGBA(236, 240, 248, 0.90)
+	if accent {
+		bg = p.accentSoft
+		border = p.accentBorder
+		fg = p.accentLightText
 	}
-	return applyPressPose(button)
+	ui.Text(c, label).Padding(2, 6).Radius(5).FontSize(10.5).Bold().
+		Background(bg).Border(1, border).TextColor(fg).SingleLine().PassThrough()
+}
+
+type sourceChipState int
+
+const (
+	sourceChipNormal sourceChipState = iota
+	sourceChipSelected
+	sourceChipFailed
+	sourceChipSelectedFailed
+)
+
+// latencyTier classifies a measured source latency into visual tiers:
+// 1 = fast (<300ms), 2 = medium (<1200ms), 3 = slow (>=1200ms).
+func latencyTier(d int64) int {
+	switch {
+	case d <= 0:
+		return 0
+	case d < 300:
+		return 1
+	case d < 1200:
+		return 2
+	default:
+		return 3
+	}
+}
+
+// sourceStatusChip renders the unified player-matched source latency chip shared
+// by the Detail page source strip and the Sources S2 site browser.
+func sourceStatusChip(c *ui.Context, key, name string, isPan bool, latencyText string, tier int, state sourceChipState) ui.Element {
+	p := paletteFor(c)
+	btn := ui.ButtonBase(c.Key(key)).Height(32).Padding(0, 10).Gap(6).Radius(9).
+		AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(name)
+	bg := p.controlBg
+	border := p.border
+	dot := p.success
+	nameColor := p.text
+	boldName := false
+	switch state {
+	case sourceChipSelected:
+		bg = p.accentSoft
+		border = p.accentBorder
+		dot = p.accent
+		nameColor = p.text
+		boldName = true
+	case sourceChipFailed:
+		bg = p.dangerSoft
+		border = p.dangerBorder
+		dot = p.danger
+		nameColor = p.dangerLightText
+	case sourceChipSelectedFailed:
+		bg = p.dangerSoft
+		border = p.danger
+		dot = p.danger
+		nameColor = p.dangerLightText
+		boldName = true
+	default:
+		if btn.Hovered() {
+			bg = p.controlHover
+			border = p.borderControl
+		}
+	}
+	btn.Background(btn.AnimateColor("src-chip-bg", bg, animColor)).Border(1, border)
+	btn.Children(func() {
+		ui.Box(c).Size(6, 6).Radius(3).Background(dot).PassThrough()
+		nt := ui.Text(c, name).FontSize(12).TextColor(nameColor).SingleLine().PassThrough()
+		if boldName {
+			nt.Bold()
+		}
+		if isPan {
+			ui.Text(c, "网盘").FontSize(9.5).Bold().TextColor(p.accentLightText).SingleLine().PassThrough()
+		}
+		if latencyText != "" {
+			lc := p.textMuted
+			switch {
+			case state == sourceChipFailed || state == sourceChipSelectedFailed:
+				lc = p.dangerLightText
+			case tier == 1:
+				lc = p.successText
+			case tier == 3:
+				lc = p.warning
+			}
+			ui.Text(c, latencyText).FontSize(11).TextColor(lc).SingleLine().ContentTransition(ctNumeric).PassThrough()
+		}
+	})
+	return applyPressPose(btn)
 }
 
 // siteView browses the categories of one site.
 func (a *app) siteView(c *ui.Context) {
 	b := &a.browser
 	p := paletteFor(c)
-	ui.Column(c).Fill().Gap(14).Children(func() {
-		ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
-			for i, category := range b.categories {
-				if chip(c.Key(fmt.Sprintf("category-%d", i)), category.Name, b.category == string(category.ID)).Clicked() {
-					a.loadPage(string(category.ID), 1)
+	ui.Column(c).Fill().Gap(12).Children(func() {
+		if len(b.categories) > 0 {
+			ui.ScrollHorizontal(c).FillWidth().Padding(0, scrollGutter, 0, 0).Gap(18).Scrollbars(false).Children(func() {
+				for i, category := range b.categories {
+					if underlineTab(c, fmt.Sprintf("category-%d", i), category.Name, b.category == string(category.ID)).Clicked() {
+						a.loadPage(string(category.ID), 1)
+					}
 				}
-			}
-		})
-		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+			})
+		}
+		ui.Row(c).FillWidth().Padding(0, scrollGutter, 0, 0).Gap(10).AlignItems(ui.Center).Children(func() {
 			state := "选择分类，浏览这个站点的影片。"
 			if a.running(jobSite) {
 				state = "正在读取…"
 			} else if b.page > 0 {
 				state = fmt.Sprintf("第 %d 页", b.page)
 			}
-			ui.Text(c, state).TextColor(p.textMuted).Grow(1).ContentTransition(ctNumeric)
+			ui.Text(c, state).FontSize(12.5).TextColor(p.textMuted).Grow(1).ContentTransition(ctNumeric)
 			if b.page > 0 {
-				if glassButton(c, "上一页").Disabled(b.page <= 1).Clicked() {
+				if glassButton(c, "上一页").Padding(5, 12).Disabled(b.page <= 1).Clicked() {
 					a.loadPage(b.category, b.page-1)
 				}
-				if glassButton(c, "下一页").Disabled(!b.results.HasNext).Clicked() {
+				if glassButton(c, "下一页").Padding(5, 12).Disabled(!b.results.HasNext).Clicked() {
 					a.loadPage(b.category, b.page+1)
 				}
 			}
@@ -604,7 +735,7 @@ func (a *app) siteView(c *ui.Context) {
 				video := b.results.Videos[i]
 				a.openTitle(videoTitle(video), video.Pic, []library.Item{{Entry: b.site, Video: video}})
 			}
-		}).Gap(14).Grow(1).FillWidth()
+		}).Gap(14).Padding(0, scrollGutter, 0, 0).ScrollbarStyle(appScrollbar).Grow(1).FillWidth()
 		// Arrows move the choice without opening it; a click or Enter opens it.
 		if grid.Submitted() && b.selected >= 0 && b.selected < len(b.results.Videos) {
 			video := b.results.Videos[b.selected]
@@ -688,7 +819,7 @@ func (a *app) importDialog(c *ui.Context) {
 			hint = "粘贴新地址将替换当前片源，你的观看历史与追剧都会保留。"
 		}
 		ui.Text(c, title).FontSize(24).Bold()
-		ui.Scroll(c).FillWidth().MaxHeight(max(float32(120), winH-176)).Gap(12).Children(func() {
+		ui.Scroll(c).FillWidth().MaxHeight(max(float32(120), winH-176)).Gap(12).ScrollbarStyle(appScrollbar).Children(func() {
 			ui.Text(c, hint).TextColor(p.textMuted)
 			if ui.TextInput(c, &b.importURL).Label("配置地址").Placeholder("https://example.com/config.json").FillWidth().AutoFocus().Submitted() {
 				if !a.running(jobConfig) {
@@ -731,22 +862,31 @@ func (a *app) importDialog(c *ui.Context) {
 // the video comes from; a strong badge marks an exact match.
 func (a *app) videoCard(c *ui.Context, video catalog.Video, badge string, strong bool) ui.Element {
 	p := paletteFor(c)
-	card := ui.Box(c).Fill().Radius(14).Clip().Background(p.cardPlaceholder).Cursor(ui.CursorPointer)
+	card := ui.Box(c).Fill().Radius(11).Clip().Background(p.cardPlaceholder).Border(1, p.border).Cursor(ui.CursorPointer)
 	card.Children(func() {
 		applyPosterImage(c, card, a.poster(c, video.Pic))
 		if badge != "" {
-			text := ui.Text(c, badge).Absolute().Left(8).Top(8).Padding(3, 8).Radius(10).FontSize(12).SingleLine()
 			if strong {
-				text.Background(p.accent).TextColor(p.accentText)
+				ui.Text(c, badge).Absolute().Left(7).Top(7).Padding(2, 7).Radius(6).
+					FontSize(11).Bold().Background(p.accent).TextColor(p.accentText).SingleLine().PassThrough()
+			} else if strings.Contains(badge, "豆瓣 ") {
+				score := strings.Replace(badge, "豆瓣 ", "", 1)
+				ui.Row(c).Absolute().Left(7).Top(7).Padding(2, 7).Gap(4).Radius(6).AlignItems(ui.Center).
+					Label(badge).Background(ui.RGBA(12, 15, 24, 0.86)).Border(1, p.border).PassThrough().Children(func() {
+					ui.Icon(c, iconStarFilled).Size(10, 10).TextColor(p.gold).PassThrough()
+					ui.Text(c, score).FontSize(11).Bold().TextColor(p.gold).SingleLine().PassThrough()
+				})
 			} else {
-				text.Background(ui.RGBA(10, 13, 24, 0.78)).TextColor(ui.RGB(255, 255, 255))
+				ui.Text(c, badge).Absolute().Left(7).Top(7).Padding(2, 7).Radius(6).
+					FontSize(11).Background(ui.RGBA(12, 15, 24, 0.86)).Border(1, p.border).
+					TextColor(p.text).SingleLine().PassThrough()
 			}
 		}
-		ui.Column(c).Absolute().Left(0).Right(0).Bottom(0).Padding(26, 12, 12, 12).Gap(4).
-			Gradient(ui.RGBA(10, 13, 24, 0), ui.RGBA(10, 13, 24, 0.9), 180).Children(func() {
-			ui.Text(c, videoTitle(video)).Bold().TextColor(ui.RGB(255, 255, 255)).SingleLine()
+		ui.Column(c).Absolute().Left(0).Right(0).Bottom(0).Padding(28, 10, 10, 10).Gap(3).
+			Gradient(ui.RGBA(10, 12, 20, 0), ui.RGBA(10, 12, 20, 0.93), 180).PassThrough().Children(func() {
+			ui.Text(c, videoTitle(video)).FontSize(13).Bold().TextColor(p.text).SingleLine().PassThrough()
 			if meta := videoMeta(video.Year, video.Type, video.Remarks); meta != "" {
-				ui.Text(c, meta).FontSize(12).TextColor(ui.RGBA(255, 255, 255, 0.86)).SingleLine()
+				ui.Text(c, meta).FontSize(11).TextColor(p.textMuted).SingleLine().PassThrough()
 			}
 		})
 	})

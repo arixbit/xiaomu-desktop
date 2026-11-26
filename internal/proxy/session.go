@@ -70,6 +70,8 @@ func (p *Proxy) RemoveSession(id string) {
 	}
 	p.mu.Lock()
 	delete(p.sessions, id)
+	p.invalidatePlaylistsLocked("s:" + id + "|")
+	p.invalidatePlaylistsLocked("u:" + id + "|")
 	p.mu.Unlock()
 }
 
@@ -143,14 +145,29 @@ func (p *Proxy) serveSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	isPreview := isPreviewRequest(r)
+	reqLimit := time.Duration(0)
+	if isPreview {
+		reqLimit = previewIdleTimeout
+	}
+	cacheKey := "s:" + id + "|" + target
+	if r.Method == http.MethodGet {
+		if cached, ok := p.cachedPlaylist(cacheKey); ok {
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, cached)
+			return
+		}
+	}
+
 	isHLSPath := playlist("", u.Path) || playlist("", sess.filename)
-	if r.Method == http.MethodGet && sess.prefetch && !isSub && !isHLSPath {
+	if r.Method == http.MethodGet && sess.prefetch && !isSub && !isHLSPath && !isPreview {
 		if p.servePrefetch(w, r, sess, target, headers) {
 			return
 		}
 	}
 
-	resp, err := p.doSessionRequest(r.Context(), r.Method, target, headers, r.Header.Get("Range"), isHLSPath)
+	resp, err := p.doSessionRequestWithTimeout(r.Context(), r.Method, target, headers, r.Header.Get("Range"), isHLSPath, reqLimit)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return
@@ -160,8 +177,11 @@ func (p *Proxy) serveSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if !isSub && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
 		if newURL, newHdr, refreshed := sess.tryRefresh(r.Context()); refreshed {
+			p.mu.Lock()
+			p.invalidatePlaylistsLocked("s:" + id + "|")
+			p.mu.Unlock()
 			httpx.DrainAndClose(resp.Body)
-			resp, err = p.doSessionRequest(r.Context(), r.Method, newURL, newHdr, r.Header.Get("Range"), isHLSPath)
+			resp, err = p.doSessionRequestWithTimeout(r.Context(), r.Method, newURL, newHdr, r.Header.Get("Range"), isHLSPath, reqLimit)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
 					return
@@ -170,6 +190,7 @@ func (p *Proxy) serveSession(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			headers = newHdr
+			cacheKey = "s:" + id + "|" + newURL
 		}
 	}
 	defer httpx.DrainAndClose(resp.Body)
@@ -193,7 +214,7 @@ func (p *Proxy) serveSession(w http.ResponseWriter, r *http.Request) {
 		return p.base + "/s/" + id + "/sub?url=" + url.QueryEscape(raw)
 	}
 	if playlist(resp.Header.Get("Content-Type"), base.Path) {
-		p.writeSessionPlaylist(w, resp, base.String(), headers, wrapSub, r.Context())
+		p.writeSessionPlaylist(w, resp, base.String(), cacheKey, headers, wrapSub, r.Context(), reqLimit)
 		return
 	}
 	buf := make([]byte, 64)
@@ -204,7 +225,7 @@ func (p *Proxy) serveSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if n > 0 && bytes.HasPrefix(bytes.TrimSpace(buf[:n]), []byte("#EXTM3U")) {
 		if resp.StatusCode == http.StatusPartialContent {
-			p.writeSessionPlaylist(w, resp, base.String(), headers, wrapSub, r.Context())
+			p.writeSessionPlaylist(w, resp, base.String(), cacheKey, headers, wrapSub, r.Context(), reqLimit)
 			return
 		}
 		restBody, _, err := httpx.ReadLimit(resp.Body, resp.ContentLength, playlistLimit)
@@ -213,7 +234,7 @@ func (p *Proxy) serveSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body := append(append([]byte{}, buf[:n]...), restBody...)
-		p.writeRewrittenWith(w, base.String(), body, wrapSub)
+		p.writeRewrittenWith(w, base.String(), cacheKey, body, wrapSub)
 		return
 	}
 	copyMediaHeaders(w.Header(), resp.Header)
@@ -230,6 +251,10 @@ func (p *Proxy) serveSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Proxy) doSessionRequest(ctx context.Context, method, target string, headers map[string]string, rangeHdr string, isHLS bool) (*http.Response, error) {
+	return p.doSessionRequestWithTimeout(ctx, method, target, headers, rangeHdr, isHLS, 0)
+}
+
+func (p *Proxy) doSessionRequestWithTimeout(ctx context.Context, method, target string, headers map[string]string, rangeHdr string, isHLS bool, timeoutLimit time.Duration) (*http.Response, error) {
 	reqCtx := context.WithValue(ctx, sessionHeadersKey{}, headers)
 	req, err := http.NewRequestWithContext(reqCtx, method, target, nil)
 	if err != nil {
@@ -239,17 +264,17 @@ func (p *Proxy) doSessionRequest(ctx context.Context, method, target string, hea
 	if rangeHdr != "" && !isHLS {
 		req.Header.Set("Range", rangeHdr)
 	}
-	return p.do(req)
+	return p.doWithTimeout(req, timeoutLimit)
 }
 
-func (p *Proxy) writeSessionPlaylist(w http.ResponseWriter, resp *http.Response, playlistURL string, headers map[string]string, wrap func(string) string, ctx context.Context) {
+func (p *Proxy) writeSessionPlaylist(w http.ResponseWriter, resp *http.Response, playlistURL, cacheKey string, headers map[string]string, wrap func(string) string, ctx context.Context, timeoutLimit time.Duration) {
 	if resp.StatusCode == http.StatusPartialContent {
 		reqCtx := context.WithValue(ctx, sessionHeadersKey{}, headers)
 		req := resp.Request.Clone(reqCtx)
 		req.Header.Del("Range")
 		applyMap(req, headers)
 		httpx.DrainAndClose(resp.Body)
-		full, err := p.do(req)
+		full, err := p.doWithTimeout(req, timeoutLimit)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -267,15 +292,16 @@ func (p *Proxy) writeSessionPlaylist(w http.ResponseWriter, resp *http.Response,
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	p.writeRewrittenWith(w, playlistURL, body, wrap)
+	p.writeRewrittenWith(w, playlistURL, cacheKey, body, wrap)
 }
 
-func (p *Proxy) writeRewrittenWith(w http.ResponseWriter, playlistURL string, body []byte, wrap func(string) string) {
+func (p *Proxy) writeRewrittenWith(w http.ResponseWriter, playlistURL, cacheKey string, body []byte, wrap func(string) string) {
 	if !bytes.HasPrefix(bytes.TrimSpace(body), []byte("#EXTM3U")) {
 		http.Error(w, "upstream returned a page instead of an HLS playlist", http.StatusBadGateway)
 		return
 	}
 	out := rewriteM3U8(string(body), playlistURL, wrap)
+	p.storePlaylist(cacheKey, out, body)
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, out)

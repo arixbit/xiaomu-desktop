@@ -2,9 +2,12 @@ package main
 
 import (
 	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -53,7 +56,7 @@ func TestPlayerScreenReturnsToLibrary(t *testing.T) {
 	if err := tt.Click("选集"); err != nil {
 		t.Fatal(err)
 	}
-	if !tt.HasText("跳过") || !tt.HasText("2") || tt.HasText("第2集") || !tt.HasText("播完自动下一集") {
+	if !tt.HasText("片头片尾") || !tt.HasText("2") || tt.HasText("第2集") || !tt.HasText("播完自动下一集") {
 		t.Fatalf("player controls missing: %v", tt.Texts())
 	}
 	if err := tt.Click("返回"); err != nil {
@@ -224,5 +227,61 @@ func TestEpisodeButtonLabel(t *testing.T) {
 				t.Fatalf("label = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPlayerHeaderTooltipsRenderBelowHeaderClearOfTitleBar(t *testing.T) {
+	a := newPlayerTestApp(t)
+	tt := ui.NewTester(a.view, 1120, 760)
+	bar := ui.TitleBar{Height: 38, Left: 78, Right: 138, Bottom: 38}
+	tt.SetTitleBar(bar)
+	tt.Frame()
+
+	for _, tc := range []struct {
+		btnLabel string
+		tipText  string
+	}{
+		{"返回", "返回上一页"},
+		{"窗口置顶", "切换窗口置顶 (P)"},
+		{"迷你小窗", "置顶迷你小窗 (T)"},
+		{"选集", "展开选集 (Esc 收起)"},
+	} {
+		btn, ok := tt.Find(tc.btnLabel)
+		if !ok {
+			t.Fatalf("missing header button %q", tc.btnLabel)
+		}
+		tt.Move(btn.X+btn.W/2, btn.Y+btn.H/2)
+		tt.Advance(700 * time.Millisecond)
+		tip, ok := tt.Find(tc.tipText)
+		if !ok {
+			t.Fatalf("tooltip %q did not show on hover of %q: texts=%v", tc.tipText, tc.btnLabel, tt.Texts())
+		}
+		if tip.Y < btn.Y+btn.H-0.5 {
+			t.Fatalf("tooltip %q appeared above/overlapping header button %q: btn=%+v tip=%+v", tc.tipText, tc.btnLabel, btn, tip)
+		}
+		if tip.Y < bar.Bottom {
+			t.Fatalf("tooltip %q collided with title bar controls (bottom=%.1f): tip=%+v", tc.tipText, bar.Bottom, tip)
+		}
+		if tip.X < 0 || tip.X+tip.W > 1120 {
+			t.Fatalf("tooltip %q overflowed window horizontally: tip=%+v", tc.tipText, tip)
+		}
+		if tc.btnLabel == "返回" {
+			if outDir := os.Getenv("XIAOMU_FAILURE_REVIEW_DIR"); outDir != "" {
+				if err := os.MkdirAll(outDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				f, err := os.Create(filepath.Join(outDir, "native-header-back-tooltip.png"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := png.Encode(f, tt.Image()); err != nil {
+					f.Close()
+					t.Fatal(err)
+				}
+				if err := f.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
 	}
 }

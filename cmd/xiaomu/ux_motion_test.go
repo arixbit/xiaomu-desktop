@@ -206,21 +206,46 @@ func TestUpNextPillAllowsCancelingAutoNext(t *testing.T) {
 }
 
 func TestOpeningSkipOffersUndoPill(t *testing.T) {
-	a := newKeyboardTestApp(t)
-	if err := a.seriesSkips.set(a.title.name, seriesSkipRule{Enabled: true, Opening: 12}); err != nil {
-		t.Fatal(err)
-	}
-	a.player.Pause()
-	tt := ui.NewTester(a.view, 1120, 760)
-	tt.Frame()
-	if !tt.HasText("已跳过片头") || !tt.HasText("回看片头") {
-		t.Fatalf("opening skip undo pill missing: %v", tt.Texts())
-	}
-	if err := tt.Click("回看片头"); err != nil {
-		t.Fatal(err)
-	}
-	if a.player.Position() != 0 {
-		t.Fatalf("clicking undo did not rewind to 0: pos=%v", a.player.Position())
+	for _, full := range []bool{false, true} {
+		name := "windowed"
+		if full {
+			name = "fullscreen"
+		}
+		t.Run(name, func(t *testing.T) {
+			a := newKeyboardTestApp(t)
+			a.fullScreen = full
+			if err := a.seriesSkips.set(a.title.name, seriesSkipRule{Enabled: true, Opening: 12}); err != nil {
+				t.Fatal(err)
+			}
+			a.player.Pause()
+			tt := ui.NewTester(a.view, 1280, 720)
+			tt.Frame()
+			if !tt.HasText("已跳过片头 12 秒") || !tt.HasText("回看片头") {
+				t.Fatalf("opening skip undo pill missing skipped seconds: %v", tt.Texts())
+			}
+			video, okV := tt.Find("视频画面")
+			labelR, okL := tt.Find("已跳过片头 12 秒")
+			btnR, okB := tt.Find("回看片头")
+			dock, okD := tt.Find("播放控制条")
+			if !okV || !okL || !okB || !okD {
+				t.Fatalf("missing bounds: video=%v label=%v btn=%v dock=%v", okV, okL, okB, okD)
+			}
+			pillCenterX := (labelR.X + btnR.X + btnR.W) / 2
+			videoCenterX := video.X + video.W/2
+			if absf(pillCenterX-videoCenterX) > 12 {
+				t.Fatalf("skip undo pill not centered horizontally over video: pillCenter=%.2f videoCenter=%.2f (label=%+v btn=%+v video=%+v)",
+					pillCenterX, videoCenterX, labelR, btnR, video)
+			}
+			if btnR.Y+btnR.H >= dock.Y {
+				t.Fatalf("skip undo pill overlapped dock: pillBottom=%.2f dockTop=%.2f", btnR.Y+btnR.H, dock.Y)
+			}
+			if err := tt.Click("回看片头"); err != nil {
+				t.Fatal(err)
+			}
+			if a.player.Position() != 0 {
+				t.Fatalf("clicking undo did not rewind to 0: pos=%v", a.player.Position())
+			}
+		})
 	}
 }
 
@@ -330,7 +355,7 @@ func TestResponsiveThemesAndRailRenderCleanly(t *testing.T) {
 			if _, ok := tt.Find("首页"); !ok {
 				t.Fatalf("%s: sidebar home entry missing", tc.name)
 			}
-			if _, ok := tt.Find("片源"); !ok {
+			if _, ok := tt.Find("片源管理"); !ok {
 				t.Fatalf("%s: sidebar sources entry missing", tc.name)
 			}
 			upd, ok := tt.Find("检查更新")

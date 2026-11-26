@@ -24,13 +24,13 @@ sh scripts/build-release.sh -o build/releases/v0.3.0
 
 默认构建还会把仓库内固化的 2 KB `v0.9.8` 签名桥接清单（`scripts/update-darwin-universal-bridge.json`，其 `url` 固定指向 `v0.9.8` Release 内保留的 `xiaomu-0.9.8-darwin-universal.tar.gz`）自动复制到 `<输出目录>/darwin-universal/update-darwin-universal.json`。后续版本（`v0.9.9+`）**无需再构建或上传 47 MB Universal 更新包**，只需在每次 Release 一并上传这份 2 KB 的 `update-darwin-universal.json`（且不删除 `v0.9.8` Release），即可让仍停留在 `v0.3.0–v0.9.7` 的旧版 macOS 用户永久自动两跳升级（先升 `v0.9.8` 桥梁版，重启后再自动升至最新单架构轻量版），不会遇到 404 断更；而已升至 `v0.9.8+` 的用户会优先请求单架构清单，不会回退或降级。仅当需要重新为当前版本构建完整 Universal 更新包时，才显式传入 `--with-universal-bridge`。
 
-Windows 发布用 `sh scripts/build-release-windows.sh -o build/releases/vX.Y.Z`，同样需要上述更新签名密钥。脚本固定构建 `windows/amd64`（因 `mygo-player v0.5.1` 暂仅提供 `windows-amd64` 动态库 `mpv-2.dll`，当前不构建 `windows/arm64` 产物），并在所选输出目录检查安装包、签名更新包及更新清单，缺少任一产物都会失败。验证后按下节上传附件。
+Windows 发布用 `sh scripts/build-release-windows.sh -o build/releases/vX.Y.Z`，同样需要上述更新签名密钥。脚本固定构建 `windows/amd64` 与 `windows/arm64`（均由 `mygo-player v0.5.2` 自动随包内置对应架构的 `mpv-2.dll`），并在所选输出目录检查安装包、签名更新包及更新清单，缺少任一产物都会失败。验证后按下节上传附件。
 
 Windows 上 MyGo 会自动下载 NSIS，macOS/Linux 上需要 `makensis`。安装包未做代码签名，用户首次安装会遇到 SmartScreen 提示。`scripts/installer.nsh` 按固定文件名清理小幕的安装文件，安装目录为空时才移除。新增 Windows 打包资源时同步维护卸载列表。
 
 ## 发布附件
 
-从干净的发布提交构建 macOS（`darwin/arm64` 与 `darwin/amd64`）与 Windows（`windows/amd64`）包，通过 PR 合并，并将 Release 标签指向用于构建的提交。验证 App 版本、正式图标、各自单架构与签名后，准备以下文件：
+从干净的发布提交构建 macOS（`darwin/arm64` 与 `darwin/amd64`）与 Windows（`windows/amd64` 与 `windows/arm64`）包，通过 PR 合并，并将 Release 标签指向用于构建的提交。验证 App 版本、正式图标、各自单架构与签名后，准备以下文件：
 
 - `xiaomu-<版本>-arm64.dmg` / `xiaomu-<版本>-amd64.dmg`：macOS Apple Silicon / Intel 手动安装镜像。
 - `xiaomu-<版本>-macos-arm64.zip` / `xiaomu-<版本>-macos-amd64.zip`：macOS 可选手动安装压缩包。
@@ -38,9 +38,9 @@ Windows 上 MyGo 会自动下载 NSIS，macOS/Linux 上需要 `makensis`。安�
 - `update-darwin-arm64.json` / `update-darwin-amd64.json`：与各架构更新包配套的版本、说明、大小和签名。
 - `update-darwin-universal.json`：由构建脚本自动从 `scripts/update-darwin-universal-bridge.json` 复用的 2 KB 固定桥接清单（指向 `v0.9.8` Release 内的 Universal 归档，无需再上传新的 Universal `.tar.gz`），保障 `v0.3.0–v0.9.7` 旧版 macOS 永久两跳自动更新不碰 404。
 - `SHA256SUMS`：所有上传附件（除校验文件自身）的 SHA-256。
-- `xiaomu-setup-<版本>-amd64.exe`：Windows x64 安装包（NSIS，内置 `mpv-2.dll`）。
-- `xiaomu-<版本>-windows-amd64.tar.gz`：Windows x64 更新器下载的签名更新包。
-- `update-windows-amd64.json`：与 Windows x64 更新包配套的版本、说明、大小和签名。
+- `xiaomu-setup-<版本>-amd64.exe` / `xiaomu-setup-<版本>-arm64.exe`：Windows x64 / ARM64 安装包（NSIS，内置对应架构 `mpv-2.dll`）。
+- `xiaomu-<版本>-windows-amd64.tar.gz` / `xiaomu-<版本>-windows-arm64.tar.gz`：Windows x64 / ARM64 更新器下载的签名更新包。
+- `update-windows-amd64.json` / `update-windows-arm64.json`：与 Windows 各架构更新包配套的版本、说明、大小和签名。
 
 先建立 Release 草稿，上传全部附件并校验；确认完整后再发布为最新正式版本。每个后续版本都必须同时上传更新清单与其引用的更新包。当前不生成差量包。不得修改已发布更新包的内容后继续沿用旧签名。
 

@@ -174,3 +174,59 @@ func TestSearchShortcutSelectsExistingQuery(t *testing.T) {
 		t.Fatalf("Cmd+K after blur did not select existing query: query=%q", a.browser.query)
 	}
 }
+
+func TestHomeScrollbarClearance(t *testing.T) {
+	_, doc := suggestionTestServer(t)
+	a := newSuggestionTestApp(t, doc)
+	a.favorites.entries = []favoriteEntry{{Name: "追剧样本", EpisodeCount: 12, LatestEpisode: "第12集"}}
+	a.history.note(historyEntry{Name: "在看样本", Episode: "第1集", Position: 60, Duration: 1800})
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.Frame()
+
+	scroll, ok := tt.Find("首页内容")
+	if !ok {
+		t.Fatal("home scroll container missing")
+	}
+	maxContentRight := scroll.X + scroll.W - appScrollbar.TrackWidth
+	for _, label := range []string{"全部追剧", "刷新榜单"} {
+		rect, found := tt.Find(label)
+		if !found {
+			t.Fatalf("%s missing on home page", label)
+		}
+		if rect.X+rect.W > maxContentRight+0.5 {
+			t.Fatalf("%s overlaps home scrollbar track: rect=%+v maxRight=%v scroll=%+v", label, rect, maxContentRight, scroll)
+		}
+	}
+}
+
+func TestSidebarPlacesSourcesManagementWithBottomUtilities(t *testing.T) {
+	_, doc := suggestionTestServer(t)
+	a := newSuggestionTestApp(t, doc)
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.Frame()
+
+	fav, ok := tt.Find("追剧")
+	if !ok {
+		t.Fatal("追剧 missing")
+	}
+	sources, ok := tt.Find("片源管理")
+	if !ok {
+		t.Fatal("片源管理 missing")
+	}
+	openFile, ok := tt.Find("打开文件")
+	if !ok {
+		t.Fatal("打开文件 missing")
+	}
+	if sources.Y-fav.Y-fav.H < 100 {
+		t.Fatalf("片源管理 should be separated into the bottom group below spacer: fav=%+v sources=%+v", fav, sources)
+	}
+	if sources.Y+sources.H > openFile.Y+0.5 || openFile.Y-(sources.Y+sources.H) > 12 {
+		t.Fatalf("片源管理 should sit directly above 打开文件: sources=%+v openFile=%+v", sources, openFile)
+	}
+	if err := tt.Click("片源管理"); err != nil {
+		t.Fatal(err)
+	}
+	if a.route() != routeSources || a.pageTitle() != "片源管理" {
+		t.Fatalf("clicking 片源管理 did not open sources page: route=%v title=%q", a.route(), a.pageTitle())
+	}
+}

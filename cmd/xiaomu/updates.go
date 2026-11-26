@@ -148,14 +148,28 @@ func updateButton(c *ui.Context, version string) ui.Element {
 	if version != "" {
 		label = "有新版本"
 	}
-	button := glassButton(c, "").FillWidth().Gap(8).Label(label)
+	button := ui.ButtonBase(c.Key("side-act-update")).FillWidth().Height(34).Padding(0, 12).Gap(10).Radius(8).
+		Justify(ui.Start).AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(label)
+	bg := ui.Transparent
+	fg := p.textMuted
+	if version != "" {
+		bg = p.surfaceSubtle
+		fg = p.text
+	}
+	if button.Hovered() {
+		bg = p.surfaceHover
+		fg = p.text
+	}
+	button.Background(button.AnimateColor("side-upd-bg", bg, animColor))
+	applyPressPose(button)
 	if version != "" {
 		button.Tooltip("新版本 " + version + " 可用，点击查看更新")
 	}
 	button.Children(func() {
-		ui.Icon(c, navIconUpdate).Size(16, 16).TextColor(p.text).PassThrough()
-		ui.Text(c, label).SingleLine().ContentTransition(ctReplace)
+		ui.Icon(c, navIconUpdate).Size(16, 16).TextColor(fg).PassThrough()
+		ui.Text(c, label).FontSize(13).TextColor(fg).SingleLine().ContentTransition(ctReplace).PassThrough()
 		if version != "" {
+			ui.Spacer(c)
 			ui.Box(c).Size(7, 7).Radius(4).Background(p.accent).Label("新版本提示").PassThrough()
 		}
 	})
@@ -168,28 +182,27 @@ func updateRailButton(c *ui.Context, version string, height float32) ui.Element 
 	if version != "" {
 		label = "有新版本"
 	}
-	btn := ui.Button(c.Key("rail-update"), "").FillWidth().Height(height).Radius(14).
-		Center().Label(label).TextColor(p.text)
+	btn := ui.ButtonBase(c.Key("rail-update")).FillWidth().Height(height).Radius(9).
+		Center().Cursor(ui.CursorPointer).Label(label).TextColor(p.textMuted)
 	if version != "" {
 		btn.Tooltip("新版本 " + version + " 可用，点击查看更新")
 	} else {
 		btn.Tooltip(label)
 	}
-	if p.reduceTransparency {
-		bg := p.surfaceSubtle
-		if btn.Hovered() {
-			bg = p.surfaceHover
-		}
-		btn.Background(btn.AnimateColor("rail-upd-bg", bg, animColor)).Border(1, p.border)
-	} else {
-		btn.Material(p.controlMat)
-		if p.highContrast {
-			btn.Border(1, p.border)
-		}
+	bg := ui.Transparent
+	fg := p.textMuted
+	if version != "" {
+		bg = p.surfaceSubtle
+		fg = p.text
 	}
+	if btn.Hovered() {
+		bg = p.surfaceHover
+		fg = p.text
+	}
+	btn.Background(btn.AnimateColor("rail-upd-bg", bg, animColor))
 	applyPressPose(btn)
 	btn.Children(func() {
-		ui.Icon(c, navIconUpdate).Size(17, 17).TextColor(p.text).PassThrough()
+		ui.Icon(c, navIconUpdate).Size(17, 17).TextColor(fg).PassThrough()
 		if version != "" {
 			ui.Box(c).Size(7, 7).Radius(4).Absolute().Right(10).Top(8).Background(p.accent).Label("新版本提示").PassThrough()
 		}

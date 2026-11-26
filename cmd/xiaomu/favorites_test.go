@@ -93,7 +93,7 @@ func TestFavoritesUIRestartAndSourceChanges(t *testing.T) {
 	}
 	b.switchTab(routeFavorites)
 	bt.Frame()
-	if err := bt.Click("移除追剧 示例片"); err != nil {
+	if err := bt.Click("移出追剧 示例片"); err != nil {
 		t.Fatal(err)
 	}
 	if !bt.HasText("还没有追剧") {
@@ -217,5 +217,65 @@ func TestOpeningFavoriteIsCanceledWhenChangingTabs(t *testing.T) {
 	}
 	if a.title != nil || a.route() != routeHistory {
 		t.Fatal("late favorite result reopened the detail page")
+	}
+}
+
+func TestFavoritesViewTwoColumnCardsNarrowFallbackAndUndoRemoval(t *testing.T) {
+	now := time.Now()
+	doc := &config.Config{URL: "https://example.com/config"}
+	a := &app{nav: []routeKind{routeFavorites}}
+	defer a.close()
+	a.library = libraryBrowser{root: doc, cached: map[string]*config.Config{doc.URL: doc}}
+	a.history.note(historyEntry{Name: "剧一", ConfigURL: doc.URL, Episode: "第4集", Position: 600, Duration: 2400, Updated: now})
+	a.favorites.entries = []favoriteEntry{
+		{Name: "剧一", ConfigURL: doc.URL, EpisodeCount: 12, LatestEpisode: "第12集", Checked: now, Added: now},
+		{Name: "剧二", ConfigURL: doc.URL, EpisodeCount: 24, LatestEpisode: "第24集", Checked: now, Added: now.Add(-time.Minute)},
+		{Name: "剧三", ConfigURL: doc.URL, EpisodeCount: 16, LatestEpisode: "第16集", Checked: now, Added: now.Add(-2 * time.Minute)},
+	}
+
+	tt := ui.NewTester(a.view, 1120, 760)
+	if !tt.HasText("共追 3 部剧 · 进度与更新仅保存在本机") || !tt.HasText("有新集") {
+		t.Fatalf("favorites header or badge missing: %v", tt.Texts())
+	}
+	if _, ok := tt.Find("追剧进度 剧一"); !ok {
+		t.Fatal("watched favorite missing real progress bar")
+	}
+	if _, ok := tt.Find("追剧进度 剧二"); ok {
+		t.Fatal("unwatched favorite must not fabricate a progress bar")
+	}
+	act1, ok1 := tt.Find("打开追剧 剧一")
+	act2, ok2 := tt.Find("打开追剧 剧二")
+	act3, ok3 := tt.Find("打开追剧 剧三")
+	if !ok1 || !ok2 || !ok3 {
+		t.Fatalf("missing action buttons: ok=(%v,%v,%v) texts=%v", ok1, ok2, ok3, tt.Texts())
+	}
+	// Wide layout arranges cards in 2 columns: 剧一 and 剧二 share row 1; 剧三 starts row 2 on the left.
+	if act2.X <= act1.X+act1.W || act2.Y > act1.Y+20 || act1.Y > act2.Y+20 {
+		t.Fatalf("wide favorites did not pair row 1 into two columns: act1=%+v act2=%+v", act1, act2)
+	}
+	if act3.Y <= act1.Y+act1.H || act3.X > act1.X+20 {
+		t.Fatalf("third favorite card did not align to row 2 left column: act1=%+v act3=%+v", act1, act3)
+	}
+
+	// Narrow window (<760px) automatically falls back to a single column.
+	tt.SetSize(640, 480)
+	narrow1, _ := tt.Find("打开追剧 剧一")
+	narrow2, _ := tt.Find("打开追剧 剧二")
+	if narrow2.Y <= narrow1.Y+narrow1.H {
+		t.Fatalf("narrow favorites did not collapse to single column: n1=%+v n2=%+v", narrow1, narrow2)
+	}
+
+	// Top-right × button removes the entry and exposes an undo toast that restores it.
+	if err := tt.Click("移出追剧 剧二"); err != nil {
+		t.Fatalf("click remove favorite: %v", err)
+	}
+	if len(a.favorites.entries) != 2 || a.favorites.contains("剧二") {
+		t.Fatalf("remove favorite failed: %+v", a.favorites.entries)
+	}
+	if err := tt.Click("撤销"); err != nil {
+		t.Fatalf("click undo toast: %v", err)
+	}
+	if len(a.favorites.entries) != 3 || !a.favorites.contains("剧二") {
+		t.Fatalf("undo did not restore favorite: %+v", a.favorites.entries)
 	}
 }

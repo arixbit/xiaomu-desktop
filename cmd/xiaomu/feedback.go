@@ -42,8 +42,9 @@ type playerOSDState struct {
 }
 
 type skipUndoState struct {
-	active bool
-	until  time.Time
+	active  bool
+	seconds int
+	until   time.Time
 }
 
 func (a *app) hasActiveUndo() bool {
@@ -138,10 +139,18 @@ func (a *app) clearArmed() {
 // bulk actions (clear history, remove source, logout). First tap arms the
 // button in danger red for 4 seconds; second tap confirms and returns true.
 func (a *app) armedDangerButton(c *ui.Context, key, label, confirmLabel string) bool {
-	return a.armedDangerButtonWithTooltip(c, key, label, confirmLabel, "")
+	return a.armedDangerButtonStyled(c, key, label, confirmLabel, "", 7, 13, 13)
+}
+
+func (a *app) armedDangerButtonCompact(c *ui.Context, key, label, confirmLabel string) bool {
+	return a.armedDangerButtonStyled(c, key, label, confirmLabel, "", 4, 10, 12)
 }
 
 func (a *app) armedDangerButtonWithTooltip(c *ui.Context, key, label, confirmLabel, tooltip string) bool {
+	return a.armedDangerButtonStyled(c, key, label, confirmLabel, tooltip, 7, 13, 13)
+}
+
+func (a *app) armedDangerButtonStyled(c *ui.Context, key, label, confirmLabel, tooltip string, padY, padX, fontSize float32) bool {
 	p := paletteFor(c)
 	now := c.Now()
 	armed := a.armed.key == key && now.Before(a.armed.until)
@@ -157,17 +166,18 @@ func (a *app) armedDangerButtonWithTooltip(c *ui.Context, key, label, confirmLab
 		shownLabel = confirmLabel
 	}
 
-	btn := ui.Button(c.Key("armed-"+key), "").Label(shownLabel).Radius(20).Padding(9, 16)
+	btn := ui.Button(c.Key("armed-"+key), "").Label(shownLabel).Radius(9).Padding(padY, padX)
 	if tooltip != "" {
 		btn.Tooltip(tooltip)
 	}
 	targetBg := p.surfaceSubtle
-	targetText := p.text
+	targetText := p.textMuted
 	if armed {
 		targetBg = p.danger
 		targetText = p.dangerText
 	} else if btn.Hovered() {
 		targetBg = p.surfaceHover
+		targetText = p.text
 	}
 	bg := btn.AnimateColor("armed-bg", targetBg, animColor)
 	fg := btn.AnimateColor("armed-fg", targetText, animColor)
@@ -177,7 +187,7 @@ func (a *app) armedDangerButtonWithTooltip(c *ui.Context, key, label, confirmLab
 	}
 	applyPressPose(btn)
 	btn.Children(func() {
-		ui.Text(c, shownLabel).SingleLine().ContentTransition(ctReplace)
+		ui.Text(c, shownLabel).FontSize(fontSize).SingleLine().ContentTransition(ctReplace)
 	})
 	if btn.Clicked() {
 		if armed {
@@ -230,11 +240,19 @@ func (a *app) playerOSDPill(c *ui.Context) {
 	})
 }
 
-func (a *app) showSkipUndo() {
-	a.skipUndo = skipUndoState{active: true}
+func (a *app) showSkipUndo(skipped time.Duration) {
+	secs := max(0, int(math.Round(skipped.Seconds())))
+	a.skipUndo = skipUndoState{active: true, seconds: secs}
 }
 
-func (a *app) skipUndoPill(c *ui.Context, p mediaPlayer) {
+func skipUndoLabel(seconds int) string {
+	if seconds > 0 {
+		return fmt.Sprintf("已跳过片头 %d 秒", seconds)
+	}
+	return "已跳过片头"
+}
+
+func (a *app) skipUndoPill(c *ui.Context, p mediaPlayer, showControls bool) {
 	if !a.skipUndo.active {
 		return
 	}
@@ -247,20 +265,31 @@ func (a *app) skipUndoPill(c *ui.Context, p mediaPlayer) {
 		return
 	}
 	c.After(a.skipUndo.until.Sub(now))
-	ui.Row(c.Key("skip-undo")).Absolute().Left(24).Bottom(128).Padding(8, 12).Gap(10).Radius(16).
-		Material(glass.Glass{Style: glass.Regular, Tint: ui.RGBA(12, 16, 28, 0.80)}).
-		TextColor(playerText).AlignItems(ui.Center).Transition(transToast).Children(func() {
-		ui.Text(c, "已跳过片头").FontSize(13).SingleLine()
-		btn := ui.Button(c, "回看片头").Radius(12).Padding(4, 10).
-			Material(glass.Glass{Style: glass.Clear, Interactive: true}).TextColor(playerText)
-		applyPressPose(btn)
-		if btn.Clicked() {
-			a.skipUndo = skipUndoState{}
-			a.resumeAt, a.resumeIssued = 0, false
-			p.Seek(0)
-			a.syncNowPlayingState()
-			a.showPlayerOSD("已回到片头")
+	bottom := float32(28)
+	if showControls {
+		bottom = 124
+		if a.hasDanmakuHighlightCurve(p) {
+			bottom = 136
 		}
+	}
+	ui.Row(c.Key("skip-undo")).Absolute().Left(0).Right(0).Bottom(bottom).Justify(ui.Center).PassThrough().
+		Transition(transToast).Children(func() {
+		ui.Row(c).Padding(8, 14).Gap(10).Radius(18).
+			Material(glass.Glass{Style: glass.Regular, Tint: ui.RGBA(12, 16, 28, 0.80)}).
+			Border(1, ui.RGBA(255, 255, 255, 0.14)).
+			TextColor(playerText).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, skipUndoLabel(a.skipUndo.seconds)).FontSize(13).SingleLine()
+			btn := ui.Button(c, "回看片头").Radius(12).Padding(4, 10).
+				Material(glass.Glass{Style: glass.Clear, Interactive: true}).TextColor(playerText)
+			applyPressPose(btn)
+			if btn.Clicked() {
+				a.skipUndo = skipUndoState{}
+				a.resumeAt, a.resumeIssued = 0, false
+				p.Seek(0)
+				a.syncNowPlayingState()
+				a.showPlayerOSD("已回到片头")
+			}
+		})
 	})
 }
 
@@ -283,7 +312,13 @@ func (a *app) upNextTarget(p mediaPlayer) (nextName string, playNext func(), rem
 		if !hasNext {
 			return "", nil, 0, false
 		}
-		rem := dur - p.Position()
+		endTarget := dur
+		if key, _ := a.activeSkipKey(); key != "" {
+			if rule := a.seriesSkips.get(key); rule.fits(dur) && rule.Ending > 0 {
+				endTarget = dur - time.Duration(rule.Ending)*time.Second
+			}
+		}
+		rem := endTarget - p.Position()
 		if rem <= 0 || rem > upNextWindow {
 			return "", nil, 0, false
 		}
@@ -321,23 +356,26 @@ func (a *app) upNextTarget(p mediaPlayer) (nextName string, playNext func(), rem
 	}, rem, true
 }
 
-func (a *app) upNextPill(c *ui.Context, p mediaPlayer, showControls bool) {
+func (a *app) upNextPill(c *ui.Context, p mediaPlayer, showControls bool, panelRightReserve float32) {
 	nextName, playNext, rem, ok := a.upNextTarget(p)
 	if !ok {
 		return
 	}
 	secs := max(1, int(math.Ceil(rem.Seconds())))
 	c.After(500 * time.Millisecond)
-	bottom := float32(28)
+	right, bottom := max(float32(24), panelRightReserve), float32(28)
 	if showControls {
-		bottom = 128
+		bottom = 124
+		if a.hasDanmakuHighlightCurve(p) {
+			bottom = 136
+		}
 	}
-	ui.Row(c.Key("up-next-pill")).Absolute().Right(24).Bottom(bottom).Padding(10, 14).Gap(10).Radius(18).
+	ui.Row(c.Key("up-next-pill")).Absolute().Right(right).Bottom(bottom).Padding(10, 14).Gap(10).Radius(18).
 		Material(glass.Glass{Style: glass.Regular, Tint: ui.RGBA(12, 16, 28, 0.84)}).
 		TextColor(playerText).AlignItems(ui.Center).Transition(transToast).Children(func() {
 		ui.Text(c, fmt.Sprintf("%d 秒后播放 %s", secs, nextName)).FontSize(13).SingleLine().ContentTransition(ctNumeric)
-		playBtn := ui.Button(c, "立即播放").Radius(12).Padding(5, 11).
-			Material(glass.Glass{Tint: ui.RGBA(255, 90, 64, 0.92), Interactive: true}).TextColor(ui.Hex("#1a0f0c"))
+		playBtn := ui.Button(c, "立即播放").Radius(9).Padding(5, 12).Bold().
+			Background(playerCoral).TextColor(ui.RGB(255, 255, 255))
 		applyPressPose(playBtn)
 		if playBtn.Clicked() {
 			playNext()

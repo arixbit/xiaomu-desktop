@@ -32,6 +32,7 @@ type titlePage struct {
 	name, pic        string
 	score            string            // Douban score, when the opener knew one
 	seeds            []library.Item    // sources known when the page opened
+	sourceScan       *libraryScan      // private title search for playback from history or following
 	failed           map[string]string // source → why it could not be read
 	auto             bool              // open the first source that reads
 	searchFallback   bool              // a saved source may have disappeared
@@ -97,12 +98,16 @@ func (a *app) clearTitle() {
 	a.cancelJob(jobTitle)
 	a.cancelJob(jobPlay)
 	if a.title != nil {
+		if s := a.title.sourceScan; s != nil {
+			a.stopScan(s)
+		}
 		a.clearPanelChoice()
 		a.closeSession(a.title.session)
 		a.title = nil
 	}
 	a.playingSource, a.playingEpisode = "", ""
 	a.playFailure = nil
+	a.resetFailureUI()
 	a.playbackWait = playbackWait{}
 	a.sourceAttempt = sourcePlaybackAttempt{}
 }
@@ -115,7 +120,7 @@ func (a *app) candidates() []library.Item {
 		return nil
 	}
 	key := titleKey(t.name)
-	s := &a.library.search
+	s := a.titleSearch()
 	var searchMatches []library.Item
 	useIndex := false
 	if key != "" && len(s.items) > 0 && s.groupIndex != nil && s.groupIndexLen == len(s.items) && s.groupIndexHead == &s.items[0] {
@@ -352,6 +357,7 @@ func (a *app) openCandidate(item library.Item) {
 	}
 	a.cancelJob(jobPlay)
 	a.playFailure = nil
+	a.resetFailureUI()
 	t.pending = item
 	key := itemKey(item)
 	isRemembered := a.sourceMemory.entries[titleKey(t.name)].Preferred.matches(item)
@@ -430,6 +436,7 @@ func (a *app) openCandidatesHedged(primary, backup library.Item) {
 	}
 	a.cancelJob(jobPlay)
 	a.playFailure = nil
+	a.resetFailureUI()
 	t.pending = primary
 	titleName := t.name
 	preferred := a.sourceMemory.entries[titleKey(titleName)].Preferred
@@ -631,12 +638,24 @@ func (a *app) loadEpisode(line string, episode catalog.Episode, at time.Duration
 	a.clearPanelChoice()
 	session := t.session
 	videoID := string(t.item.Video.ID)
+	isRetry := refresh
+	hadFailure := isRetry && a.playFailure != nil
+	inPlaceRetry := hadFailure && a.player != nil
 	refresh = refresh && videoID != ""
 	label := "解析分集"
 	if refresh {
 		label = "重新获取播放地址"
 	}
-	a.playFailure = nil
+	if inPlaceRetry {
+		a.failureUI.retrying = true
+		a.failureUI.retryJobGen = 0
+		a.failureUI.copySeq++
+		a.failureUI.copied = false
+		a.failureUI.copyFailed = false
+	} else {
+		a.playFailure = nil
+		a.resetFailureUIForNewRequest()
+	}
 	a.playbackWait = playbackWait{}
 	a.beginSourceAttempt(t.item, line, episode.Name)
 	resolver := resolve.Resolver{Sniff: a.sniffPage, Parsers: entryParsers(t.item.Entry)}
@@ -668,14 +687,25 @@ func (a *app) loadEpisode(line string, episode catalog.Episode, at time.Duration
 			return jobResult{}, err
 		}
 		return jobResult{apply: func() {
+			if a.title != t {
+				return
+			}
 			if refreshed != nil {
 				t.detail.Sources = refreshed
 				t.line, t.chunk = lineIndex, 0
 			}
-			a.startEpisode(play, line, selected, at)
+			a.startEpisodeInternal(play, line, selected, at, hadFailure)
 		}}, nil
 	}, func(err error) {
+		if a.title != t {
+			return
+		}
 		a.failSourceAttempt()
+		a.failureUI.retrying = false
+		a.failureUI.retryJobGen = 0
+		a.failureUI.copySeq++
+		a.failureUI.copied = false
+		a.failureUI.copyFailed = false
 		if provider, needAuth := pan.AuthRequiredProvider(err); needAuth {
 			a.playFailure = &episodeFailure{
 				line:         line,
@@ -683,6 +713,7 @@ func (a *app) loadEpisode(line string, episode catalog.Episode, at time.Duration
 				at:           at,
 				err:          err,
 				authProvider: provider,
+				retried:      hadFailure,
 			}
 			a.status = ""
 			if a.player != nil {
@@ -699,12 +730,26 @@ func (a *app) loadEpisode(line string, episode catalog.Episode, at time.Duration
 			})
 			return
 		}
-		a.playFailure = &episodeFailure{line: line, episode: episode, at: at, err: fmt.Errorf("%s", jobError(label, err))}
+		a.playFailure = &episodeFailure{
+			line:    line,
+			episode: episode,
+			at:      at,
+			err:     formatFailureErrorMessage(label, err),
+			retried: hadFailure,
+		}
 		a.status = ""
 		if a.player != nil {
 			a.player.Pause()
 		}
 	})
+	if a.failureUI.retrying {
+		if a.running(jobPlay) {
+			a.failureUI.retryJobGen = a.jobGen(jobPlay)
+		} else {
+			a.failureUI.retrying = false
+			a.failureUI.retryJobGen = 0
+		}
+	}
 }
 
 // resumeAfterPanLogin refreshes the episode list if the clicked item was an
@@ -753,6 +798,10 @@ func (a *app) resumeAfterPanLogin(line string, episode catalog.Episode, at time.
 
 // startEpisode opens resolved media as an episode of the title on show.
 func (a *app) startEpisode(play catalog.Playback, line string, episode catalog.Episode, at time.Duration) {
+	a.startEpisodeInternal(play, line, episode, at, false)
+}
+
+func (a *app) startEpisodeInternal(play catalog.Playback, line string, episode catalog.Episode, at time.Duration, retried bool) {
 	t := a.title
 	if t == nil {
 		return
@@ -766,7 +815,12 @@ func (a *app) startEpisode(play catalog.Playback, line string, episode catalog.E
 	a.flushHistory()
 	if !a.openEpisodeMedia(play) {
 		a.failSourceAttempt()
-		a.playFailure = &episodeFailure{line: line, episode: episode, at: at, err: fmt.Errorf("%s", a.status)}
+		a.failureUI.retrying = false
+		a.failureUI.retryJobGen = 0
+		a.failureUI.copySeq++
+		a.failureUI.copied = false
+		a.failureUI.copyFailed = false
+		a.playFailure = &episodeFailure{line: line, episode: episode, at: at, err: fmt.Errorf("%s", a.status), retried: retried}
 		if a.player != nil {
 			a.player.Pause()
 		}
@@ -799,6 +853,8 @@ func selectPlaybackStream(play catalog.Playback) (catalog.Stream, int, bool) {
 func (a *app) openEpisodeMedia(play catalog.Playback) bool {
 	replacing := a.player != nil
 	open, touched := a.panelOpen, a.panelTouched
+	skipOpen, wasShown := a.panelSkipOpen, a.panelWasShown
+	closeRecoveryPanel := a.failureUI.panelFromRecovery
 	if stream, idx, ok := selectPlaybackStream(play); ok {
 		if !a.openPlaybackStream(stream, replacing) {
 			return false
@@ -811,7 +867,13 @@ func (a *app) openEpisodeMedia(play catalog.Playback) bool {
 		}
 	}
 	if replacing {
-		a.panelOpen, a.panelTouched = open, touched
+		if closeRecoveryPanel {
+			a.panelOpen, a.panelTouched = false, true
+			a.panelSkipOpen, a.panelWasShown = true, false
+		} else {
+			a.panelOpen, a.panelTouched = open, touched
+			a.panelSkipOpen, a.panelWasShown = skipOpen, wasShown
+		}
 	}
 	a.danmaku.sourceURL = play.Danmaku
 	return true
@@ -821,6 +883,7 @@ func (a *app) notePlayingEpisode(line string, episode catalog.Episode, at time.D
 	t := a.title
 	a.playingSource, a.playingEpisode, a.resumeAt = line, episode.Name, at
 	a.playingSourceIdx, a.playingEpisodeIdx = -1, -1
+	a.panelRevealEpisode = true
 	a.syncNowPlaying()
 	a.sourceAttempt.player = a.player
 	a.revealContinueWatching(t.name)
@@ -881,6 +944,39 @@ func matchEpisode(detail catalog.Detail, name string, index int) (line int, epis
 
 // playNextLine retries the episode on the title's next play line.
 func (a *app) playNextLine() {
+	if choice := a.panelChoice; choice != nil && choice.failed && choice.detail != nil && len(choice.detail.Sources) > 1 {
+		lines := choice.detail.Sources
+		current := a.panelSource
+		if current < 0 || current >= len(lines) {
+			current = 0
+		}
+		curLine, _, requested, at, hasRecovery := a.recoveryEpisode()
+		if !hasRecovery {
+			requested = choice.episode
+		}
+		for step := 1; step < len(lines); step++ {
+			i := (current + step) % len(lines)
+			only := catalog.Detail{Sources: lines[i : i+1]}
+			if _, episode, found := matchEpisode(only, requested.Name, -1); found {
+				a.panelSource = i
+				a.playPanelEpisode(i, episode, at)
+				return
+			}
+			if hasRecovery {
+				if singleEp, matched := a.singleMovieMatch(curLine, requested, lines[i]); matched {
+					a.panelSource = i
+					a.playPanelEpisode(i, singleEp, at)
+					return
+				}
+			}
+		}
+		if len(a.candidates()) > 1 {
+			a.setNotice("没有其他线路可换，试试换来源")
+		} else {
+			a.setNotice("没有其他线路可换")
+		}
+		return
+	}
 	t := a.title
 	if t == nil || t.detail == nil {
 		return
@@ -914,20 +1010,42 @@ func (a *app) detailView(c *ui.Context) {
 	}
 	p := paletteFor(c)
 	candidates := a.candidates()
-	// The header stays put while the rest scrolls, so the play button
-	// never leaves the screen however far down the sources go.
-	ui.Column(c).Fill().Gap(20).Children(func() {
-		a.detailHeader(c, t)
-		ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Gap(20).Children(func() {
-			if f := a.playFailure; f != nil && t.detail != nil && !a.running(jobPlay) {
-				box := ui.Column(c).Key("detail-failure").FillWidth().Padding(16).Gap(10).Transition(transInlineBanner)
-				applySurface(box, p, 18).Children(func() {
-					ui.Text(c, f.line+" · "+f.episode.Name).Bold()
-					ui.Text(c, f.err.Error()).Selectable().TextColor(p.textMuted)
-					a.recoveryActions(c)
-				})
+	pic := t.pic
+	if pic == "" && t.detail != nil && t.detail.Pic != "" {
+		pic = t.detail.Pic
+	}
+	posterSrc := a.poster(c, pic)
+
+	ui.Box(c).Fill().Children(func() {
+		if posterSrc != nil && !p.reduceTransparency {
+			ui.Box(c.Key("detail-ambient")).Absolute().Top(0).Left(0).Right(0).Height(310).ZIndex(-1).Clip().PassThrough().Children(func() {
+				ui.Image(c, posterSrc).Fill().Fit(ui.Cover).Blur(46).Opacity(0.28).Cache().
+					MaskLinearGradient(ui.LinearGradient{
+						Angle: 180,
+						Stops: []ui.GradientStop{
+							{Color: ui.RGBA(0, 0, 0, 1), At: 0},
+							{Color: ui.RGBA(0, 0, 0, 0.52), At: 0.55},
+							{Color: ui.Transparent, At: 1},
+						},
+					}).PassThrough()
+			})
+		}
+		ui.Scroll(c.Key("detail-scroll")).Fill().Padding(62, 24, 24, 24).Gap(18).ScrollbarStyle(appScrollbar).Children(func() {
+			a.detailHero(c, t, posterSrc)
+			if a.title != t {
+				return
 			}
-			a.sourceAccordion(c, candidates)
+			a.detailSourceStrip(c, candidates)
+			if a.title != t {
+				return
+			}
+			if f := a.playFailure; f != nil && t.detail != nil && !a.running(jobPlay) {
+				a.detailFailureBanner(c, f)
+				if a.title != t {
+					return
+				}
+			}
+			a.detailPlaybackSection(c)
 		})
 	})
 }
@@ -952,62 +1070,188 @@ func (a *app) detailResumeCTA(t *titlePage) (label, lineName string, ep catalog.
 	return "", "", catalog.Episode{}, 0, false
 }
 
-// detailHeader is the title's poster and information. It is fixed above
-// the scrolling body, so the play button is always visible.
-func (a *app) detailHeader(c *ui.Context, t *titlePage) {
+// detailHero renders the poster and editorial metadata at the top of the detail page.
+func (a *app) detailHero(c *ui.Context, t *titlePage, posterSrc ui.ImageSource) {
 	p := paletteFor(c)
+
 	ui.Row(c).FillWidth().Gap(22).AlignItems(ui.Start).Children(func() {
-		pic := t.pic
-		if pic == "" && t.detail != nil && t.detail.Pic != "" {
-			pic = t.detail.Pic
-		}
-		posterBox := ui.Box(c).Size(170, 240).Radius(16).Clip().Background(p.cardPlaceholder)
+		posterBox := ui.Box(c).Size(152, 224).Radius(12).Clip().Shrink(0).
+			Background(p.cardPlaceholder).Border(1, p.borderControl).
+			Shadow(0, 12, 28, 0, ui.RGBA(0, 0, 0, 0.45))
 		posterBox.Children(func() {
-			applyPosterImage(c, posterBox, a.poster(c, pic))
+			applyPosterImage(c, posterBox, posterSrc)
 		})
 		ui.Column(c).Grow(1).MinWidth(0).Gap(10).Children(func() {
-			ui.Text(c, t.name).FontSize(27).Bold()
+			ui.Text(c, t.name).FontSize(30).Bold()
 			if t.detail == nil {
-				a.favoriteButton(c)
+				ui.Row(c).Wrap().Gap(10).AlignItems(ui.Center).Children(func() {
+					a.favoriteButton(c)
+				})
 				return
 			}
-			score := ""
-			if t.score != "" {
-				score = "豆瓣 " + t.score
-			}
-			if meta := videoMeta(t.detail.Year, t.detail.Type, score); meta != "" {
-				ui.Text(c, meta).TextColor(p.textMuted)
-			}
+			a.detailHeroMeta(c, t)
 			if t.detail.Content != "" {
-				synopsis := ui.Text(c, t.detail.Content).TextColor(p.textMuted)
-				longSynopsis := len([]rune(t.detail.Content)) > 96
-				if longSynopsis && !t.synopsisExpanded {
-					synopsis.MaxLines(3)
-				}
-				if longSynopsis {
-					toggleLabel := "展开简介"
-					if t.synopsisExpanded {
-						toggleLabel = "收起简介"
-					}
-					if glassButton(c, toggleLabel).Padding(4, 10).AlignSelf(ui.Start).Clicked() {
-						t.synopsisExpanded = !t.synopsisExpanded
-					}
-				}
+				a.detailHeroSynopsis(c, t)
 			}
-			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).FillWidth().Wrap().Gap(10).AlignItems(ui.Center).Padding(2, 0, 0, 0).Children(func() {
 				if ctaLabel, lineName, ep, at, ok := a.detailResumeCTA(t); ok {
 					playingNow := a.running(jobPlay)
 					shown := ctaLabel
 					if playingNow {
 						shown = "正在打开…"
 					}
-					if primaryButton(c, shown).Disabled(playingNow).Clicked() {
+					cta := ui.ButtonBase(c.Key("detail-play-cta")).Height(38).Padding(0, 18).Gap(8).Radius(9).
+						AlignItems(ui.Center).Cursor(ui.CursorPointer).Disabled(playingNow).Label(shown)
+					bg := p.accent
+					if playingNow {
+						bg = ui.RGBA(255, 90, 64, 0.55)
+					} else if cta.Hovered() {
+						bg = p.accentHover
+					}
+					cta.Background(cta.AnimateColor("detail-cta-bg", bg, animColor))
+					cta.Children(func() {
+						ui.Icon(c, iconPlay).Size(13, 13).TextColor(p.accentText).PassThrough()
+						ui.Text(c, shown).FontSize(13.5).Bold().TextColor(p.accentText).SingleLine().PassThrough()
+					})
+					if applyPressPose(cta).Clicked() {
 						a.playEpisodeAt(lineName, ep, at)
 					}
 				}
 				a.favoriteButton(c)
 			})
+			if a.title != t {
+				return
+			}
+			a.detailResumeProgress(c, t)
 		})
+	})
+}
+
+func (a *app) detailHeroMeta(c *ui.Context, t *titlePage) {
+	p := paletteFor(c)
+	var parts []string
+	appendPart := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		for _, existing := range parts {
+			if existing == s {
+				return
+			}
+		}
+		parts = append(parts, s)
+	}
+	appendPart(t.detail.Year)
+	appendPart(t.detail.Type)
+	appendPart(t.item.Video.Remarks)
+	isPan := t.item.Entry.Config != nil && isPanSiteKind(t.item.Entry.Site.Kind)
+	if t.score == "" && len(parts) == 0 && !isPan {
+		return
+	}
+	ui.Row(c).FillWidth().Wrap().Gap(8).AlignItems(ui.Center).Children(func() {
+		if t.score != "" {
+			ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+				ui.Icon(c, iconStarFilled).Size(12, 12).TextColor(p.gold).PassThrough()
+				ui.Text(c, "豆瓣 "+t.score).FontSize(13).Bold().TextColor(p.gold).SingleLine()
+			})
+		}
+		if len(parts) > 0 {
+			if t.score != "" {
+				ui.Text(c, "·").FontSize(13).TextColor(p.textFaint).SingleLine()
+			}
+			ui.Text(c, strings.Join(parts, " · ")).FontSize(13).TextColor(p.textMuted)
+		}
+		if isPan {
+			specMicroBadge(c, "网盘", true)
+		}
+	})
+}
+
+func (a *app) detailHeroSynopsis(c *ui.Context, t *titlePage) {
+	p := paletteFor(c)
+	longSynopsis := len([]rune(t.detail.Content)) > 96
+	if !longSynopsis {
+		ui.Text(c, t.detail.Content).FontSize(13).LineHeight(1.55).TextColor(p.textMuted)
+		return
+	}
+	ui.Column(c).FillWidth().Gap(4).Children(func() {
+		synopsis := ui.Text(c, t.detail.Content).FontSize(13).LineHeight(1.55).TextColor(p.textMuted)
+		if !t.synopsisExpanded {
+			synopsis.MaxLines(2)
+		}
+		shown, a11y := "更多", "展开简介"
+		if t.synopsisExpanded {
+			shown, a11y = "收起", "收起简介"
+		}
+		toggle := ui.ButtonBase(c.Key("detail-synopsis-toggle")).Padding(2, 0).
+			Cursor(ui.CursorPointer).AlignSelf(ui.Start).Label(a11y)
+		fg := p.accentLightText
+		if toggle.Hovered() {
+			fg = p.accent
+		}
+		toggle.Children(func() {
+			ui.Text(c, shown).FontSize(12.5).Bold().TextColor(fg).SingleLine().PassThrough()
+		})
+		if applyPressPose(toggle).Clicked() {
+			t.synopsisExpanded = !t.synopsisExpanded
+		}
+	})
+}
+
+func (a *app) detailRelatedButton(c *ui.Context, count int) {
+	p := paletteFor(c)
+	label := fmt.Sprintf("相近结果 (%d)", count)
+	btn := ui.ButtonBase(c.Key("detail-related")).Height(28).Padding(0, 10).Radius(8).
+		AlignItems(ui.Center).Cursor(ui.CursorPointer).Shrink(0).Label(label)
+	bg := p.surfaceSubtle
+	border := p.border
+	fg := p.textMuted
+	if btn.Hovered() {
+		bg = p.surfaceHover
+		border = p.borderControl
+		fg = p.text
+	}
+	btn.Background(btn.AnimateColor("detail-related-bg", bg, animColor)).Border(1, border)
+	btn.Children(func() {
+		ui.Text(c, label+" ›").FontSize(12).TextColor(fg).SingleLine().PassThrough()
+	})
+	if applyPressPose(btn).Clicked() {
+		a.showRelated()
+	}
+}
+
+func (a *app) detailResumeProgress(c *ui.Context, t *titlePage) {
+	h, found := a.history.findByTitle(t.name)
+	if !found || (h.Position <= 0 && h.Duration <= 0) {
+		return
+	}
+	p := paletteFor(c)
+	pos := time.Duration(h.Position * float64(time.Second))
+	dur := time.Duration(h.Duration * float64(time.Second))
+	var parts []string
+	switch {
+	case h.finished():
+		parts = append(parts, "已看完")
+	case h.Duration > 0:
+		parts = append(parts, fmt.Sprintf("已看 %s / %s", playerClock(pos), playerClock(dur)))
+	default:
+		parts = append(parts, "已看 "+playerClock(pos))
+	}
+	lineName := strings.TrimSpace(h.Line)
+	if line, ok := t.currentLine(); ok && strings.TrimSpace(line.Name) != "" {
+		lineName = strings.TrimSpace(line.Name)
+	}
+	if lineName != "" {
+		parts = append(parts, lineName)
+	}
+	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Padding(2, 0, 0, 0).Children(func() {
+		if h.Duration > 0 {
+			frac := min(max(h.Position/h.Duration, 0), 1)
+			ui.Progress(c, frac).Width(200).Height(3).Radius(1.5).
+				Background(p.divider).TextColor(p.accent).Label("观看进度")
+		}
+		ui.Text(c, strings.Join(parts, " · ")).FontSize(12).TextColor(p.textMuted).SingleLine()
 	})
 }
 
@@ -1032,217 +1276,415 @@ func (t *titlePage) currentFailed() bool {
 	return t != nil && t.detail != nil && t.item.Entry.Config != nil && t.failed[itemKey(t.item)] != ""
 }
 
-// sourceAccordion is every site that has the title, as one list where
-// the source on show is expanded and the rest are one-liners. A source,
-// its lines and the line's episodes are one hierarchy, so they live in
-// one place instead of three stacked sections: the expanded row holds
-// the lines and the episodes, and the rows are compact enough that no
-// separate scroll box is needed.
-func (a *app) sourceAccordion(c *ui.Context, candidates []library.Item) {
+// detailSourceChipState resolves the visual status of a candidate source chip.
+// A current source that failed to load or failed playback uses
+// sourceChipSelectedFailed so it never falsely reports a healthy dot.
+func detailSourceChipState(t *titlePage, item library.Item, playFailure *episodeFailure) sourceChipState {
+	key := itemKey(item)
+	current := t.isCurrent(item)
+	failed := t != nil && t.failed[key] != ""
+	if current {
+		if failed || playFailure != nil {
+			return sourceChipSelectedFailed
+		}
+		return sourceChipSelected
+	}
+	if failed {
+		return sourceChipFailed
+	}
+	return sourceChipNormal
+}
+
+func detailSourceFailBadge(msg string) string {
+	if strings.Contains(msg, "超时") || strings.Contains(strings.ToLower(msg), "timeout") {
+		return "超时"
+	}
+	return "失败"
+}
+
+// detailSourceStrip renders the left-clustered source header ("片源", count,
+// background search / find-more-sources, related results) above the full-width
+// horizontally scrollable strip of candidate sources.
+func (a *app) detailSourceStrip(c *ui.Context, candidates []library.Item) {
 	t, search := a.title, &a.library.search
 	p := paletteFor(c)
-	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "来源").FontSize(19).Bold()
+	searching := search.running && titleKey(search.query) == titleKey(t.name)
+	showRelated := titleKey(search.query) == titleKey(t.name) && len(search.groups) > 1 && len(candidates) > 0
+	ui.Column(c).FillWidth().Gap(9).Children(func() {
+		ui.Row(c).FillWidth().MinHeight(28).Wrap().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "片源").FontSize(14).Bold().TextColor(p.text).SingleLine().Shrink(0)
+			if len(candidates) > 0 {
+				ui.Text(c, fmt.Sprintf("共 %d 个来源", len(candidates))).
+					FontSize(12).TextColor(p.textFaint).SingleLine().Shrink(0).ContentTransition(ctNumeric)
+			}
+			switch {
+			case searching:
+				stopBtn := ui.ButtonBase(c.Key("detail-search-status")).Height(28).Padding(0, 10).Gap(6).Radius(8).
+					AlignItems(ui.Center).Cursor(ui.CursorPointer).Shrink(0).
+					Tooltip("点击停止后台找源").Label("停止后台找源")
+				bg := p.accentSoft
+				if stopBtn.Hovered() {
+					bg = ui.RGBA(255, 90, 64, 0.26)
+				}
+				stopBtn.Background(stopBtn.AnimateColor("detail-search-bg", bg, animColor)).Border(1, p.accentBorder)
+				stopBtn.Children(func() {
+					ui.Spinner(c).Size(11, 11).TextColor(p.accent).PassThrough()
+					ui.Text(c, fmt.Sprintf("后台找源 %d/%d", search.progress.Completed, search.progress.Total)).
+						FontSize(12).TextColor(p.accentLightText).SingleLine().ContentTransition(ctNumeric).PassThrough()
+					ui.Text(c, "· 停止").FontSize(11.5).TextColor(p.textMuted).SingleLine().PassThrough()
+				})
+				if applyPressPose(stopBtn).Clicked() {
+					a.stopScan(search)
+				}
+			case !a.inStack(routeSearch) && a.library.root != nil && titleKey(search.query) != titleKey(t.name):
+				findBtn := ui.ButtonBase(c.Key("detail-find-sources")).Height(28).Padding(0, 10).Gap(5).Radius(8).
+					AlignItems(ui.Center).Cursor(ui.CursorPointer).Shrink(0).Label("查找其他来源")
+				bg := p.surfaceSubtle
+				border := p.border
+				fg := p.textMuted
+				if findBtn.Hovered() {
+					bg = p.surfaceHover
+					border = p.borderControl
+					fg = p.text
+				}
+				findBtn.Background(findBtn.AnimateColor("detail-find-bg", bg, animColor)).Border(1, border)
+				findBtn.Children(func() {
+					ui.Icon(c, librarySearchIcon).Size(12, 12).TextColor(fg).PassThrough()
+					ui.Text(c, "查找其他来源").FontSize(12).TextColor(fg).SingleLine().PassThrough()
+				})
+				if applyPressPose(findBtn).Clicked() {
+					a.startScan(search, t.name, false)
+				}
+			}
+			if showRelated {
+				a.detailRelatedButton(c, len(search.groups))
+			}
+		})
 		if len(candidates) > 0 {
-			ui.Text(c, fmt.Sprintf("共 %d 个", len(candidates))).FontSize(13).TextColor(p.textMuted).ContentTransition(ctNumeric)
+			ui.ScrollHorizontal(c.Key("detail-source-chips")).Label("片源列表").FillWidth().
+				Padding(0, 0, 12, 0).Gap(8).AlignItems(ui.Center).ScrollbarStyle(appScrollbar).Children(func() {
+				for _, item := range candidates {
+					if a.title != t {
+						return
+					}
+					key := itemKey(item)
+					loading := a.running(jobTitle) && itemKey(t.pending) == key
+					state := detailSourceChipState(t, item, a.playFailure)
+					isPan := isPanSiteKind(item.Entry.Site.Kind)
+					latencyText := ""
+					tier := 0
+					tip := item.Entry.Label()
+					switch {
+					case loading:
+						latencyText = "读取中…"
+					case state == sourceChipFailed || state == sourceChipSelectedFailed:
+						msg := t.failed[key]
+						if msg == "" && a.playFailure != nil && a.playFailure.err != nil {
+							msg = a.playFailure.err.Error()
+						}
+						latencyText = detailSourceFailBadge(msg)
+						if msg != "" {
+							tip = msg
+						}
+					default:
+						if d, ok := a.latency.get(item.Entry.Key()); ok {
+							latencyText = formatLatency(d)
+							tier = latencyTier(d.Milliseconds())
+						}
+					}
+					chipEl := sourceStatusChip(c, "src-"+key, item.Entry.Label(), isPan, latencyText, tier, state).
+						Label("来源 " + item.Entry.Label()).Tooltip(tip)
+					if chipEl.Clicked() {
+						t.auto = false
+						a.openCandidate(item)
+					}
+				}
+			})
 		}
-		if t.currentFailed() || a.playFailure != nil {
+		if a.title != t {
+			return
+		}
+		if t.currentFailed() && a.playFailure == nil {
 			failHint := "当前来源播不了，换一个试试"
 			if len(candidates) <= 1 {
 				failHint = "当前来源播不了，可查找其他来源"
 			}
-			ui.Text(c, failHint).FontSize(13).TextColor(p.textMuted).Grow(1)
-		} else {
-			ui.Spacer(c)
-		}
-		if titleKey(search.query) == titleKey(t.name) && len(search.groups) > 1 && len(candidates) > 0 {
-			if glassButton(c, fmt.Sprintf("相近结果 (%d)", len(search.groups))).Clicked() {
-				a.showRelated()
+			if reason := t.failed[itemKey(t.item)]; reason != "" {
+				failHint += " · " + reason
 			}
+			ui.Text(c, failHint).FontSize(12.5).TextColor(p.dangerLightText)
 		}
-		if !a.inStack(routeSearch) && a.library.root != nil && titleKey(search.query) != titleKey(t.name) {
-			if glassButton(c, "查找其他来源").Clicked() {
-				a.startScan(search, t.name, false)
-			}
+		if len(candidates) == 0 && !searching {
+			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "片库里没有找到《"+t.name+"》。").FontSize(13).TextColor(p.textMuted).Grow(1)
+				if len(search.groups) > 0 && primaryButton(c, "查看相近结果").Clicked() {
+					a.showRelated()
+				}
+			})
 		}
 	})
-	if a.title != t {
-		return
+}
+
+func (a *app) detailFailureBanner(c *ui.Context, f *episodeFailure) {
+	p := paletteFor(c)
+	ui.Row(c.Key("detail-failure")).FillWidth().Padding(10, 14).Gap(12).AlignItems(ui.Center).Wrap().
+		Radius(11).Background(p.dangerSoft).Border(1, p.dangerBorder).Transition(transInlineBanner).Children(func() {
+		ui.Column(c).Grow(1).MinWidth(220).Gap(3).Children(func() {
+			ui.Text(c, f.line+" · "+f.episode.Name).FontSize(13).Bold().TextColor(p.dangerLightText)
+			ui.Text(c, f.err.Error()).FontSize(12.5).Selectable().TextColor(p.textMuted)
+		})
+		a.recoveryActions(c)
+	})
+}
+
+func isGenericLineName(name string) bool {
+	s := strings.TrimSpace(name)
+	return s == "" || s == "线路" || s == "默认" || s == "默认线路"
+}
+
+func detailEpisodeColumns(c *ui.Context) int {
+	winW, _ := c.Size()
+	if winW <= 0 {
+		return 10
 	}
-	ui.Column(c).FillWidth().Gap(8).Children(func() {
-		for _, item := range candidates {
-			if a.title != t {
-				return
-			}
-			a.sourceRow(c, item)
-		}
-	})
-	searching := search.running && titleKey(search.query) == titleKey(t.name)
+	sideW, _ := activeSidebarWidth(winW)
+	contentW := winW - sideW - 78
 	switch {
-	case searching:
-		ui.Text(c, fmt.Sprintf("正在片库中查找 · %d/%d 个站点", search.progress.Completed, search.progress.Total)).
-			TextColor(p.textMuted).ContentTransition(ctNumeric)
-	case len(candidates) == 0:
-		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "片库里没有找到《"+t.name+"》。").TextColor(p.textMuted).Grow(1)
-			if len(search.groups) > 0 && primaryButton(c, "查看相近结果").Clicked() {
-				a.showRelated()
-			}
-		})
+	case contentW >= 760:
+		return 10
+	case contentW >= 560:
+		return 8
+	default:
+		return 5
 	}
 }
 
-func (a *app) sourceRow(c *ui.Context, item library.Item) {
+func useEpisodeGrid(episodes []catalog.Episode) bool {
+	if len(episodes) == 0 {
+		return false
+	}
+	longCount := 0
+	for _, ep := range episodes {
+		if len([]rune(episodeButtonLabel(ep.Name))) > 6 {
+			longCount++
+		}
+	}
+	return longCount*3 < len(episodes)
+}
+
+func (a *app) detailPlaybackSection(c *ui.Context) {
 	t := a.title
-	if t == nil {
+	if t == nil || t.detail == nil {
 		return
 	}
 	p := paletteFor(c)
-	key := itemKey(item)
-	current := t.isCurrent(item)
-	state := ""
-	dot := ""
-	switch {
-	case a.running(jobTitle) && itemKey(t.pending) == key:
-		state = "正在读取…"
-	case current:
-		state = "当前来源"
-		dot = "#3fb96a"
-	case t.failed[key] != "":
-		state = t.failed[key]
-		dot = "#8a8f9e"
-	}
-	if !current {
-		row := ui.Row(c).Key(key).FillWidth().Padding(12, 16).Gap(12).AlignItems(ui.Center).
-			Cursor(ui.CursorPointer).Label("来源 " + item.Entry.Label())
-		targetBg := p.surface
-		if row.Hovered() {
-			targetBg = p.surfaceHover
-		}
-		row.Radius(16).Background(row.AnimateColor("src-bg", targetBg, animColor))
-		if p.highContrast || p.reduceTransparency {
-			row.Border(1, p.border)
-		}
-		applyPressPose(row)
-		row.Children(func() {
-			a.sourceRowContent(c, item, dot, state, false)
-		})
-		if row.Clicked() {
-			t.auto = false
-			a.openCandidate(item)
-		}
+	if len(t.detail.Sources) == 0 {
+		ui.Text(c, "这个站点没有提供可播放分集，换一个来源试试。").FontSize(13).TextColor(p.textMuted)
 		return
 	}
-	col := ui.Column(c).Key(key).FillWidth().Padding(12, 16).Gap(10).Label("来源 " + item.Entry.Label())
-	applySurface(col, p, 16).Children(func() {
-		ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
-			a.sourceRowContent(c, item, dot, state, true)
-		})
-		if t.detail == nil {
-			return
-		}
-		if len(t.detail.Sources) == 0 {
-			ui.Text(c, "这个站点没有提供可播放分集，换一个来源试试。").TextColor(p.textMuted)
-			return
-		}
-		a.lineChips(c)
-		a.episodeList(c)
-	})
-}
-
-func (a *app) sourceRowContent(c *ui.Context, item library.Item, dot, state string, expanded bool) {
-	p := paletteFor(c)
-	chevron := "▸"
-	if expanded {
-		chevron = "▾"
-	}
-	ui.Text(c, chevron).FontSize(12).TextColor(p.textMuted).ContentTransition(ctReplace)
-	if dot != "" {
-		ui.Box(c).Size(8, 8).Radius(4).Background(ui.Hex(dot))
-	}
-	ui.Text(c, item.Entry.Label()).Bold().SingleLine()
-	switch item.Entry.Site.Kind {
-	case config.KindPanWeb, config.KindPanShare:
-		ui.Text(c, "网盘").FontSize(12).TextColor(p.accent).SingleLine()
-	case config.KindAList:
-		ui.Text(c, "网盘").FontSize(12).TextColor(p.accent).SingleLine()
-	}
-	if item.Video.Remarks != "" {
-		ui.Text(c, item.Video.Remarks).FontSize(13).TextColor(p.textMuted).SingleLine()
-	}
-	ui.Spacer(c)
-	if d, ok := a.latency.get(item.Entry.Key()); ok {
-		ui.Text(c, formatLatency(d)).FontSize(13).TextColor(p.textMuted).SingleLine().ContentTransition(ctNumeric)
-	}
-	if state != "" {
-		ui.Text(c, state).FontSize(13).TextColor(p.textMuted).SingleLine().ContentTransition(ctReplace)
-	}
-}
-
-// lineChips is the current source's play lines, shown inside its
-// expanded row. With one line there is nothing to choose.
-func (a *app) lineChips(c *ui.Context) {
-	t := a.title
-	if len(t.detail.Sources) <= 1 {
-		return
-	}
-	ui.Text(c, "播放线路").FontSize(19).Bold()
-	ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
-		for i, line := range t.detail.Sources {
-			name := line.Name
-			if name == "" {
-				name = fmt.Sprintf("线路 %d", i+1)
-			}
-			if chip(c.Key(fmt.Sprintf("line-%d", i)), name, i == t.line).Clicked() {
-				t.line, t.chunk = i, 0
-				a.playFailure = nil
-			}
-		}
-	})
-}
-
-func (a *app) episodeList(c *ui.Context) {
-	t := a.title
-	p := paletteFor(c)
 	line, ok := t.currentLine()
 	if !ok {
 		return
 	}
 	count := len(line.Episodes)
-	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "选集").FontSize(19).Bold()
-		ui.Text(c, fmt.Sprintf("共 %d 集", count)).FontSize(13).TextColor(p.textMuted).ContentTransition(ctNumeric)
-	})
 	if t.chunk*episodeChunk >= count {
 		t.chunk = 0
 	}
-	if count > episodeChunk {
-		ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
-			for i := 0; i*episodeChunk < count; i++ {
-				label := fmt.Sprintf("%d–%d", i*episodeChunk+1, min((i+1)*episodeChunk, count))
-				if chip(c.Key(fmt.Sprintf("chunk-%d", i)), label, i == t.chunk).Clicked() {
-					t.chunk = i
+	showLines := len(t.detail.Sources) > 1 || !isGenericLineName(line.Name)
+	showChunks := count > episodeChunk
+	if showLines || showChunks {
+		ui.Column(c).FillWidth().Gap(0).Children(func() {
+			ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
+				if showLines {
+					ui.ScrollHorizontal(c.Key("detail-line-tabs")).Grow(1).MinWidth(0).Gap(18).Scrollbars(false).Children(func() {
+						for i, src := range t.detail.Sources {
+							name := strings.TrimSpace(src.Name)
+							if name == "" {
+								name = fmt.Sprintf("线路 %d", i+1)
+							}
+							if underlineTab(c, fmt.Sprintf("line-%d", i), name, i == t.line).Clicked() {
+								t.line, t.chunk = i, 0
+								a.playFailure = nil
+							}
+						}
+					})
+				} else {
+					ui.Spacer(c)
+				}
+				if showChunks {
+					ui.Row(c).Gap(14).AlignItems(ui.Center).Shrink(0).Children(func() {
+						for i := 0; i*episodeChunk < count; i++ {
+							label := fmt.Sprintf("%d–%d", i*episodeChunk+1, min((i+1)*episodeChunk, count))
+							if underlineTab(c, fmt.Sprintf("chunk-%d", i), label, i == t.chunk).Clicked() {
+								t.chunk = i
+							}
+						}
+					})
+				} else if count > 1 {
+					ui.Text(c, fmt.Sprintf("共 %d 集", count)).FontSize(12).TextColor(p.textFaint).
+						SingleLine().Shrink(0).ContentTransition(ctNumeric)
+				}
+			})
+		})
+	}
+	// Re-fetch current line in case clicking a line tab changed t.line.
+	line, ok = t.currentLine()
+	if !ok {
+		return
+	}
+	count = len(line.Episodes)
+	if count == 0 {
+		ui.Text(c, "这条线路暂无可播放分集，换一条线路试试。").FontSize(13).TextColor(p.textMuted)
+		return
+	}
+	if t.chunk*episodeChunk >= count {
+		t.chunk = 0
+	}
+	activeIdx, activeFrac := a.detailActiveEpisode(t, line)
+	start := t.chunk * episodeChunk
+	page := line.Episodes[start:min(start+episodeChunk, count)]
+	gridKey := fmt.Sprintf("episodes-%d-%d", t.line, t.chunk)
+	if count > 1 && useEpisodeGrid(page) {
+		cols := detailEpisodeColumns(c)
+		ui.Grid(c.Key(gridKey)).FillWidth().Columns(cols).Gap(8).Children(func() {
+			for j, episode := range page {
+				globalIdx := start + j
+				active := globalIdx == activeIdx
+				watched := activeIdx > 0 && globalIdx < activeIdx
+				frac := 0.0
+				if active {
+					frac = activeFrac
+				}
+				if a.detailEpisodeButton(c, j, episode, active, watched, frac, true, false).Clicked() {
+					a.playEpisode(line.Name, episode)
 				}
 			}
 		})
+		return
 	}
-	activeEpisode := ""
-	if line.Name == a.playingSource && a.playingEpisode != "" {
-		activeEpisode = a.playingEpisode
-	} else if h, found := a.history.findByTitle(t.name); found {
-		if _, target, _, ok := resumePoint(*t.detail, h); ok {
-			activeEpisode = target.Name
-		} else {
-			activeEpisode = h.Episode
-		}
-	}
-	start := t.chunk * episodeChunk
-	ui.Row(c.Key(fmt.Sprintf("episodes-%d-%d", t.line, t.chunk))).FillWidth().Wrap().Gap(8).Children(func() {
-		for j, episode := range line.Episodes[start:min(start+episodeChunk, count)] {
-			active := activeEpisode != "" && (episode.Name == activeEpisode || episodeButtonLabel(episode.Name) == episodeButtonLabel(activeEpisode))
-			if chip(c.Key(j), episodeButtonLabel(episode.Name), active).MinWidth(52).Clicked() {
+	ui.Row(c.Key(gridKey)).FillWidth().Wrap().Gap(8).Children(func() {
+		for j, episode := range page {
+			globalIdx := start + j
+			active := globalIdx == activeIdx
+			watched := activeIdx > 0 && globalIdx < activeIdx
+			frac := 0.0
+			if active {
+				frac = activeFrac
+			}
+			if a.detailEpisodeButton(c, j, episode, active, watched, frac, false, count == 1).Clicked() {
 				a.playEpisode(line.Name, episode)
 			}
 		}
 	})
+}
+
+func (a *app) detailActiveEpisode(t *titlePage, line catalog.Source) (int, float64) {
+	targetName := ""
+	var frac float64
+	if line.Name == a.playingSource && a.playingEpisode != "" {
+		targetName = a.playingEpisode
+	} else if h, found := a.history.findByTitle(t.name); found {
+		if _, target, _, ok := resumePoint(*t.detail, h); ok {
+			targetName = target.Name
+			if !h.finished() && h.Duration > 0 && h.Position > 0 && (target.Name == h.Episode || episodeButtonLabel(target.Name) == episodeButtonLabel(h.Episode)) {
+				frac = min(max(h.Position/h.Duration, 0), 1)
+			}
+		} else {
+			targetName = h.Episode
+			if !h.finished() && h.Duration > 0 && h.Position > 0 {
+				frac = min(max(h.Position/h.Duration, 0), 1)
+			}
+		}
+	}
+	if targetName == "" {
+		return -1, 0
+	}
+	targetLabel := episodeButtonLabel(targetName)
+	for i, ep := range line.Episodes {
+		if ep.Name == targetName || episodeButtonLabel(ep.Name) == targetLabel {
+			return i, frac
+		}
+	}
+	return -1, 0
+}
+
+func (a *app) detailEpisodeButton(c *ui.Context, key int, episode catalog.Episode, active, watched bool, progress float64, gridCell, single bool) ui.Element {
+	p := paletteFor(c)
+	label := episodeButtonLabel(episode.Name)
+	if single {
+		raw := strings.TrimSpace(episode.Name)
+		if raw == "" || raw == "第1集" || raw == "1" {
+			label = "正片"
+		} else {
+			label = raw
+		}
+	}
+	btn := ui.ButtonBase(c.Key(key)).Height(38).Radius(8).Center().Cursor(ui.CursorPointer).Label(label)
+	padX := float32(0)
+	if gridCell {
+		padX = 4
+		btn.FillWidth().Padding(0, padX)
+	} else if single {
+		padX = 16
+		btn.MinWidth(88).Padding(0, padX)
+	} else {
+		padX = 12
+		btn.MinWidth(64).Padding(0, padX)
+	}
+	if episode.Name != "" && episode.Name != label {
+		btn.Tooltip(episode.Name)
+	}
+	hovered := btn.Hovered()
+	bg := p.surfaceInner
+	border := p.border
+	fg := p.text
+	if active {
+		bg = p.accent
+		border = p.accent
+		fg = p.accentText
+		if hovered {
+			bg = p.accentHover
+			border = p.accentHover
+		}
+	} else {
+		if watched {
+			fg = p.textFaint
+		}
+		if hovered {
+			bg = p.controlHover
+			border = p.borderControl
+			fg = p.text
+		}
+	}
+	btn.Background(btn.AnimateColor("ep-bg", bg, animColor)).Border(1, border)
+	innerW := max(float32(0), btn.Bounds().W-2*padX-2)
+	btn.Children(func() {
+		a.hoverMarqueeText(c, marqueeTextOptions{
+			key:        fmt.Sprintf("detail-episode-%d-%s", key, label),
+			text:       label,
+			fontSize:   13,
+			bold:       active,
+			color:      fg,
+			hovered:    hovered,
+			centered:   true,
+			fillHeight: true,
+			fixedWidth: func() float32 {
+				if !gridCell {
+					return innerW
+				}
+				return 0
+			}(),
+			knownWidth: innerW,
+		})
+		if active {
+			if progress > 0 {
+				ui.Progress(c, progress).Absolute().Left(5).Right(5).Bottom(3).Height(2).Radius(1).
+					Background(ui.RGBA(255, 255, 255, 0.30)).TextColor(p.accentText).PassThrough()
+			} else {
+				ui.Box(c).Absolute().Left(8).Right(8).Bottom(3).Height(2).Radius(1).
+					Background(ui.RGBA(255, 255, 255, 0.65)).PassThrough()
+			}
+		}
+	})
+	return applyPressPose(btn)
 }

@@ -410,11 +410,8 @@ func (a *app) openFollowing(e favoriteEntry) {
 			session.Close()
 			return jobResult{}, err
 		}
-		return jobResult{discard: session.Close, apply: func() {
-			a.clearTitle()
-			a.title = &titlePage{name: e.Name, pic: e.Pic, seeds: []library.Item{item}, failed: map[string]string{}, item: item, session: session, detail: &detail, line: line}
-			a.startEpisode(play, detail.Sources[line].Name, episode, at)
-		}}, nil
+		t := &titlePage{name: e.Name, pic: e.Pic, item: item, session: session, detail: &detail, line: line}
+		return a.savedEpisodeResult(t, play, episode, at), nil
 	}, nil)
 }
 

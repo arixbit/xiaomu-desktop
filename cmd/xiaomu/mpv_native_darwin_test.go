@@ -118,7 +118,7 @@ func TestNativeMPVPlaysMKVWithTracksAndProxiedStream(t *testing.T) {
 		}
 		snap := mpvP.p.Snapshot()
 		if snap.SubDelay != 500*time.Millisecond || snap.SubScale != 1.25 || snap.SubPos != 90 || snap.VideoRotate != 90 || snap.Panscan != 1.0 {
-			t.Fatalf("mygo-player v0.5.1 tuning snapshot mismatch: delay=%v scale=%v pos=%d rot=%d panscan=%v",
+			t.Fatalf("mygo-player tuning snapshot mismatch: delay=%v scale=%v pos=%d rot=%d panscan=%v",
 				snap.SubDelay, snap.SubScale, snap.SubPos, snap.VideoRotate, snap.Panscan)
 		}
 		t.Logf("mygo-player decoded local MKV %dx%d pos=%s dur=%s frames=%d hwdec=%q audios=%d subs=%d",

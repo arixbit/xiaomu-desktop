@@ -183,9 +183,28 @@ func TestPlayerTrackAndSubtitleControls(t *testing.T) {
 	}
 }
 
+func TestMPVBackendSupportedFor(t *testing.T) {
+	cases := []struct {
+		goos, goarch string
+		want         bool
+	}{
+		{"darwin", "arm64", true},
+		{"darwin", "amd64", true},
+		{"windows", "amd64", true},
+		{"windows", "arm64", true},
+		{"windows", "386", false},
+		{"linux", "amd64", false},
+	}
+	for _, tc := range cases {
+		if got := mpvBackendSupportedFor(tc.goos, tc.goarch); got != tc.want {
+			t.Errorf("mpvBackendSupportedFor(%q, %q) = %v, want %v", tc.goos, tc.goarch, got, tc.want)
+		}
+	}
+}
+
 func TestDropMKVWithCompanionSubtitlePassesSubtitlesToMPV(t *testing.T) {
 	if !mpvBackendSupported() {
-		t.Skip("mygo-player MKV support requires macOS or Windows amd64")
+		t.Skip("mygo-player MKV support requires macOS or Windows amd64/arm64")
 	}
 	var gotTarget string
 	var gotOpts mpvplayer.OpenOptions

@@ -42,6 +42,7 @@ type episodeFailure struct {
 	at           time.Duration
 	err          error
 	authProvider pan.Provider
+	retried      bool
 }
 
 func (a *app) playbackPosition() time.Duration {
@@ -63,7 +64,11 @@ func (a *app) checkPlayback(c *ui.Context, p mediaPlayer) {
 	if err != nil {
 		if line, episode, ok := a.currentEpisode(); ok {
 			source := a.title.detail.Sources[line]
-			a.playFailure = &episodeFailure{line: source.Name, episode: source.Episodes[episode], at: a.playbackPosition(), err: err}
+			pos := a.playbackPosition()
+			if pos <= 0 {
+				pos = p.Position()
+			}
+			a.playFailure = &episodeFailure{line: source.Name, episode: source.Episodes[episode], at: pos, err: err}
 			p.Pause()
 			a.playerOverlay = playerOverlayState{}
 		}
@@ -98,10 +103,88 @@ func (a *app) recoveryEpisode() (line, index int, episode catalog.Episode, at ti
 }
 
 func (a *app) retryEpisode() {
+	if a.isRetryingFailure() {
+		return
+	}
+	if choice := a.panelChoice; choice != nil && choice.failed {
+		a.failureUI.retrying = true
+		a.failureUI.retryJobGen = 0
+		a.failureUI.copySeq++
+		a.failureUI.copied = false
+		a.failureUI.copyFailed = false
+		if choice.detail != nil && len(choice.detail.Sources) > 0 && a.panelSource >= 0 && a.panelSource < len(choice.detail.Sources) && (choice.episode.Name != "" || choice.episode.ID != "") {
+			_, _, _, at, _ := a.recoveryEpisode()
+			a.playPanelEpisodeInternal(a.panelSource, choice.episode, at, true)
+		} else {
+			a.switchSourceInternal(choice.item, true)
+		}
+		if a.failureUI.retrying {
+			if a.running(jobPlay) {
+				a.failureUI.retryJobGen = a.jobGen(jobPlay)
+			} else {
+				a.failureUI.retrying = false
+				a.failureUI.retryJobGen = 0
+			}
+		}
+		return
+	}
 	if line, _, episode, at, ok := a.recoveryEpisode(); ok {
 		// Some sites only return a fresh media URL in the title detail.
 		a.loadEpisode(a.title.detail.Sources[line].Name, episode, at, true)
 	}
+}
+
+// switchToNextCandidate switches the detail page to the next available
+// candidate source in priority order, skipping the current source and any
+// source already marked as failed.
+func (a *app) switchToNextCandidate() bool {
+	t := a.title
+	if t == nil {
+		return false
+	}
+	candidates := a.candidates()
+	if len(candidates) <= 1 {
+		a.setNotice("没有其他可用来源")
+		return false
+	}
+	curIdx := -1
+	for i, item := range candidates {
+		if t.isCurrent(item) {
+			curIdx = i
+			break
+		}
+	}
+	// First pass: prefer a non-current candidate that has not failed.
+	for step := 1; step <= len(candidates); step++ {
+		idx := (curIdx + step) % len(candidates)
+		if curIdx < 0 {
+			idx = step - 1
+		}
+		item := candidates[idx]
+		if t.isCurrent(item) || t.failed[itemKey(item)] != "" {
+			continue
+		}
+		t.auto = false
+		a.openCandidate(item)
+		return true
+	}
+	// Fallback: all other candidates have previously failed; still cycle to the
+	// next non-current source when the user explicitly requests switching.
+	for step := 1; step <= len(candidates); step++ {
+		idx := (curIdx + step) % len(candidates)
+		if curIdx < 0 {
+			idx = step - 1
+		}
+		item := candidates[idx]
+		if t.isCurrent(item) {
+			continue
+		}
+		t.auto = false
+		a.openCandidate(item)
+		return true
+	}
+	a.setNotice("没有其他可用来源")
+	return false
 }
 
 func (a *app) recoveryActions(c *ui.Context) {
@@ -124,19 +207,23 @@ func (a *app) recoveryActions(c *ui.Context) {
 		if len(a.title.detail.Sources) > 1 && primaryButton(c, "换下一条线路").Clicked() {
 			a.playNextLine()
 		}
-		if a.player != nil && len(a.candidates()) > 1 && glassButton(c, "换来源").Clicked() {
-			a.panelTab, a.panelOpen, a.panelTouched = 0, true, true
-			a.playerOverlay = playerOverlayState{}
+		if len(a.candidates()) > 1 && glassButton(c, "换来源").Clicked() {
+			if a.player != nil {
+				a.openSourcesFromFailure()
+			} else {
+				a.switchToNextCandidate()
+			}
 		}
 		if a.title != nil && !a.inStack(routeSearch) && len(a.candidates()) <= 1 && a.library.root != nil {
-			searchingThis := a.library.search.running && titleKey(a.library.search.query) == titleKey(a.title.name)
+			search := a.titleSearch()
+			searchingThis := search.running && titleKey(search.query) == titleKey(a.title.name)
 			if searchingThis {
 				glassButton(c, "查找来源中…").Disabled(true)
-			} else if titleKey(a.library.search.query) != titleKey(a.title.name) {
+			} else if titleKey(search.query) != titleKey(a.title.name) {
 				if glassButton(c, "查找其他来源").Clicked() {
-					a.startScan(&a.library.search, a.title.name, false)
+					a.startScan(search, a.title.name, false)
 					if a.player != nil {
-						a.panelTab, a.panelOpen, a.panelTouched = 0, true, true
+						a.openEpisodePanel()
 						a.playerOverlay = playerOverlayState{}
 					}
 				}

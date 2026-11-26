@@ -251,7 +251,7 @@ func TestSameTitleMergesAndFallsBackToNextSource(t *testing.T) {
 	if err := tt.Click("来源 来源甲"); err != nil {
 		t.Fatalf("%v; texts %v", err, tt.Texts())
 	}
-	if a.title.item.Entry.Site.Key != "b" || !tt.HasText("读取失败") || !tt.HasText("当前来源") {
+	if a.title.item.Entry.Site.Key != "b" || !tt.HasText("失败") || !tt.HasText("来源乙") {
 		t.Fatalf("a failing source replaced the one on show: %v", tt.Texts())
 	}
 	if a.status != "" {

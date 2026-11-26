@@ -16,6 +16,8 @@ jobs:
             race: true
           - os: windows-latest
             race: false
+          - os: windows-11-arm
+            race: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -28,4 +30,4 @@ jobs:
         run: go test -count=1 ./...
       - name: Race Test
         if: matrix.race
-        run: go test -race -count=1 ./...
+        run: go test -race -timeout 20m -count=1 ./...

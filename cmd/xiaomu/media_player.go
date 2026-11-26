@@ -14,7 +14,7 @@ import (
 
 // mediaPlayer is the common playback contract between Xiaomu's UI and the
 // active video engine: mygo-player (libmpv zero-copy Metal on macOS;
-// double-buffered ui.Bitmap + D3D11VA on Windows amd64), with automatic
+// double-buffered ui.Bitmap + D3D11VA on Windows amd64/arm64), with automatic
 // fallback to MyGo's built-in system ui.VideoPlayer on other platforms and in
 // headless unit tests.
 type mediaPlayer interface {
@@ -71,6 +71,13 @@ type trackCapablePlayer interface {
 	CurrentHWDec() string
 }
 
+// seekableMediaPlayer is optionally implemented by mediaPlayer backends that
+// report runtime seekability (for example libmpv's seekable property on live
+// catchup vs VOD streams).
+type seekableMediaPlayer interface {
+	Seekable() bool
+}
+
 // advancedMediaPlayer is optionally implemented by mediaPlayer backends (such
 // as mygo-player / libmpv) that expose loop control, typed subtitle/video
 // fine-tuning, arbitrary property getters/setters, and video track metadata.
@@ -87,7 +94,11 @@ type advancedMediaPlayer interface {
 }
 
 func mpvBackendSupported() bool {
-	return runtime.GOOS == "darwin" || (runtime.GOOS == "windows" && runtime.GOARCH == "amd64")
+	return mpvBackendSupportedFor(runtime.GOOS, runtime.GOARCH)
+}
+
+func mpvBackendSupportedFor(goos, goarch string) bool {
+	return goos == "darwin" || (goos == "windows" && (goarch == "amd64" || goarch == "arm64"))
 }
 
 // systemMediaPlayer adapts MyGo's built-in *ui.VideoPlayer to mediaPlayer.
@@ -230,6 +241,10 @@ func (m *mpvMediaPlayer) Seek(d time.Duration) {
 	_ = m.p.Seek(d)
 }
 
+func (m *mpvMediaPlayer) Seekable() bool {
+	return m.p.Snapshot().Seekable
+}
+
 func (m *mpvMediaPlayer) Rate() float64 {
 	m.mu.Lock()
 	r := m.rate
@@ -368,6 +383,7 @@ var (
 	_ mediaPlayer         = (*mpvMediaPlayer)(nil)
 	_ trackCapablePlayer  = (*mpvMediaPlayer)(nil)
 	_ advancedMediaPlayer = (*mpvMediaPlayer)(nil)
+	_ seekableMediaPlayer = (*mpvMediaPlayer)(nil)
 )
 
 func convertMPVTracks(in []mpvplayer.Track) []mediaTrack {

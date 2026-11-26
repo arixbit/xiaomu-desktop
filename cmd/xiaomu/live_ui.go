@@ -50,12 +50,19 @@ type liveBrowser struct {
 	panelTab                 int // 0=频道, 1=节目单
 	catchupProgram           *iptv.Program
 	groupsCache              []string
+	groupCountsCache         map[string]int
 	groupsCachePtr           *iptv.Channel
 	groupsCacheLen           int
 	groupsCacheValid         bool
+	favCountCache            int
+	favCountCachePtr         *iptv.Channel
+	favCountCacheLen         int
+	favCountCacheVer         uint64
+	favCountCacheValid       bool
 	filteredAllCache         liveFilterCache
 	filteredQueryCache       liveFilterCache
 	channelList              ui.ListState
+	channelListCols          int
 	panelChannelList         ui.ListState
 	resetLists               bool
 	playingChannel           int
@@ -76,23 +83,49 @@ func (l *liveBrowser) groups() []string {
 	if l.groupsCacheValid && l.groupsCachePtr == ptr && l.groupsCacheLen == n {
 		return l.groupsCache
 	}
-	seen := make(map[string]struct{}, 16)
+	counts := make(map[string]int, 16)
 	groups := make([]string, 0, 16)
 	for _, channel := range l.channels {
 		if channel.Group == "" {
 			continue
 		}
-		if _, dup := seen[channel.Group]; dup {
-			continue
+		if counts[channel.Group] == 0 {
+			groups = append(groups, channel.Group)
 		}
-		seen[channel.Group] = struct{}{}
-		groups = append(groups, channel.Group)
+		counts[channel.Group]++
 	}
 	l.groupsCache = groups
+	l.groupCountsCache = counts
 	l.groupsCachePtr = ptr
 	l.groupsCacheLen = n
 	l.groupsCacheValid = true
 	return groups
+}
+
+func (l *liveBrowser) groupCount(group string) int {
+	l.groups()
+	return l.groupCountsCache[group]
+}
+
+func (l *liveBrowser) favoriteCount() int {
+	ptr, n, ver := channelsPtr(l.channels), len(l.channels), l.state.version
+	if l.favCountCacheValid && l.favCountCachePtr == ptr && l.favCountCacheLen == n && l.favCountCacheVer == ver {
+		return l.favCountCache
+	}
+	count := 0
+	if len(l.state.favSet) > 0 {
+		for _, ch := range l.channels {
+			if l.state.isFavorite(ch.Name) {
+				count++
+			}
+		}
+	}
+	l.favCountCache = count
+	l.favCountCachePtr = ptr
+	l.favCountCacheLen = n
+	l.favCountCacheVer = ver
+	l.favCountCacheValid = true
+	return count
 }
 
 func (l *liveBrowser) filteredChannels(withQuery bool) []int {
@@ -517,6 +550,8 @@ func (a *app) startLiveChannel(index, streamIndex int) {
 		return
 	}
 
+	wasLive := a.playingLive && a.player != nil
+	open, touched := a.panelOpen, a.panelTouched
 	for a.live.attempts < len(channel.Streams) {
 		stream := channel.Streams[streamIndex]
 		a.live.attempts++
@@ -530,6 +565,9 @@ func (a *app) startLiveChannel(index, streamIndex int) {
 		case err == nil && u.Host != "" && (scheme == "http" || scheme == "https"):
 			a.live.started = time.Now()
 			if a.playURL(stream.URL, stream.Headers) {
+				if wasLive {
+					a.panelOpen, a.panelTouched = open, touched
+				}
 				a.playingLive = true
 				a.live.catchupProgram = nil
 				if a.player != nil {
@@ -543,6 +581,9 @@ func (a *app) startLiveChannel(index, streamIndex int) {
 		case err == nil && u.Host != "" && (scheme == "rtsp" || scheme == "rtmp") && (mpvBackendSupported() || a.openMPV != nil):
 			a.live.started = time.Now()
 			if a.playDirectMPVURL(stream.URL, stream.Headers) {
+				if wasLive {
+					a.panelOpen, a.panelTouched = open, touched
+				}
 				a.playingLive = true
 				a.live.catchupProgram = nil
 				if a.player != nil {
@@ -565,30 +606,129 @@ func (a *app) startLiveChannel(index, streamIndex int) {
 
 }
 
-// listRow is a row of a plain list: a tab of the sidebar, a channel group.
-func listRow(c *ui.Context, label string, selected bool) ui.Element {
+// liveGroupRow renders a live channel group item in the left sidebar, matching
+// the player channel panel's coral selection styling.
+func liveGroupRow(c *ui.Context, key, label, a11yLabel string, count int, selected bool, icon *ui.SVG, iconColor ui.Color) ui.Element {
 	p := paletteFor(c)
-	row := ui.Row(c.Key(label)).FillWidth().Height(38).Padding(0, 12).Radius(11).
-		AlignItems(ui.Center).Cursor(ui.CursorPointer)
+	if a11yLabel == "" {
+		a11yLabel = label
+	}
+	row := ui.Row(c.Key(key)).FillWidth().Height(36).Padding(0, 10, 0, 12).Gap(7).Radius(9).
+		AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(a11yLabel)
 	targetBg := ui.Transparent
 	targetFg := p.textMuted
+	countColor := p.textFaint
 	if selected {
-		targetBg = p.surfaceSelected
+		targetBg = p.accentSoft
 		targetFg = p.text
+		countColor = p.accentLightText
+		row.Border(1, p.accentBorder)
 	} else if row.Hovered() {
 		targetBg = p.surfaceHover
 		targetFg = p.text
 	}
-	row.Background(row.AnimateColor("row-bg", targetBg, animColor))
+	row.Background(row.AnimateColor("lgrp-bg", targetBg, animColor))
 	applyPressPose(row)
-	fg := row.AnimateColor("row-fg", targetFg, animColor)
+	fg := row.AnimateColor("lgrp-fg", targetFg, animColor)
 	row.Children(func() {
-		text := ui.Text(c, label).SingleLine().TextColor(fg)
+		if selected {
+			ui.Box(c).Absolute().Left(4).Top(8).Bottom(8).Width(3).Radius(2).Background(p.accent).PassThrough()
+		}
+		if icon != nil {
+			ui.Icon(c, icon).Size(12, 12).TextColor(iconColor).PassThrough()
+		}
+		text := ui.Text(c, label).FontSize(13).SingleLine().TextColor(fg).Grow(1).MinWidth(0).PassThrough()
 		if selected {
 			text.Bold()
 		}
+		if count >= 0 {
+			ui.Text(c, fmt.Sprintf("%d", count)).FontSize(11.5).TextColor(countColor).SingleLine().ContentTransition(ctNumeric).PassThrough()
+		}
 	})
 	return row
+}
+
+func liveChannelMeta(channel iptv.Channel) string {
+	streamCount := len(channel.Streams)
+	switch {
+	case channel.Group != "" && streamCount > 0:
+		return fmt.Sprintf("%s · %d 条线路", channel.Group, streamCount)
+	case channel.Group != "":
+		return channel.Group
+	case streamCount > 0:
+		return fmt.Sprintf("%d 条线路", streamCount)
+	default:
+		return ""
+	}
+}
+
+func (a *app) liveChannelCard(c *ui.Context, index int) {
+	live := &a.live
+	channel := live.channels[index]
+	p := paletteFor(c)
+	fav := live.state.isFavorite(channel.Name)
+	isLast := live.state.last != nil && liveFavoriteKey(live.state.last.ChannelName) == liveFavoriteKey(channel.Name)
+
+	card := ui.Row(c).Key(fmt.Sprintf("live-channel-%d", index)).Grow(1).MinWidth(0).Height(72).
+		Padding(10, 12).Gap(10).AlignItems(ui.Center)
+	applyInteractiveSurface(card, p, 11, card.Hovered())
+	if isLast {
+		card.Border(1, p.accentBorder)
+	}
+	applyPressPose(card)
+	card.Children(func() {
+		mainArea := ui.Row(c).Grow(1).MinWidth(0).FillHeight().Gap(10).AlignItems(ui.Center).
+			Cursor(ui.CursorPointer).Label("播放 " + channel.Name)
+		mainArea.Children(func() {
+			a.renderChannelLogo(c, channel, 38)
+			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+				ui.Text(c, channel.Name).FontSize(13.5).Bold().TextColor(p.text).SingleLine()
+				if cur, _ := a.channelEPGCurrent(channel); cur != nil {
+					dotColor := p.success
+					if isLast {
+						dotColor = p.accent
+					}
+					ui.Row(c).FillWidth().Gap(5).AlignItems(ui.Center).Children(func() {
+						ui.Box(c).Size(5, 5).Radius(3).Background(dotColor).PassThrough()
+						ui.Text(c, "正在播出："+cur.Title).FontSize(11.5).TextColor(p.textMuted).SingleLine().Grow(1).MinWidth(0)
+					})
+				}
+				if meta := liveChannelMeta(channel); meta != "" {
+					ui.Text(c, meta).FontSize(10.5).TextColor(p.textFaint).SingleLine()
+				}
+			})
+		})
+		if mainArea.Clicked() {
+			a.playLiveChannel(index, 0)
+		}
+		starIcon := iconStarOutline
+		starLabel := "收藏 " + channel.Name
+		starBg := p.surfaceSubtle
+		starBorder := p.border
+		starFg := p.textMuted
+		if fav {
+			starIcon = iconStarFilled
+			starLabel = "取消收藏 " + channel.Name
+			starBg = p.goldSoft
+			starBorder = p.goldBorder
+			starFg = p.gold
+		}
+		starBtn := ui.ButtonBase(c.Key(fmt.Sprintf("live-fav-%d", index))).Size(30, 30).Radius(8).Center().
+			Cursor(ui.CursorPointer).Label(starLabel).Tooltip(starLabel)
+		if !fav && starBtn.Hovered() {
+			starBg = p.surfaceHover
+			starBorder = p.borderControl
+			starFg = p.text
+		}
+		starBtn.Background(starBtn.AnimateColor("lfav-bg", starBg, animColor)).Border(1, starBorder)
+		applyPressPose(starBtn)
+		starBtn.Children(func() {
+			ui.Icon(c, starIcon).Size(14, 14).TextColor(starBtn.AnimateColor("lfav-fg", starFg, animColor)).PassThrough()
+		})
+		if starBtn.Clicked() {
+			a.toggleLiveChannelFavorite(channel)
+		}
+	})
 }
 
 func (a *app) liveView(c *ui.Context) {
@@ -600,36 +740,43 @@ func (a *app) liveView(c *ui.Context) {
 		})
 		return
 	}
-	ui.Column(c).Fill().Gap(14).Children(func() {
+	ui.Column(c).Fill().Gap(12).Children(func() {
 		showSources := len(live.sources) > 1
-		showSearch := len(live.channels) > 0
-		if showSources || showSearch {
-			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-				if showSources {
-					ui.Row(c).Grow(1).MinWidth(0).Wrap().Gap(8).Children(func() {
-						for i, source := range live.sources {
-							if chip(c.Key(fmt.Sprintf("live-source-%d", i)), source.Name, i == live.selectedSource).Clicked() {
-								a.loadLiveSource(i)
+		showSearch := len(live.channels) > 20 || live.query != ""
+		showCount := len(live.channels) > 0 && !showSearch
+		if showSources || showSearch || showCount {
+			ui.Column(c).FillWidth().Padding(0, scrollGutter, 0, 0).Gap(0).Children(func() {
+				ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
+					if showSources {
+						ui.ScrollHorizontal(c).Grow(1).MinWidth(0).Gap(18).Scrollbars(false).Children(func() {
+							for i, source := range live.sources {
+								if underlineTab(c, fmt.Sprintf("live-source-%d", i), source.Name, i == live.selectedSource).Clicked() {
+									a.loadLiveSource(i)
+								}
 							}
-						}
-					})
-				} else {
-					ui.Spacer(c)
-				}
-				if showSearch {
-					sf := ui.SearchField(c, &live.query).Label("频道搜索").Placeholder("搜索频道").Width(240).Radius(20)
-					if p.reduceTransparency {
-						sf.Background(p.surface).Border(1, p.border)
+						})
 					} else {
-						sf.Material(p.controlMat)
-						if p.highContrast {
-							sf.Border(1, p.border)
+						ui.Spacer(c)
+					}
+					if showSearch {
+						sf := ui.SearchField(c, &live.query).Label("频道搜索").Placeholder("搜索频道").Width(228).Radius(10).
+							Border(1, p.borderControl)
+						if p.reduceTransparency {
+							sf.Background(p.surface)
+						} else {
+							sf.Material(p.searchMat).Shadow(0, 6, 16, 0, ui.RGBA(0, 0, 0, 0.22))
 						}
+						if sf.Changed() {
+							live.channelList = ui.ListState{}
+						}
+					} else if showCount {
+						countText := fmt.Sprintf("共 %d 个频道", len(live.channels))
+						if len(live.sources) > 1 {
+							countText = fmt.Sprintf("共 %d 个频道 · %d 个直播来源", len(live.channels), len(live.sources))
+						}
+						ui.Text(c, countText).FontSize(12).TextColor(p.textFaint).SingleLine().ContentTransition(ctNumeric)
 					}
-					if sf.Changed() {
-						live.channelList = ui.ListState{}
-					}
-				}
+				})
 			})
 		}
 		if len(live.channels) == 0 {
@@ -642,7 +789,9 @@ func (a *app) liveView(c *ui.Context) {
 			}
 			return
 		}
-		a.liveLastResumeBar(c)
+		ui.Box(c).FillWidth().Padding(0, scrollGutter, 0, 0).Children(func() {
+			a.liveLastResumeBar(c)
+		})
 		groups := live.groups()
 		hasFavs := len(live.state.favorites) > 0
 		if !hasFavs && live.group == liveGroupFavorites {
@@ -653,18 +802,18 @@ func (a *app) liveView(c *ui.Context) {
 			live.channelList, live.panelChannelList = ui.ListState{}, ui.ListState{}
 			live.resetLists = false
 		}
+		hasSidebar := len(groups) > 0 || hasFavs
 		ui.Row(c).Grow(1).FillWidth().MinHeight(0).Gap(16).Children(func() {
-			if len(groups) > 0 || hasFavs {
-				ui.Scroll(c).Width(168).FillHeight().Gap(2).Children(func() {
-					if listRow(c, "全部频道", live.group == "").Clicked() {
+			if hasSidebar {
+				ui.Scroll(c).Width(164).FillHeight().Padding(0, 10, 0, 0).Gap(3).ScrollbarStyle(appScrollbar).Children(func() {
+					if liveGroupRow(c, "grp-all", "全部频道", "全部频道", len(live.channels), live.group == "", nil, ui.Transparent).Clicked() {
 						if live.group != "" {
 							live.group = ""
 							live.channelList, live.panelChannelList = ui.ListState{}, ui.ListState{}
 						}
 					}
 					if hasFavs {
-						favLabel := fmt.Sprintf("★ 收藏 (%d)", len(live.state.favorites))
-						if listRow(c, favLabel, live.group == liveGroupFavorites).Label("收藏频道").Clicked() {
+						if liveGroupRow(c, "grp-fav", "收藏频道", "收藏频道", live.favoriteCount(), live.group == liveGroupFavorites, iconStarFilled, p.gold).Clicked() {
 							if live.group != liveGroupFavorites {
 								live.group = liveGroupFavorites
 								live.channelList, live.panelChannelList = ui.ListState{}, ui.ListState{}
@@ -672,7 +821,7 @@ func (a *app) liveView(c *ui.Context) {
 						}
 					}
 					for _, group := range groups {
-						if listRow(c, group, live.group == group).Clicked() {
+						if liveGroupRow(c, "grp-"+group, group, group, live.groupCount(group), live.group == group, nil, ui.Transparent).Clicked() {
 							if live.group != group {
 								live.group = group
 								live.channelList, live.panelChannelList = ui.ListState{}, ui.ListState{}
@@ -690,71 +839,55 @@ func (a *app) liveView(c *ui.Context) {
 				})
 				return
 			}
-			live.channelList.Key = func(row int) any { return indices[row] }
-			live.channelList.Label = func(row int) string { return live.channels[indices[row]].Name }
-			list := ui.List(c, &live.channelList, len(indices), func(rowIndex int) {
-				i := indices[rowIndex]
-				channel := live.channels[i]
-				fav := live.state.isFavorite(channel.Name)
-				row := ui.Row(c).Key(fmt.Sprintf("live-channel-%d", i)).FillWidth().Padding(10, 14).Gap(10).
-					AlignItems(ui.Center)
-				targetBg := p.surface
-				if row.Hovered() {
-					targetBg = p.surfaceHover
+			winW, _ := c.Size()
+			sideW, _ := activeSidebarWidth(winW)
+			contentWidth := max(0, winW-20-sideW-10-16)
+			listWidth := contentWidth
+			if hasSidebar {
+				listWidth = max(0, contentWidth-164-16)
+			}
+			cols := 1
+			if listWidth >= 660 {
+				cols = 2
+			}
+			if live.channelListCols != cols {
+				live.channelListCols = cols
+				live.channelList = ui.ListState{}
+			}
+			rowCount := (len(indices) + cols - 1) / cols
+			live.channelList.Key = func(row int) any {
+				start := row * cols
+				if start >= len(indices) {
+					return row
 				}
-				row.Radius(16).Background(row.AnimateColor("ch-bg", targetBg, animColor))
-				if p.highContrast || p.reduceTransparency {
-					row.Border(1, p.border)
+				if cols == 2 && start+1 < len(indices) {
+					return [2]int{indices[start], indices[start+1]}
 				}
-				applyPressPose(row)
-				row.Children(func() {
-					mainArea := ui.Row(c).Grow(1).MinWidth(0).Gap(12).AlignItems(ui.Center).
-						Cursor(ui.CursorPointer).Label("播放 " + channel.Name)
-					mainArea.Children(func() {
-						a.renderChannelLogo(c, channel, 36)
-						ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-							ui.Text(c, channel.Name).Bold().SingleLine()
-							meta := channel.Group
-							if len(channel.Streams) > 1 {
-								streamNote := fmt.Sprintf("%d 条线路", len(channel.Streams))
-								if meta != "" {
-									meta += " · " + streamNote
-								} else {
-									meta = streamNote
-								}
-							}
-							if cur, _ := a.channelEPGCurrent(channel); cur != nil {
-								nowPlaying := "正在播出：" + cur.Title
-								if meta != "" {
-									meta = nowPlaying + " · " + meta
-								} else {
-									meta = nowPlaying
-								}
-							}
-							if meta != "" {
-								ui.Text(c, meta).FontSize(12).TextColor(p.textMuted).SingleLine()
-							}
-						})
-					})
-					if mainArea.Clicked() {
-						a.playLiveChannel(i, 0)
-					}
-					starText, starLabel := "☆", "收藏 "+channel.Name
-					if fav {
-						starText, starLabel = "★", "取消收藏 "+channel.Name
-					}
-					starBtn := ui.Button(c, starText).Label(starLabel).Tooltip(starLabel).Padding(6, 10).Radius(12)
-					if fav {
-						starBtn.Background(p.surfaceSelected).TextColor(p.accent)
-					} else {
-						starBtn.Background(ui.Transparent).TextColor(p.textMuted)
-					}
-					applyPressPose(starBtn)
-					if starBtn.Clicked() {
-						a.toggleLiveChannelFavorite(channel)
+				return [2]int{indices[start], -1}
+			}
+			live.channelList.Label = func(row int) string {
+				start := row * cols
+				if start >= len(indices) {
+					return ""
+				}
+				if cols == 2 && start+1 < len(indices) {
+					return live.channels[indices[start]].Name + " / " + live.channels[indices[start+1]].Name
+				}
+				return live.channels[indices[start]].Name
+			}
+			list := ui.List(c, &live.channelList, rowCount, func(rowIndex int) {
+				start := rowIndex * cols
+				ui.Row(c).FillWidth().Gap(10).Children(func() {
+					for col := 0; col < cols; col++ {
+						pos := start + col
+						if pos >= len(indices) {
+							ui.Box(c).Grow(1).MinWidth(0)
+							continue
+						}
+						a.liveChannelCard(c, indices[pos])
 					}
 				})
-			}).Grow(1).MinWidth(0).FillHeight().Gap(8)
+			}).Grow(1).MinWidth(0).FillHeight().Padding(0, scrollGutter, 0, 0).Gap(10).ScrollbarStyle(appScrollbar)
 			_ = list
 		})
 	})
@@ -781,7 +914,7 @@ func (a *app) liveDialog(c *ui.Context) {
 			hint = "粘贴新地址将替换当前直播源，你的频道收藏都会保留。"
 		}
 		ui.Text(c, title).FontSize(24).Bold()
-		ui.Scroll(c).FillWidth().MaxHeight(max(float32(120), winH-176)).Gap(12).Children(func() {
+		ui.Scroll(c).FillWidth().MaxHeight(max(float32(120), winH-176)).Gap(12).ScrollbarStyle(appScrollbar).Children(func() {
 			ui.Text(c, hint).TextColor(p.textMuted)
 			if ui.TextInput(c, &live.input).Label("直播地址").Placeholder("https://example.com/channels.m3u").FillWidth().AutoFocus().Submitted() {
 				if !a.running(jobLive) {

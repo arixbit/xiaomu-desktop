@@ -38,6 +38,10 @@ func (a *app) handleKeyboard(c *ui.Context) {
 		a.closePlayerPopovers()
 		return
 	}
+	if a.player != nil && a.hasSeekPreview() && c.Shortcut(0, ui.KeyEscape) && !c.ShortcutRepeated() {
+		a.dismissSeekPreview()
+		return
+	}
 	if a.fullScreen && c.Shortcut(0, ui.KeyEscape) && !c.ShortcutRepeated() {
 		a.setFullScreen(false)
 		if a.window != nil {
@@ -47,8 +51,14 @@ func (a *app) handleKeyboard(c *ui.Context) {
 		return
 	}
 	if a.player != nil && a.panelOpen && c.Shortcut(0, ui.KeyEscape) && !c.ShortcutRepeated() {
-		a.panelOpen = false
-		a.panelTouched = true
+		a.closeEpisodePanel()
+		return
+	}
+	if a.player != nil && a.hasPlayerFailureOverlay(a.player) && a.failureUI.detailsOpen && c.Shortcut(0, ui.KeyEscape) && !c.ShortcutRepeated() {
+		a.failureUI.detailsOpen = false
+		a.failureUI.copySeq++
+		a.failureUI.copied = false
+		a.failureUI.copyFailed = false
 		return
 	}
 	if a.player == nil && c.Shortcut(0, ui.KeyEscape) && !c.ShortcutRepeated() && len(a.nav) > 1 {
@@ -135,7 +145,7 @@ func (a *app) handleKeyboard(c *ui.Context) {
 		a.adjustVolume(p, -0.05)
 		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 	}
-	if a.isLiveStream() || p.Duration() <= 0 {
+	if !a.canSeekPlayer(p) {
 		return
 	}
 	if c.Shortcut(0, ui.KeyLeft) {

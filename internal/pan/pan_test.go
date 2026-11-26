@@ -971,3 +971,24 @@ func TestQuarkCleanupDoesNotPurgeRenamedCachedFolder(t *testing.T) {
 		t.Fatalf("CleanupTemp issued %d delete calls against renamed cached folder", gotDeletes)
 	}
 }
+
+func TestIsNativePlayableFilenameFor(t *testing.T) {
+	cases := []struct {
+		name, goos, goarch string
+		want               bool
+	}{
+		{"movie.mp4", "linux", "amd64", true},
+		{"movie.mkv", "darwin", "arm64", true},
+		{"movie.mkv", "windows", "amd64", true},
+		{"movie.mkv", "windows", "arm64", true},
+		{"movie.flv", "windows", "arm64", true},
+		{"movie.mkv", "windows", "386", false},
+		{"movie.mkv", "linux", "amd64", false},
+		{"disc.iso", "windows", "arm64", false},
+	}
+	for _, tc := range cases {
+		if got := isNativePlayableFilenameFor(tc.name, tc.goos, tc.goarch); got != tc.want {
+			t.Errorf("isNativePlayableFilenameFor(%q, %q, %q) = %v, want %v", tc.name, tc.goos, tc.goarch, got, tc.want)
+		}
+	}
+}

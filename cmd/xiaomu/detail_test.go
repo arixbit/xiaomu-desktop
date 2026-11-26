@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -99,15 +100,14 @@ func TestDetailHeaderShowsPlayButtonAboveSources(t *testing.T) {
 	if tt.HasText("<p>") {
 		t.Fatalf("synopsis still has HTML tags: %v", tt.Texts())
 	}
-	// The play button lives in the fixed header, above the sources
-	// section, so it never scrolls away with the sources.
+	// The play button sits in the hero above the source strip.
 	play, ok := tt.Find("立即播放")
 	if !ok {
 		t.Fatal("play button is missing")
 	}
-	sources, ok := tt.Find("来源")
+	sources, ok := tt.Find("片源")
 	if !ok {
-		t.Fatal("sources heading is missing")
+		t.Fatal("sources label is missing")
 	}
 	if play.Y+play.H > sources.Y {
 		t.Fatalf("play button is not above the sources: play=%+v sources=%+v", play, sources)
@@ -133,16 +133,16 @@ func TestDetailHeaderShortSynopsisLeavesNoHole(t *testing.T) {
 	if !tt.HasText("简介只有一句。") || !tt.HasText("立即播放") || !tt.HasText("加入追剧") {
 		t.Fatalf("short-synopsis header missing: %v", tt.Texts())
 	}
-	// The header's height is driven by the poster (240), not by the
-	// synopsis: with a one-line synopsis the sources heading still
-	// sits just below the header, with no empty hole in between.
+	// The hero's height is driven by the poster (224), not by the
+	// synopsis: with a one-line synopsis the source strip sits just
+	// below the hero, with no empty hole in between.
 	title, ok := tt.Find("演示电影")
 	if !ok {
 		t.Fatal("title is missing")
 	}
-	sources, ok := tt.Find("来源")
+	sources, ok := tt.Find("片源")
 	if !ok {
-		t.Fatal("sources heading is missing")
+		t.Fatal("sources label is missing")
 	}
 	if sources.Y-title.Y >= 300 {
 		t.Fatalf("header is taller than the poster: title=%+v sources=%+v", title, sources)
@@ -204,41 +204,51 @@ func TestDoubanScoreLookup(t *testing.T) {
 	}
 }
 
-func TestDetailAccordionShowsAllSources(t *testing.T) {
+func TestDetailSourceStripShowsAllSources(t *testing.T) {
 	a, seeds := newDetailTestApp(t, 19)
 	tt := ui.NewTester(a.view, 1120, 760)
 	tt.SetTitleBar(dragBar)
 	tt.Frame()
-	if !tt.HasText("共 19 个") {
-		t.Fatalf("sources count missing: %v", tt.Texts())
+	if !tt.HasText("片源") {
+		t.Fatalf("sources strip label missing: %v", tt.Texts())
 	}
-	// Every source is a row in the list: no scroll box, no scroll hint.
-	for i := 0; i < 19; i++ {
-		if _, ok := tt.Find("来源 " + seeds[i].Entry.Label()); !ok {
-			t.Fatalf("source row %d is missing", i)
+	first, ok := tt.Find("来源 " + seeds[0].Entry.Label())
+	if !ok {
+		t.Fatal("first source chip is missing")
+	}
+	for i := 1; i < 19; i++ {
+		chip, ok := tt.Find("来源 " + seeds[i].Entry.Label())
+		if !ok {
+			t.Fatalf("source chip %d is missing", i)
+		}
+		if chip.Y != first.Y {
+			t.Fatalf("source chip %d is not on the single horizontal strip: first=%+v chip=%+v", i, first, chip)
 		}
 	}
 	if tt.HasText("下滑查看更多") || tt.HasText("已显示全部") || tt.HasText("来源列表") {
-		t.Fatalf("scroll-box leftovers show with the accordion: %v", tt.Texts())
+		t.Fatalf("old scroll-box leftovers still render: %v", tt.Texts())
 	}
 }
 
-func TestDetailAccordionFewSources(t *testing.T) {
+func TestDetailSourceStripFewSources(t *testing.T) {
 	a, seeds := newDetailTestApp(t, 3)
 	tt := ui.NewTester(a.view, 1120, 760)
 	tt.SetTitleBar(dragBar)
 	tt.Frame()
-	if !tt.HasText("共 3 个") {
-		t.Fatalf("sources count missing: %v", tt.Texts())
-	}
+	var prev ui.Rect
 	for i := 0; i < 3; i++ {
-		if _, ok := tt.Find("来源 " + seeds[i].Entry.Label()); !ok {
-			t.Fatalf("source row %d is missing", i)
+		chip, ok := tt.Find("来源 " + seeds[i].Entry.Label())
+		if !ok {
+			t.Fatalf("source chip %d is missing", i)
 		}
+		if i > 0 && (chip.Y != prev.Y || chip.X <= prev.X) {
+			t.Fatalf("source chip %d is not laid out horizontally to the right: prev=%+v cur=%+v", i, prev, chip)
+		}
+		prev = chip
 	}
 }
 
-func TestDetailAccordionExpandsCurrentSource(t *testing.T) {
+func TestDetailSourceStripSwitchesSourceAndShowsLinesAndGrid(t *testing.T) {
 	a, seeds := newDetailTestApp(t, 3)
 	a.title.detail.Sources = []catalog.Source{
 		{Name: "线路一", Episodes: []catalog.Episode{{Name: "第1集", ID: "one"}, {Name: "第2集", ID: "two"}}},
@@ -247,42 +257,25 @@ func TestDetailAccordionExpandsCurrentSource(t *testing.T) {
 	tt := ui.NewTester(a.view, 1120, 760)
 	tt.SetTitleBar(dragBar)
 	tt.Frame()
-	// The current source is expanded: its lines and episodes show
-	// inside its own row. (Episode chips render as "1" and "2":
-	// episodeButtonLabel strips the 第/集 wrapper.)
-	if !tt.HasText("播放线路") || !tt.HasText("选集") || !tt.HasText("共 2 集") || !tt.HasText("线路一") {
-		t.Fatalf("expanded source content missing: %v", tt.Texts())
+	// Line underline tabs and compact numeric episode matrix render below the source strip.
+	if !tt.HasText("线路一") || !tt.HasText("线路二") || !tt.HasText("共 2 集") {
+		t.Fatalf("line tabs or episode count missing: %v", tt.Texts())
 	}
-	// "当前来源" sits on the current source's row.
-	row, ok := tt.Find("来源 " + seeds[0].Entry.Label())
-	if !ok {
-		t.Fatal("current source row is missing")
+	ep1, ok1 := tt.Find("1")
+	ep2, ok2 := tt.Find("2")
+	if !ok1 || !ok2 {
+		t.Fatalf("numeric episode cells missing: %v", tt.Texts())
 	}
-	state, ok := tt.Find("当前来源")
-	if !ok {
-		t.Fatal("current-source state is missing")
+	if ep1.Y != ep2.Y || ep2.X <= ep1.X {
+		t.Fatalf("episode grid cells are not aligned in the same row: ep1=%+v ep2=%+v", ep1, ep2)
 	}
-	if state.Y < row.Y || state.Y >= row.Y+row.H {
-		t.Fatalf("current-source state is not on the current row: state=%+v row=%+v", state, row)
-	}
-	// Choosing another source switches it: that row expands instead.
+	// Choosing another source chip switches it in place.
 	if err := tt.Click("来源 " + seeds[1].Entry.Label()); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
 	if a.title == nil || itemKey(a.title.item) != itemKey(seeds[1]) {
 		t.Fatalf("click did not switch the source: item=%+v", a.title)
-	}
-	row, ok = tt.Find("来源 " + seeds[1].Entry.Label())
-	if !ok {
-		t.Fatal("new current source row is missing")
-	}
-	state, ok = tt.Find("当前来源")
-	if !ok {
-		t.Fatal("current-source state is missing after the switch")
-	}
-	if state.Y < row.Y || state.Y >= row.Y+row.H {
-		t.Fatalf("current-source state did not move with the switch: state=%+v row=%+v", state, row)
 	}
 }
 
@@ -298,6 +291,138 @@ func TestDetailSourceHintOnlyWhenCurrentFails(t *testing.T) {
 	tt.Frame()
 	if !tt.HasText("当前来源播不了") {
 		t.Fatalf("hint missing after the current source failed: %v", tt.Texts())
+	}
+}
+
+func TestDetailCurrentSourceFailureUsesFailedChipState(t *testing.T) {
+	a, seeds := newDetailTestApp(t, 3)
+	if got := detailSourceChipState(a.title, seeds[0], nil); got != sourceChipSelected {
+		t.Fatalf("healthy current source state = %v, want sourceChipSelected", got)
+	}
+	if got := detailSourceChipState(a.title, seeds[1], nil); got != sourceChipNormal {
+		t.Fatalf("healthy other source state = %v, want sourceChipNormal", got)
+	}
+
+	// Non-current failed source uses sourceChipFailed.
+	a.title.failed[itemKey(seeds[1])] = "连接超时"
+	if got := detailSourceChipState(a.title, seeds[1], nil); got != sourceChipFailed {
+		t.Fatalf("failed non-current source state = %v, want sourceChipFailed", got)
+	}
+
+	// Current source failed in t.failed uses sourceChipSelectedFailed (never green/selected).
+	a.title.failed[itemKey(seeds[0])] = "读取超时"
+	if got := detailSourceChipState(a.title, seeds[0], nil); got != sourceChipSelectedFailed {
+		t.Fatalf("failed current source state = %v, want sourceChipSelectedFailed", got)
+	}
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.SetTitleBar(dragBar)
+	tt.Frame()
+	if !tt.HasText("超时") {
+		t.Fatalf("failed current source chip should show 超时 badge: %v", tt.Texts())
+	}
+
+	// Current source with playback failure also uses sourceChipSelectedFailed.
+	delete(a.title.failed, itemKey(seeds[0]))
+	a.playFailure = &episodeFailure{
+		line:    "线路",
+		episode: a.title.detail.Sources[0].Episodes[0],
+		err:     errors.New("解析分集失败"),
+	}
+	if got := detailSourceChipState(a.title, seeds[0], a.playFailure); got != sourceChipSelectedFailed {
+		t.Fatalf("playFailure current source state = %v, want sourceChipSelectedFailed", got)
+	}
+	tt.Frame()
+	if !tt.HasText("失败") {
+		t.Fatalf("playFailure current source chip should show 失败 badge: %v", tt.Texts())
+	}
+}
+
+func TestDetailPlaybackFailureBannerSwitchesCandidate(t *testing.T) {
+	a, seeds := newDetailTestApp(t, 3)
+	// Mark candidate 1 as already failed so "换来源" skips it and opens candidate 2.
+	a.title.failed[itemKey(seeds[1])] = "读取失败"
+	a.playFailure = &episodeFailure{
+		line:    "线路",
+		episode: a.title.detail.Sources[0].Episodes[0],
+		err:     errors.New("测试流地址失效"),
+	}
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.SetTitleBar(dragBar)
+	tt.Frame()
+	if !tt.HasText("测试流地址失效") || !tt.HasText("换来源") {
+		t.Fatalf("detail failure banner missing error or 换来源 button: %v", tt.Texts())
+	}
+	if err := tt.Click("换来源"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.title == nil || itemKey(a.title.item) != itemKey(seeds[2]) {
+		t.Fatalf("换来源 did not skip failed candidate and switch to seeds[2]: current=%+v", a.title.item.Entry.Site.Key)
+	}
+	if a.playFailure != nil {
+		t.Fatalf("switching candidate did not clear playFailure: %+v", a.playFailure)
+	}
+}
+
+func TestDetailSingleEpisodeShowsPlayableButton(t *testing.T) {
+	a, _ := newDetailTestApp(t, 2)
+	// Single-episode movie keeps the same clickable episode-button pattern below line tabs
+	// instead of a text-only hint, normalizing generic "第1集" to "正片" and preserving "HD中字".
+	a.title.detail.Sources = []catalog.Source{
+		{Name: "原画线路", Episodes: []catalog.Episode{{Name: "第1集", ID: "m1"}}},
+		{Name: "备用线路", Episodes: []catalog.Episode{{Name: "HD中字", ID: "m2"}}},
+	}
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.SetTitleBar(dragBar)
+	tt.Frame()
+	if tt.HasText("选集") || tt.HasText("共 1 集") || tt.HasText("立即观看") {
+		t.Fatalf("single-episode movie should not show redundant count or mismatched hint: %v", tt.Texts())
+	}
+	if _, ok := tt.Find("正片"); !ok {
+		t.Fatalf("single-episode movie should render clickable 正片 button: %v", tt.Texts())
+	}
+	if !tt.HasText("原画线路") || !tt.HasText("备用线路") {
+		t.Fatalf("single-episode movie should keep line tabs: %v", tt.Texts())
+	}
+	if err := tt.Click("备用线路"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.title.line != 1 {
+		t.Fatalf("switching line on single-episode movie failed: line=%d", a.title.line)
+	}
+	if _, ok := tt.Find("HD中字"); !ok {
+		t.Fatalf("switching to second line did not show clickable HD中字 button: %v", tt.Texts())
+	}
+}
+
+func TestDetailFavoriteBookmarkButtonToggles(t *testing.T) {
+	a, _ := newDetailTestApp(t, 2)
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.SetTitleBar(dragBar)
+	tt.Frame()
+	if !tt.HasText("加入追剧") {
+		t.Fatalf("initial favorite button label missing: %v", tt.Texts())
+	}
+	if err := tt.Click("加入追剧"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !a.favorites.contains(a.title.name) {
+		t.Fatal("clicking 加入追剧 did not follow the title")
+	}
+	if !tt.HasText("已追剧") || !tt.HasText("已追剧 · 取消") {
+		t.Fatalf("followed bookmark button text/label missing: %v", tt.Texts())
+	}
+	if err := tt.Click("已追剧 · 取消"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.favorites.contains(a.title.name) {
+		t.Fatal("clicking 已追剧 · 取消 did not unfollow the title")
+	}
+	if !tt.HasText("加入追剧") {
+		t.Fatalf("unfollowed button did not restore 加入追剧: %v", tt.Texts())
 	}
 }
 
@@ -457,5 +582,67 @@ func TestSwitchingSourcesPreservesTitleHeaderMetadataAndFillsMissing(t *testing.
 	b.openCandidate(empty)
 	if b.title.detail.Pic != "https://example.com/rich.jpg" || b.title.detail.Year != "2025" || b.title.detail.Content != "补齐后的简介。" {
 		t.Fatalf("switching back to empty source wiped filled metadata: %+v", b.title.detail)
+	}
+}
+
+func TestDetailSourceStripScrollbarClearance(t *testing.T) {
+	doc := &config.Config{URL: "https://example.com/config.json"}
+	var items []library.Item
+	for i := 1; i <= 8; i++ {
+		name := fmt.Sprintf("测试线路来源 %d · 高速直连", i)
+		items = append(items, library.Item{
+			Entry: library.Entry{Config: doc, Site: config.Site{Key: fmt.Sprintf("s%d", i), Name: name, Type: 1, Kind: config.KindJSON}},
+			Video: catalog.Video{ID: catalog.ID(fmt.Sprintf("%d", i)), Name: "多片源剧"},
+		})
+	}
+	a := &app{
+		nav: []routeKind{routeHome, routeDetail},
+		title: &titlePage{
+			name:   "多片源剧",
+			item:   items[0],
+			seeds:  items,
+			failed: map[string]string{},
+			detail: &catalog.Detail{
+				Name:    "多片源剧",
+				Sources: []catalog.Source{{Name: "线路1", Episodes: []catalog.Episode{{Name: "第1集", ID: "1"}}}},
+			},
+		},
+	}
+	defer a.close()
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.Frame()
+
+	strip, ok := tt.Find("片源列表")
+	if !ok {
+		t.Fatal("detail source strip missing")
+	}
+	chip, ok := tt.Find("来源 " + items[0].Entry.Label())
+	if !ok {
+		t.Fatal("first detail source chip missing")
+	}
+	maxChipBottom := strip.Y + strip.H - appScrollbar.TrackWidth
+	if chip.Y+chip.H > maxChipBottom+0.5 {
+		t.Fatalf("detail source chip overlaps horizontal scrollbar track: chip=%+v maxBottom=%v strip=%+v", chip, maxChipBottom, strip)
+	}
+	heading, ok := tt.Find("片源")
+	if !ok {
+		t.Fatal("detail source heading missing")
+	}
+	if heading.Y+heading.H > strip.Y+0.5 {
+		t.Fatalf("片源 heading should sit above the horizontal source strip: heading=%+v strip=%+v", heading, strip)
+	}
+	// With library root set, 查找其他来源 sits left-clustered right beside 片源 instead of far right.
+	a.library.root = doc
+	tt.Frame()
+	strip, _ = tt.Find("片源列表")
+	findBtn, ok := tt.Find("查找其他来源")
+	if !ok {
+		t.Fatal("查找其他来源 button missing")
+	}
+	if findBtn.Y+findBtn.H > strip.Y+0.5 {
+		t.Fatalf("查找其他来源 should sit on the header row above the source strip: find=%+v strip=%+v", findBtn, strip)
+	}
+	if findBtn.X-heading.X > 220 {
+		t.Fatalf("查找其他来源 drifted far right instead of staying left-clustered beside 片源: heading=%+v find=%+v", heading, findBtn)
 	}
 }
