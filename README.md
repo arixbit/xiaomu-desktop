@@ -252,3 +252,4 @@ Copyright (c) 2026 arixbit。除另有声明的第三方材料外，小幕采用
     <img alt="小幕 GitHub Star 增长历史" src="https://api.star-history.com/svg?repos=arixbit/xiaomu-desktop&amp;type=Date">
   </picture>
 </a>
+
