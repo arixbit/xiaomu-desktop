@@ -361,6 +361,7 @@ func (a *app) openLocalFileAt(path string, subtitles []string, at time.Duration,
 	}
 	a.playingName = filepath.Base(clean)
 	a.playingFilePath = clean
+	a.setSeekPreviewMedia(seekPreviewMedia{target: clean, isLocal: true})
 	a.playingSource, a.playingEpisode = "", ""
 	a.playingLive, a.playingDirect = false, true
 	a.playingFile = true

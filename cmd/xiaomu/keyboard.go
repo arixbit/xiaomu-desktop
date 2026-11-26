@@ -38,6 +38,10 @@ func (a *app) handleKeyboard(c *ui.Context) {
 		a.closePlayerPopovers()
 		return
 	}
+	if a.player != nil && a.hasSeekPreview() && c.Shortcut(0, ui.KeyEscape) && !c.ShortcutRepeated() {
+		a.dismissSeekPreview()
+		return
+	}
 	if a.fullScreen && c.Shortcut(0, ui.KeyEscape) && !c.ShortcutRepeated() {
 		a.setFullScreen(false)
 		if a.window != nil {
@@ -135,7 +139,7 @@ func (a *app) handleKeyboard(c *ui.Context) {
 		a.adjustVolume(p, -0.05)
 		a.playerOverlay.hideAt = c.Now().Add(playerOverlayIdle)
 	}
-	if a.isLiveStream() || p.Duration() <= 0 {
+	if !a.canSeekPlayer(p) {
 		return
 	}
 	if c.Shortcut(0, ui.KeyLeft) {

@@ -65,6 +65,7 @@ func (a *app) togglePlayerPopover(target *bool) {
 func (a *app) setFullScreen(full bool) {
 	a.fullScreen = full
 	a.playerOverlay = playerOverlayState{}
+	a.clearSeekPreview()
 	a.closePlayerPopovers()
 	a.playerPointer.clickAt = time.Time{}
 	if full {
@@ -152,6 +153,9 @@ func (a *app) playerScreen(c *ui.Context) {
 		showPanel := !a.playerExtra.miniMode && hasEpisodes && a.panelOpen && (!compact || a.panelTouched) && showControls
 		if !showControls && !a.playerExtra.miniMode {
 			screen.Cursor(ui.CursorNone)
+		}
+		if (!showControls || a.playerExtra.miniMode) && a.hasSeekPreview() {
+			a.clearSeekPreview()
 		}
 		screen.Children(func() {
 			ui.Row(c).Fill().Children(func() {
@@ -629,38 +633,43 @@ func (a *app) playerControls(c *ui.Context, p mediaPlayer, hasEpisodes, compact 
 			Border(1, ui.RGBA(255, 255, 255, 0.10)).
 			TextColor(playerText).Children(func() {
 			duration := p.Duration()
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.End).Children(func() {
 				switch {
 				case a.isLiveStream():
-					ui.Row(c).Grow(1).Gap(6).AlignItems(ui.Center).Children(func() {
+					ui.Row(c).Grow(1).Height(20).Gap(6).AlignItems(ui.Center).Children(func() {
 						ui.Box(c).Size(7, 7).Radius(4).Background(ui.RGB(239, 68, 68)).PassThrough()
 						ui.Text(c, "直播").FontSize(12).SingleLine()
 					})
 				case duration > 0:
-					ui.Text(c, playerClock(p.Position())).FontSize(12).TextColor(ui.RGBA(248, 249, 255, 0.88)).ContentTransition(ctNumeric)
-					position := p.Position().Seconds()
-					ui.Column(c).Grow(1).Gap(2).Children(func() {
-						a.danmakuHighlightCurve(c, p, duration)
-						progress := ui.Slider(c, &position, 0, duration.Seconds()).Label("播放进度").FillWidth()
-						if progress.Pressed() {
-							a.playerOverlay.keepVisible = true
-						}
-						if progress.Changed() {
-							p.Seek(time.Duration(position * float64(time.Second)))
-							a.syncNowPlayingState()
-						}
+					clockW := float32(38)
+					if duration >= 10*time.Hour {
+						clockW = 62
+					} else if duration >= time.Hour {
+						clockW = 54
+					}
+					ui.Row(c).Width(clockW).Height(20).Justify(ui.End).AlignItems(ui.Center).Shrink(0).Children(func() {
+						ui.Text(c, playerClock(p.Position())).FontSize(12).TextColor(ui.RGBA(248, 249, 255, 0.88)).SingleLine().ContentTransition(ctNumeric)
 					})
-					ui.Text(c, playerClock(duration)).FontSize(12).TextColor(ui.RGBA(248, 249, 255, 0.78)).ContentTransition(ctNumeric)
+					a.playerSeekBar(c, p, duration)
+					ui.Row(c).Height(20).AlignItems(ui.Center).Shrink(0).Children(func() {
+						ui.Text(c, playerClock(duration)).FontSize(12).TextColor(ui.RGBA(248, 249, 255, 0.78)).SingleLine().ContentTransition(ctNumeric)
+					})
 				default:
-					ui.Text(c, "加载中…").FontSize(12).TextColor(ui.RGBA(248, 249, 255, 0.72)).Grow(1)
+					ui.Row(c).Grow(1).Height(20).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "加载中…").FontSize(12).TextColor(ui.RGBA(248, 249, 255, 0.72)).SingleLine()
+					})
 				}
 				w, h := p.Size()
 				if w > 0 && h > 0 {
-					a.resolutionBadgeButton(c, w, h)
+					ui.Row(c).Height(20).AlignItems(ui.Center).Children(func() {
+						a.resolutionBadgeButton(c, w, h)
+					})
 				}
 				if !a.playingFile && !a.playingDirectMPV {
 					if speed := a.playbackSpeed(c); speed != "" && speed != "—" {
-						ui.Text(c, "↓ "+speed).FontSize(11).TextColor(ui.RGBA(248, 249, 255, 0.68)).SingleLine().ContentTransition(ctNumeric)
+						ui.Row(c).Height(20).AlignItems(ui.Center).Children(func() {
+							ui.Text(c, "↓ "+speed).FontSize(11).TextColor(ui.RGBA(248, 249, 255, 0.68)).SingleLine().ContentTransition(ctNumeric)
+						})
 					}
 				}
 			})

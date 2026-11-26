@@ -71,6 +71,13 @@ type trackCapablePlayer interface {
 	CurrentHWDec() string
 }
 
+// seekableMediaPlayer is optionally implemented by mediaPlayer backends that
+// report runtime seekability (for example libmpv's seekable property on live
+// catchup vs VOD streams).
+type seekableMediaPlayer interface {
+	Seekable() bool
+}
+
 // advancedMediaPlayer is optionally implemented by mediaPlayer backends (such
 // as mygo-player / libmpv) that expose loop control, typed subtitle/video
 // fine-tuning, arbitrary property getters/setters, and video track metadata.
@@ -234,6 +241,10 @@ func (m *mpvMediaPlayer) Seek(d time.Duration) {
 	_ = m.p.Seek(d)
 }
 
+func (m *mpvMediaPlayer) Seekable() bool {
+	return m.p.Snapshot().Seekable
+}
+
 func (m *mpvMediaPlayer) Rate() float64 {
 	m.mu.Lock()
 	r := m.rate
@@ -372,6 +383,7 @@ var (
 	_ mediaPlayer         = (*mpvMediaPlayer)(nil)
 	_ trackCapablePlayer  = (*mpvMediaPlayer)(nil)
 	_ advancedMediaPlayer = (*mpvMediaPlayer)(nil)
+	_ seekableMediaPlayer = (*mpvMediaPlayer)(nil)
 )
 
 func convertMPVTracks(in []mpvplayer.Track) []mediaTrack {

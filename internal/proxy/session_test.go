@@ -168,3 +168,91 @@ func TestSessionRangePrefetchIntegrityAndSeek(t *testing.T) {
 		t.Fatalf("seek prefetch mismatch: status=%d len=%d want=%d", resp2.StatusCode, len(got2), len(payload)-1500000)
 	}
 }
+
+func TestPreviewBypassesPrefetchAndCachesVODPlaylist(t *testing.T) {
+	payload := make([]byte, 2*1024*1024+4096)
+	_, _ = rand.Read(payload)
+
+	var mp4Reqs, vodM3U8Reqs, liveM3U8Reqs atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/movie.mp4":
+			mp4Reqs.Add(1)
+			w.Header().Set("Content-Type", "video/mp4")
+			http.ServeContent(w, r, "movie.mp4", time.Unix(0, 0), bytes.NewReader(payload))
+		case "/vod.m3u8":
+			vodM3U8Reqs.Add(1)
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			_, _ = io.WriteString(w, "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nseg0.ts\n#EXT-X-ENDLIST\n")
+		case "/live.m3u8":
+			liveM3U8Reqs.Add(1)
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			_, _ = io.WriteString(w, "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nseg0.ts\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	p, err := Start(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	// 1. Preview request (?preview=1) on a prefetch-enabled MP4 session bypasses
+	// multi-chunk prefetch and issues only a single direct upstream request.
+	_, mp4URL := p.RegisterSession(SessionConfig{
+		URL:      upstream.URL + "/movie.mp4",
+		Filename: "movie.mp4",
+		Prefetch: true,
+	})
+	resp, err := http.Get(mp4URL + "?preview=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil || resp.StatusCode != http.StatusOK || !bytes.Equal(body, payload) {
+		t.Fatalf("preview direct stream failed: status=%d err=%v len=%d", resp.StatusCode, err, len(body))
+	}
+	if got := mp4Reqs.Load(); got != 1 {
+		t.Fatalf("preview request unexpectedly triggered prefetch chunks: upstream requests=%d, want 1", got)
+	}
+
+	// 2. VOD playlist (#EXT-X-ENDLIST) is cached across main + preview requests
+	// and invalidated when session is removed.
+	vodID, vodURL := p.RegisterSession(SessionConfig{
+		URL:      upstream.URL + "/vod.m3u8",
+		Filename: "vod.m3u8",
+	})
+	for _, u := range []string{vodURL, vodURL + "?preview=1"} {
+		r, err := http.Get(u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+		if r.StatusCode != http.StatusOK || !strings.Contains(string(b), "#EXT-X-ENDLIST") {
+			t.Fatalf("vod playlist failed for %s: status=%d body=%s", u, r.StatusCode, b)
+		}
+	}
+	if got := vodM3U8Reqs.Load(); got != 1 {
+		t.Fatalf("VOD playlist not cached: upstream hits=%d, want 1", got)
+	}
+	p.RemoveSession(vodID)
+
+	// 3. Live playlist (no #EXT-X-ENDLIST / #EXT-X-STREAM-INF) is NEVER cached.
+	liveURL := p.Wrap(upstream.URL + "/live.m3u8")
+	for range 2 {
+		r, err := http.Get(liveURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.ReadAll(r.Body)
+		r.Body.Close()
+	}
+	if got := liveM3U8Reqs.Load(); got != 2 {
+		t.Fatalf("live playlist was wrongly cached: upstream hits=%d, want 2", got)
+	}
+}

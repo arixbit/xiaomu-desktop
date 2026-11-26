@@ -151,6 +151,7 @@ type app struct {
 	savedVolume      float64
 	episodeEnd       playbackEnd
 	playerExtra      playerExtraState
+	seekPreview      seekPreviewState
 }
 
 func (a *app) view(c *ui.Context) {
@@ -184,6 +185,7 @@ func (a *app) play() {
 }
 
 func (a *app) closeCurrentPlayer() {
+	a.resetSeekPreview()
 	a.stopDanmaku()
 	a.cancelJob(jobSubtitle)
 	a.releaseRightKeyHold(a.player)
@@ -277,6 +279,7 @@ func (a *app) openProxySession(cfg proxy.SessionConfig, keepCurrent bool) bool {
 		p.RemoveSession(oldSession)
 	}
 	a.proxySession = sessID
+	a.setSeekPreviewMedia(seekPreviewMedia{target: localURL})
 	a.playingLive, a.playingDirect = false, false
 	a.status = "正在播放"
 	return true
@@ -381,6 +384,7 @@ func (a *app) playDirectMPVURL(raw string, headers map[string]string) bool {
 		return false
 	}
 	a.adoptPlayer(player)
+	a.setSeekPreviewMedia(seekPreviewMedia{target: raw, opts: opts})
 	a.playingLive, a.playingDirect, a.playingDirectMPV = false, false, true
 	a.status = "正在播放"
 	return true
@@ -439,6 +443,7 @@ func (a *app) openPlaybackURL(raw string, headers map[string]string, keepCurrent
 		p.RemoveSession(oldSession)
 	}
 	a.proxySession = sessID
+	a.setSeekPreviewMedia(seekPreviewMedia{target: localURL})
 	a.playingLive, a.playingDirect = false, false
 	a.status = "正在播放"
 	return true

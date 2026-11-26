@@ -10,9 +10,16 @@ import (
 // Bound each upstream wait, not the length of a movie or a live stream. The
 // timer stops while writing to AVPlayer, which may deliberately pause reads.
 func (p *Proxy) do(req *http.Request) (*http.Response, error) {
+	return p.doWithTimeout(req, 0)
+}
+
+func (p *Proxy) doWithTimeout(req *http.Request, limit time.Duration) (*http.Response, error) {
 	timeout := p.readTimeout
 	if timeout <= 0 {
 		timeout = upstreamIdleTimeout
+	}
+	if limit > 0 && limit < timeout {
+		timeout = limit
 	}
 	ctx, cancel := context.WithCancelCause(req.Context())
 	timer := time.AfterFunc(timeout, func() { cancel(errUpstreamTimeout) })
