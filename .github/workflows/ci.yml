@@ -2,32 +2,103 @@ name: ci
 
 on:
   push:
+    branches: [main]
+    tags: ['**']
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.diff.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - id: diff
+        name: Check paths in the PR merge
+        run: |
+          # Compare GitHub's tested merge tree with its base parent, including deletions.
+          if git diff --quiet HEAD^1 HEAD -- . ':(top,exclude,glob)*.md' ':(top,exclude,glob)docs/**'; then
+            echo 'docs_only=true' >> "$GITHUB_OUTPUT"
+          else
+            code=$?
+            [ "$code" -eq 1 ] || exit "$code"
+            echo 'docs_only=false' >> "$GITHUB_OUTPUT"
+          fi
+
   test:
+    needs: changes
+    if: >-
+      !cancelled() && (github.event_name == 'push' ||
+      (needs.changes.result == 'success' && needs.changes.outputs.docs_only == 'false'))
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest]
+        suite: [player, playlist, remaining]
         include:
-          - os: ubuntu-latest
-            race: true
-          - os: macos-latest
-            race: true
           - os: windows-latest
-            race: false
+            suite: windows
           - os: windows-11-arm
-            race: false
+            suite: windows
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # Linux covers the minimum. Desktop images often include a newer patch of that Go release.
+      - name: Select Go version
+        id: go-version
+        shell: bash
+        env:
+          PATCH_RANGE: ${{ runner.os != 'Linux' && '~' || '' }}
+        run: awk '$1 == "go" { print "version=" ENVIRON["PATCH_RANGE"] $2 }' go.mod >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.27.3"
+          go-version: ${{ steps.go-version.outputs.version }}
       - name: Vet
+        if: runner.os == 'Linux' && matrix.suite == 'remaining'
         run: go vet ./...
-      - name: Test
-        run: go test -count=1 ./...
       - name: Race Test
-        if: matrix.race
-        run: go test -race -timeout 20m -count=1 ./...
+        if: runner.os != 'Windows'
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: |
+          player='^Test(Player|Danmaku)'
+          playlist='^Test(Floating|Local|Live)'
+          # The complement also covers new tests, examples and fuzz seeds.
+          case "$SUITE" in
+            player)    set -- -run "$player" ;;
+            playlist)  set -- -run "$playlist" ;;
+            remaining) set -- -skip "$player|$playlist" ;;
+            *) exit 1 ;;
+          esac
+          go test -race -vet=off -count=1 -timeout 20m "$@" ./...
+      - name: Test
+        if: runner.os == 'Windows'
+        run: go test -vet=off -count=1 ./...
+
+  required:
+    # Branch protection can require this check even when a PR changes only documentation.
+    name: CI result
+    needs: [changes, test]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify test result or documentation-only skip
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+        run: |
+          [ "$TEST_RESULT" = success ] || [ "$CHANGES_RESULT/$DOCS_ONLY/$TEST_RESULT" = success/true/skipped ]
