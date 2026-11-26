@@ -141,3 +141,71 @@ func TestDanmakuPreservesCandidatesAndShowsFailureStatus(t *testing.T) {
 		t.Fatalf("retry button missing after failure: %v", tt.Texts())
 	}
 }
+
+func TestDanmakuVarietySeasonPartDateAndFallback(t *testing.T) {
+	// Date strings must not be parsed as episode numbers, while date keys are preserved.
+	if got := danmakuNumber("2026-10-10期"); got != 0 {
+		t.Fatalf("danmakuNumber treated date as episode: %d", got)
+	}
+	if got := danmakuNumber("20261010上"); got != 0 {
+		t.Fatalf("danmakuNumber treated compact date as episode: %d", got)
+	}
+	if got := danmakuNumber("第三期上"); got != 3 {
+		t.Fatalf("danmakuNumber failed Chinese episode numeral: %d", got)
+	}
+	if got := danmakuDateKey("【腾讯】 第3期上：正片 2026-10-10期"); got != "20261010" {
+		t.Fatalf("danmakuDateKey = %q, want 20261010", got)
+	}
+	if got := danmakuPartTag("【芒果】 第12期：突围之战上海站"); got != "" {
+		t.Fatalf("danmakuPartTag falsely matched city name: %q", got)
+	}
+	if got := danmakuPartTag("【腾讯】 第3期上：正片 2026-10-10期"); got != "上" {
+		t.Fatalf("danmakuPartTag = %q, want 上", got)
+	}
+
+	// Chinese season title ("第四季") matches Arabic season title ("第4季"),
+	// narrows main episode vs 加更/纯享, distinguishes 上/下 when specified, and
+	// stays ambiguous when the playing episode does not specify 上/下.
+	variety := []danmaku.Episode{
+		{ID: "v-up", AnimeID: "v:qq", Anime: "示例综艺 第4季 (2026) 【综艺】 from qq", Name: "【腾讯】 第3期上：正片 2026-10-10期"},
+		{ID: "v-down", AnimeID: "v:qq", Anime: "示例综艺 第4季 (2026) 【综艺】 from qq", Name: "【腾讯】 第3期下：正片 2026-10-10期"},
+		{ID: "v-extra", AnimeID: "v:qq", Anime: "示例综艺 第4季 (2026) 【综艺】 from qq", Name: "【腾讯】 第3期加更：幕后 2026-10-10期"},
+		{ID: "v-clip", AnimeID: "v:qq", Anime: "示例综艺 第4季 (2026) 【综艺】 from qq", Name: "【腾讯】 第3期上纯享·片段 2026-10-10期"},
+	}
+	if _, ok := matchDanmakuEpisodeWithMeta(variety, "示例综艺 第四季", "2026", "第3期", 2, false, ""); ok {
+		t.Fatal("silently guessed between 第3期上 and 第3期下")
+	}
+	got, ok := matchDanmakuEpisodeWithMeta(variety, "示例综艺 第四季", "2026", "第3期上", 2, false, "")
+	if !ok || got.ID != "v-up" {
+		t.Fatalf("failed to match 第3期上: got=%+v ok=%v", got, ok)
+	}
+	got, ok = matchDanmakuEpisodeWithMeta(variety, "示例综艺 第四季", "2026", "第3期加更", 2, false, "")
+	if !ok || got.ID != "v-extra" {
+		t.Fatalf("failed to match 第3期加更: got=%+v ok=%v", got, ok)
+	}
+
+	// Single main cut + extra cuts should automatically pick the main episode.
+	singleMain := []danmaku.Episode{
+		{ID: "s-main", AnimeID: "s:imgo", Anime: "示例音综 (2025) 【综艺】 from imgo", Name: "【芒果】 第12期：突围之战 2025-08-01期"},
+		{ID: "s-plus", AnimeID: "s:imgo", Anime: "示例音综 (2025) 【综艺】 from imgo", Name: "【芒果】 第12期加更：幕后 2025-08-01期"},
+	}
+	got, ok = matchDanmakuEpisodeWithMeta(singleMain, "示例音综", "2025", "第12期", 11, false, "")
+	if !ok || got.ID != "s-main" {
+		t.Fatalf("failed to prefer main cut over extra cut: got=%+v ok=%v", got, ok)
+	}
+
+	// Date-only variety episodes match by air date and fall back to full list when
+	// filtered by an episode number that does not exist on date-only titles.
+	dateOnly := []danmaku.Episode{
+		{ID: "d-1", AnimeID: "d:imgo", Anime: "示例跑男 第三季 (2019) 【综艺】 from imgo", Name: "【芒果】 精彩开场 2019-07-05期"},
+		{ID: "d-2", AnimeID: "d:imgo", Anime: "示例跑男 第三季 (2019) 【综艺】 from imgo", Name: "【芒果】 收官之战 2019-07-12期"},
+	}
+	got, ok = matchDanmakuEpisodeWithMeta(dateOnly, "示例跑男 第3季", "2019", "20190712", 1, false, "")
+	if !ok || got.ID != "d-2" {
+		t.Fatalf("failed to match date-only variety episode: got=%+v ok=%v", got, ok)
+	}
+	filtered, fellBack := filterDanmakuEpisodes(dateOnly, 3)
+	if !fellBack || len(filtered) != 2 {
+		t.Fatalf("date-only variety did not fall back on episode filter: filtered=%+v fellBack=%v", filtered, fellBack)
+	}
+}

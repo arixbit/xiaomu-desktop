@@ -7,7 +7,6 @@ import (
 	"math"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -269,10 +268,9 @@ func (a *app) loadCurrentDanmaku() {
 		if ok && client != nil && query != "" && ctx.Err() == nil {
 			episodes, searchErr := client.Search(ctx, query, episode)
 			if searchErr == nil {
+				fellBack := false
 				if episode != "" {
-					episodes = slices.DeleteFunc(episodes, func(candidate danmaku.Episode) bool {
-						return danmakuNumber(candidate.Name) != number
-					})
+					episodes, fellBack = filterDanmakuEpisodes(episodes, number)
 				}
 				selected, matched := matchDanmakuEpisodeWithMeta(episodes, query, year, name, index, singleEpisode, preferred)
 				var fallbackComments []danmaku.Comment
@@ -292,7 +290,11 @@ func (a *app) loadCurrentDanmaku() {
 							return
 						}
 						s.failed, s.empty = false, false
-						s.message = "片源弹幕不可用，请选择对应的影片和分集"
+						if fellBack {
+							s.message = fmt.Sprintf("未按第 %d 集筛选到分期，已列出全部候选，请手动选择", number)
+						} else {
+							s.message = "片源弹幕不可用，请选择对应的影片和分集"
+						}
 					}}, nil
 				}
 			}
@@ -355,7 +357,9 @@ func (a *app) danmakuPlaybackMeta(episode string) (year, name string, index int,
 	}
 	name = a.playingEpisode
 	if episode != "" {
-		name = episode
+		if epNum, err := strconv.Atoi(episode); err != nil || epNum <= 0 || danmakuNumber(a.playingEpisode) != epNum {
+			name = episode
+		}
 	}
 	return year, name, index, singleEpisode
 }
@@ -410,11 +414,10 @@ func (a *app) searchDanmaku(automatic bool) {
 		if err != nil {
 			return jobResult{}, err
 		}
+		fellBack := false
 		if episode != "" {
 			// Compatible services may ignore the episode query parameter.
-			episodes = slices.DeleteFunc(episodes, func(candidate danmaku.Episode) bool {
-				return danmakuNumber(candidate.Name) != number
-			})
+			episodes, fellBack = filterDanmakuEpisodes(episodes, number)
 		}
 		selected, matched := matchDanmakuEpisodeWithMeta(episodes, query, year, name, index, singleEpisode, preferred)
 		var comments []danmaku.Comment
@@ -430,6 +433,9 @@ func (a *app) searchDanmaku(automatic bool) {
 			}
 			s.failed, s.empty = false, false
 			s.message = "请选择对应的影片和分集"
+			if fellBack {
+				s.message = fmt.Sprintf("未按第 %d 集筛选到分期，已列出全部候选，请手动选择", number)
+			}
 			if len(episodes) == 0 {
 				s.empty = true
 				s.message = "没有找到弹幕，试试修改片名"
@@ -1269,8 +1275,13 @@ func (a *app) danmakuOverlay(c *ui.Context, player mediaPlayer, avoidControls bo
 
 var danmakuEpisodeNumber = regexp.MustCompile(`(?i)^(?:第\s*|ep(?:isode)?\s*|e\s*)?0*([0-9]+)(?:\s*[集话話期]|\s*[:：._-]|\s|$)`)
 var danmakuNamedEpisode = regexp.MustCompile(`第\s*0*([0-9]+)\s*[集话話期]`)
+var danmakuChineseEpisode = regexp.MustCompile(`第\s*([一二三四五六七八九十两百零〇]+)\s*[集话話期]`)
 var danmakuTaggedEpisode = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])(?:s[0-9]+[\s._-]*)?(?:ep(?:isode)?[\s._-]*|e\s*)0*([0-9]+)(?:[^a-z0-9]|$)`)
 var danmakuLeadingTag = regexp.MustCompile(`^(?:\s*【[^】]+】\s*)+`)
+var danmakuDatePattern = regexp.MustCompile(`(?:^|[^0-9])((?:19|20)[0-9]{2})[-./]?([01][0-9])[-./]?([0-3][0-9])(?:$|[^0-9])`)
+var danmakuLeadingDate = regexp.MustCompile(`^(?:19|20)[0-9]{2}[-./]?[01][0-9][-./]?[0-3][0-9](?:$|[^0-9])`)
+var danmakuPartAfterMarker = regexp.MustCompile(`(?:第\s*(?:[0-9]+|[一二三四五六七八九十两百零〇]+)\s*[集话話期]|(?:19|20)[0-9]{2}[-./]?[01][0-9][-./]?[0-3][0-9]\s*期?)\s*[（(\[]?\s*([上中下])\s*[)）\]]?(?:$|[\s：:·._\-（(【\[纯加特花会先])`)
+var danmakuPartStandalone = regexp.MustCompile(`(?:^|[\s（(\[])([上中下])(?:期|集|篇|部|半部)?(?:[)）\]]|$)`)
 var danmakuYearSuffix = regexp.MustCompile(`\s*[（(]([0-9]{4})[)）]\s*$`)
 var danmakuYearPattern = regexp.MustCompile(`\b(19[0-9]{2}|20[0-9]{2})\b`)
 var danmakuProviderSuffix = regexp.MustCompile(`(?i)\s*【[^】]+】\s*from\s+[a-z0-9_-]+\s*$`)
@@ -1319,23 +1330,102 @@ func parseLocalDanmakuMeta(filename string) (title, year string, episode int) {
 }
 
 func danmakuNumber(name string) int {
-	parts := danmakuNamedEpisode.FindStringSubmatch(name)
-	if len(parts) < 2 {
-		parts = danmakuTaggedEpisode.FindStringSubmatch(name)
+	if parts := danmakuNamedEpisode.FindStringSubmatch(name); len(parts) == 2 {
+		number, _ := strconv.Atoi(parts[1])
+		return number
 	}
-	if len(parts) < 2 {
-		stripped := strings.TrimSpace(danmakuLeadingTag.ReplaceAllString(name, ""))
-		parts = danmakuEpisodeNumber.FindStringSubmatch(stripped)
+	if parts := danmakuChineseEpisode.FindStringSubmatch(name); len(parts) == 2 {
+		if number, ok := danmaku.ParseChineseInt(parts[1]); ok {
+			return number
+		}
 	}
-	if len(parts) < 2 {
+	if parts := danmakuTaggedEpisode.FindStringSubmatch(name); len(parts) == 2 {
+		number, _ := strconv.Atoi(parts[1])
+		return number
+	}
+	stripped := strings.TrimSpace(danmakuLeadingTag.ReplaceAllString(name, ""))
+	if danmakuLeadingDate.MatchString(stripped) {
 		return 0
 	}
-	number, _ := strconv.Atoi(parts[1])
-	return number
+	if parts := danmakuEpisodeNumber.FindStringSubmatch(stripped); len(parts) == 2 {
+		number, _ := strconv.Atoi(parts[1])
+		return number
+	}
+	return 0
+}
+
+func danmakuDateKey(name string) string {
+	m := danmakuDatePattern.FindStringSubmatch(name)
+	if len(m) != 4 {
+		return ""
+	}
+	month, _ := strconv.Atoi(m[2])
+	day, _ := strconv.Atoi(m[3])
+	if month < 1 || month > 12 || day < 1 || day > 31 {
+		return ""
+	}
+	return m[1] + m[2] + m[3]
+}
+
+func danmakuPartTag(name string) string {
+	stripped := strings.TrimSpace(danmakuLeadingTag.ReplaceAllString(name, ""))
+	if m := danmakuPartAfterMarker.FindStringSubmatch(stripped); len(m) == 2 {
+		return m[1]
+	}
+	if m := danmakuPartStandalone.FindStringSubmatch(stripped); len(m) == 2 {
+		return m[1]
+	}
+	return ""
+}
+
+func danmakuCutTag(name string) string {
+	lower := strings.ToLower(strings.TrimSpace(danmakuLeadingTag.ReplaceAllString(name, "")))
+	for _, rule := range []struct {
+		tag      string
+		keywords []string
+	}{
+		{"预告", []string{"预告", "片花", "抢先看"}},
+		{"纯享", []string{"纯享", "直拍"}},
+		{"加更", []string{"加更"}},
+		{"会员版", []string{"会员版", "plus"}},
+		{"先导", []string{"先导", "超前"}},
+		{"花絮", []string{"花絮", "幕后", "未播", "彩蛋", "vlog"}},
+		{"特辑", []string{"特辑", "企划", "衍生", "专访", "回顾", "番外", "特别篇"}},
+	} {
+		for _, kw := range rule.keywords {
+			if strings.Contains(lower, kw) {
+				return rule.tag
+			}
+		}
+	}
+	return ""
+}
+
+func filterDanmakuEpisodes(episodes []danmaku.Episode, number int) (filtered []danmaku.Episode, fellBack bool) {
+	if number <= 0 || len(episodes) == 0 {
+		return episodes, false
+	}
+	matched := make([]danmaku.Episode, 0, len(episodes))
+	hasUnnumberedVariety := false
+	for _, candidate := range episodes {
+		epNum := danmakuNumber(candidate.Name)
+		if epNum == number {
+			matched = append(matched, candidate)
+		} else if epNum == 0 && (strings.Contains(candidate.Anime, "【综艺】") || danmakuDateKey(candidate.Name) != "") {
+			hasUnnumberedVariety = true
+		}
+	}
+	if len(matched) > 0 {
+		return matched, false
+	}
+	if hasUnnumberedVariety {
+		return episodes, true
+	}
+	return nil, false
 }
 
 func danmakuTitleKey(name string) string {
-	return strings.Join(strings.Fields(titleKey(name)), "")
+	return strings.Join(strings.Fields(titleKey(danmaku.NormalizeSeasonTitle(name))), "")
 }
 
 func danmakuExtractYear(raw string) string {
@@ -1370,6 +1460,9 @@ func matchDanmakuEpisode(episodes []danmaku.Episode, title, name string, index i
 func matchDanmakuEpisodeWithMeta(episodes []danmaku.Episode, title, detailYear, name string, index int, singleEpisode bool, preferred string) (danmaku.Episode, bool) {
 	key := danmakuTitleKey(danmakuYearSuffix.ReplaceAllString(title, ""))
 	number := danmakuNumber(name)
+	dateKey := danmakuDateKey(name)
+	partTag := danmakuPartTag(name)
+	cutTag := danmakuCutTag(name)
 	type matchedCandidate struct {
 		episode danmaku.Episode
 		series  string
@@ -1386,9 +1479,12 @@ func matchDanmakuEpisodeWithMeta(episodes []danmaku.Episode, title, detailYear, 
 			continue
 		}
 		candidateNumber := danmakuNumber(episode.Name)
+		candidateDate := danmakuDateKey(episode.Name)
 		same := strings.TrimSpace(episode.Name) == strings.TrimSpace(name)
 		if number > 0 {
 			same = candidateNumber == number
+		} else if dateKey != "" {
+			same = candidateDate == dateKey
 		} else if !same {
 			if singleEpisode && (candidateNumber == 1 || isFeatureEpisodeName(episode.Name, title)) {
 				same = true
@@ -1403,7 +1499,9 @@ func matchDanmakuEpisodeWithMeta(episodes []danmaku.Episode, title, detailYear, 
 		duplicatePlatform := false
 		if preferred == "" && danmakuProviderSuffix.MatchString(episode.Anime) {
 			for _, prev := range matches {
-				if prev.series == seriesKey && prev.episode.Anime != episode.Anime && danmakuProviderSuffix.MatchString(prev.episode.Anime) {
+				if prev.series == seriesKey && prev.episode.Anime != episode.Anime && danmakuProviderSuffix.MatchString(prev.episode.Anime) &&
+					danmakuCutTag(prev.episode.Name) == danmakuCutTag(episode.Name) &&
+					danmakuPartTag(prev.episode.Name) == danmakuPartTag(episode.Name) {
 					duplicatePlatform = true
 					break
 				}
@@ -1428,8 +1526,38 @@ func matchDanmakuEpisodeWithMeta(episodes []danmaku.Episode, title, detailYear, 
 				narrowed = append(narrowed, m)
 			}
 		}
-		if len(narrowed) == 1 {
-			return narrowed[0].episode, true
+		if len(narrowed) > 0 {
+			matches = narrowed
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0].episode, true
+	}
+	// Narrow variety sub-cuts (main episode vs 加更/纯享/花絮) and upper/lower parts
+	// when multiple installments share the same episode number or air date.
+	if len(matches) > 1 {
+		var cutNarrowed []matchedCandidate
+		for _, m := range matches {
+			if danmakuCutTag(m.episode.Name) == cutTag {
+				cutNarrowed = append(cutNarrowed, m)
+			}
+		}
+		if len(cutNarrowed) > 0 {
+			matches = cutNarrowed
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0].episode, true
+	}
+	if len(matches) > 1 && partTag != "" {
+		var partNarrowed []matchedCandidate
+		for _, m := range matches {
+			if danmakuPartTag(m.episode.Name) == partTag {
+				partNarrowed = append(partNarrowed, m)
+			}
+		}
+		if len(partNarrowed) == 1 {
+			return partNarrowed[0].episode, true
 		}
 	}
 	return danmaku.Episode{}, false
