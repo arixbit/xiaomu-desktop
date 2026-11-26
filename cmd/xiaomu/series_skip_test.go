@@ -159,21 +159,18 @@ func TestSkipSettingsCanBeEditedAndDisabledInSmallPlayer(t *testing.T) {
 			if r, ok := tt.Find("自动下一集"); !ok || r.H <= 0 {
 				t.Fatal("auto next control hidden in small player")
 			}
-			if err := tt.Click("跳过"); err != nil {
-				t.Fatal(err)
-			}
-			if err := tt.Click("启用本剧跳过"); err != nil {
-				t.Fatal(err)
-			}
 			r, ok := tt.Find("跳过片头秒数")
 			if !ok || r.H <= 0 {
 				t.Fatal("opening seconds input hidden")
 			}
-			tt.ClickAt(r.X+20, r.Y+r.H/2)
+			if outR, ok := tt.Find("跳过片尾秒数"); !ok || outR.H <= 0 {
+				t.Fatal("ending seconds input hidden")
+			}
+			tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
 			tt.Key(ui.Cmd, ui.KeyA)
 			tt.Type("10")
 			if got := a.seriesSkips.get(a.title.name); !got.Enabled || got.Opening != 10 {
-				t.Fatalf("setting not saved: %+v", got)
+				t.Fatalf("setting not enabled and saved on positive input: %+v", got)
 			}
 			if err := tt.Click("启用本剧跳过"); err != nil {
 				t.Fatal(err)
@@ -182,5 +179,112 @@ func TestSkipSettingsCanBeEditedAndDisabledInSmallPlayer(t *testing.T) {
 				t.Fatalf("disable erased settings or stayed enabled: %+v", got)
 			}
 		})
+	}
+}
+
+func TestLocalPlaylistSeriesSkipOpeningEndingAndPersistence(t *testing.T) {
+	dir := t.TempDir()
+	ep1 := filepath.Join(dir, "S01E01.mp4")
+	ep2 := filepath.Join(dir, "S01E02.mp4")
+	ep3 := filepath.Join(dir, "S01E03.mp4")
+	for _, p := range []string{ep1, ep2, ep3} {
+		if err := os.WriteFile(p, []byte("video"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	skipPath := filepath.Join(t.TempDir(), "series-skips.json")
+	a := &app{
+		autoNext:    true,
+		preferences: defaultPlayerPreferences(),
+		seriesSkips: seriesSkipStore{path: skipPath},
+		openLocal: func(string) (*ui.VideoPlayer, error) {
+			return ui.NewVideoPlayer(&timedVideo{})
+		},
+	}
+	t.Cleanup(a.close)
+
+	if !a.openLocalFile(ep1) {
+		t.Fatalf("open ep1: %s", a.status)
+	}
+	a.player.Pause()
+
+	tt := ui.NewTester(a.view, 1280, 720)
+	tt.SetTitleBar(dragBar)
+	tt.Frame()
+	if err := tt.Click("列表"); err != nil {
+		t.Fatalf("open local playlist panel: %v", err)
+	}
+	tt.Advance(300 * time.Millisecond)
+
+	if !tt.HasText("片头片尾") || !tt.HasText("片头到这") || !tt.HasText("片尾从这") || !tt.HasText("填入秒数即启用，同目录各集沿用") {
+		t.Fatalf("local playlist missing inline skip controls: %v", tt.Texts())
+	}
+
+	// Stamp opening at 15s and ending at 50s (10s remaining of 60s timedVideo).
+	a.player.Seek(15 * time.Second)
+	tt.Frame()
+	if err := tt.Click("片头到这"); err != nil {
+		t.Fatalf("click 片头到这: %v", err)
+	}
+	a.player.Seek(50 * time.Second)
+	tt.Frame()
+	if err := tt.Click("片尾从这"); err != nil {
+		t.Fatalf("click 片尾从这: %v", err)
+	}
+
+	key := localSkipDirKey(ep1)
+	if key == "" {
+		t.Fatal("expected non-empty local directory skip key")
+	}
+	want := seriesSkipRule{Enabled: true, Opening: 15, Ending: 10}
+	if got := a.seriesSkips.get(key); got != want {
+		t.Fatalf("local skip rule = %+v, want %+v", got, want)
+	}
+	reloaded, err := readSeriesSkips(skipPath)
+	if err != nil {
+		t.Fatalf("reload series skips: %v", err)
+	}
+	if got := reloaded[key]; got != want {
+		t.Fatalf("persisted local skip rule = %+v, want %+v", got, want)
+	}
+
+	// While playing 5s before the 50s ending skip cutoff (at 45s), up-next countdown pill appears early.
+	a.player.Seek(45 * time.Second)
+	a.player.Play()
+	tt.Frame()
+	if !tt.HasText("立即播放") || !tt.HasText("暂不连播") {
+		t.Fatalf("up-next pill did not honor local ending skip: %v", tt.Texts())
+	}
+
+	// Reaching 50s triggers ending skip, records completion, advances to ep2, and skips ep2's opening to 15s.
+	a.player.Seek(50 * time.Second)
+	tt.Frame()
+	if a.playingFilePath != ep2 || a.localPlaylistIdx != 1 {
+		t.Fatalf("ending skip did not advance local playlist to ep2: path=%q idx=%d", a.playingFilePath, a.localPlaylistIdx)
+	}
+	if ep1Entry, ok := a.history.findLocalByPath(ep1); !ok || !ep1Entry.finished() {
+		t.Fatalf("ep1 completion was not recorded on ending skip: %+v", a.history.entries)
+	}
+	tt.Frame()
+	if pos := a.player.Position(); pos < 14*time.Second || pos > 17*time.Second {
+		t.Fatalf("ep2 did not inherit opening skip to 15s: pos=%v", pos)
+	}
+	if !tt.HasText("已跳过片头 15 秒") || !tt.HasText("回看片头") {
+		t.Fatalf("ep2 opening skip undo pill missing skipped seconds: %v", tt.Texts())
+	}
+	if err := tt.Click("回看片头"); err != nil {
+		t.Fatalf("click 回看片头: %v", err)
+	}
+	if pos := a.player.Position(); pos != 0 {
+		t.Fatalf("clicking 回看片头 did not rewind local ep2 to 0: pos=%v", pos)
+	}
+
+	// Manual disable keeps saved opening/ending durations.
+	if err := tt.Click("启用本剧跳过"); err != nil {
+		t.Fatalf("toggle skip off: %v", err)
+	}
+	if got := a.seriesSkips.get(key); got.Enabled || got.Opening != 15 || got.Ending != 10 {
+		t.Fatalf("disabling local skip erased durations: %+v", got)
 	}
 }

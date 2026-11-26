@@ -108,7 +108,18 @@ func (a *app) cleanupPanTempFiles() {
 	})
 }
 
-func (a *app) panCredentialsCard(c *ui.Context) {
+func isPanSiteKind(kind config.Kind) bool {
+	switch kind {
+	case config.KindPanWeb, config.KindPanShare, config.KindAList:
+		return true
+	default:
+		return false
+	}
+}
+
+// panCredentialsSection renders the compact cloud-drive authorization strip
+// embedded inside the VOD configuration card on the Sources page.
+func (a *app) panCredentialsSection(c *ui.Context) {
 	creds := a.panUI.creds
 	panSites := a.panSiteEntries()
 	anySignedIn := false
@@ -119,92 +130,72 @@ func (a *app) panCredentialsCard(c *ui.Context) {
 		}
 	}
 	p := paletteFor(c)
+	var cleanProviders []string
+	for _, prov := range []pan.Provider{pan.ProviderQuark, pan.ProviderUC, pan.ProviderBaidu} {
+		if creds.Has(prov) {
+			cleanProviders = append(cleanProviders, prov.Label())
+		}
+	}
 	renderBody := func() {
-		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-				ui.Text(c, "网盘账号").FontSize(17).Bold()
-				ui.Text(c, "播放网盘影片时，未登录会自动弹出官方授权页面，完成后仅保存在本机。").
-					FontSize(13).TextColor(p.textMuted)
+		ui.Row(c).FillWidth().Wrap().Gap(10).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+			ui.Row(c).Wrap().Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "网盘原画授权").FontSize(13.5).Bold()
+				ui.Text(c, "供下方网盘站点播放原画，仅存本机").FontSize(12).TextColor(p.textMuted)
 			})
-			var cleanProviders []string
-			for _, prov := range []pan.Provider{pan.ProviderQuark, pan.ProviderUC, pan.ProviderBaidu} {
-				if creds.Has(prov) {
-					cleanProviders = append(cleanProviders, prov.Label())
-				}
-			}
 			if len(cleanProviders) > 0 {
 				tempDir := creds.EffectiveTempDir()
 				scope := fmt.Sprintf("将清空 %s 中的「%s」目录（夸克/UC 会同时清理回收站），不影响其他目录",
 					strings.Join(cleanProviders, "、"), tempDir)
 				if a.running(jobPan) {
 					glassButton(c, "清理中…").Tooltip(scope).Disabled(true)
-				} else {
-					if a.armedDangerButtonWithTooltip(c, "pan-cleanup-temp", "清理临时文件", "确认清理？", scope) {
-						a.cleanupPanTempFiles()
-					}
+				} else if a.armedDangerButtonWithTooltip(c, "pan-cleanup-temp", "清理临时文件", "确认清理？", scope) {
+					a.cleanupPanTempFiles()
 				}
 			}
 		})
-		if a.armed.key == "pan-cleanup-temp" && c.Now().Before(a.armed.until) {
-			var cleanProviders []string
-			for _, prov := range []pan.Provider{pan.ProviderQuark, pan.ProviderUC, pan.ProviderBaidu} {
-				if creds.Has(prov) {
-					cleanProviders = append(cleanProviders, prov.Label())
-				}
-			}
-			if len(cleanProviders) > 0 {
-				ui.Text(c, fmt.Sprintf("再次点击「确认清理？」将清空 %s 的「%s」目录（夸克/UC 含回收站），按 Esc 可取消。",
-					strings.Join(cleanProviders, "、"), creds.EffectiveTempDir())).
-					FontSize(12).TextColor(p.warning)
-			}
+		if a.armed.key == "pan-cleanup-temp" && c.Now().Before(a.armed.until) && len(cleanProviders) > 0 {
+			ui.Text(c, fmt.Sprintf("再次点击「确认清理？」将清空 %s 的「%s」目录（夸克/UC 含回收站），按 Esc 可取消。",
+				strings.Join(cleanProviders, "、"), creds.EffectiveTempDir())).
+				FontSize(12).TextColor(p.warning)
 		}
 		ui.Row(c).FillWidth().Wrap().Gap(10).Children(func() {
 			for _, provider := range panAccountProviders {
 				signedIn := creds.Has(provider)
-				ui.Row(c).Key(string(provider)).Padding(8, 12).Gap(10).Radius(16).Background(p.surfaceSubtle).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, provider.Label()).Bold().FontSize(13)
-					ui.Text(c, creds.Masked(provider)).FontSize(12).TextColor(p.textMuted)
+				tile := ui.Row(c).Key(string(provider)).Grow(1).MinWidth(180).Padding(9, 11).Gap(8).AlignItems(ui.Center)
+				applyInnerSurface(tile, p, 9).Children(func() {
+					dotColor := p.textFaint
+					statusColor := p.textFaint
 					if signedIn {
-						if a.armedDangerButton(c, "pan-logout-"+string(provider), "退出", "确认退出？") {
+						dotColor = p.success
+						statusColor = p.textMuted
+					}
+					ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+							ui.Box(c).Size(6, 6).Radius(3).Background(dotColor).PassThrough()
+							ui.Text(c, provider.Label()).FontSize(12.5).Bold().SingleLine()
+						})
+						ui.Text(c, creds.Masked(provider)).FontSize(11).TextColor(statusColor).SingleLine()
+					})
+					if signedIn {
+						if a.armedDangerButtonCompact(c, "pan-logout-"+string(provider), "退出", "确认退出？") {
 							a.logoutPanProvider(provider)
 						}
 					} else {
-						if primaryButton(c, "登录").Padding(5, 12).Clicked() {
+						if primaryButton(c, "登录").Padding(4, 10).FontSize(12).Clicked() {
 							a.beginPanWebLogin(provider, nil)
 						}
 					}
 				})
 			}
 		})
-		if len(panSites) > 0 {
-			ui.Column(c).FillWidth().Gap(8).Children(func() {
-				ui.Text(c, fmt.Sprintf("已识别的网盘站点（%d 个，点击直接浏览）", len(panSites))).FontSize(13).TextColor(p.textMuted)
-				ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
-					for i, entry := range panSites {
-						ui.Row(c).Key(i).Gap(6).AlignItems(ui.Center).Children(func() {
-							if glassButton(c, entry.Site.Name).Clicked() {
-								a.openSite(entry)
-							}
-							if d, ok := a.latency.get(entry.Key()); ok {
-								ui.Text(c, formatLatency(d)).FontSize(12).TextColor(p.textMuted).ContentTransition(ctNumeric)
-							}
-						})
-					}
-				})
-			})
-		}
 	}
-	col := ui.Column(c).FillWidth().Padding(18).Gap(12)
-	applySurface(col, p, 22)
 	if len(panSites) == 0 && !anySignedIn {
-		col.Children(func() {
-			ui.Collapsible(c.Key("pan-accounts-optional"), "网盘账号（播放网盘影片时自动按需授权）", &a.panUI.cardExpanded, func() {
-				ui.Column(c).FillWidth().Padding(8, 0, 0, 0).Gap(12).Children(renderBody)
-			})
+		ui.Collapsible(c.Key("pan-accounts-optional"), "网盘原画授权（播放网盘影片时自动按需授权）", &a.panUI.cardExpanded, func() {
+			ui.Column(c).FillWidth().Padding(8, 0, 0, 0).Gap(10).Children(renderBody)
 		})
 		return
 	}
-	col.Children(renderBody)
+	ui.Column(c).FillWidth().Gap(10).Children(renderBody)
 }
 
 func (a *app) panSiteEntries() []library.Entry {
@@ -212,9 +203,7 @@ func (a *app) panSiteEntries() []library.Entry {
 	seen := map[string]bool{}
 	for _, doc := range a.library.documents {
 		for _, site := range doc.doc.Sites {
-			switch site.Kind {
-			case config.KindPanWeb, config.KindPanShare, config.KindAList:
-			default:
+			if !isPanSiteKind(site.Kind) {
 				continue
 			}
 			entry := library.Entry{Site: site, Config: doc.doc, Line: doc.line}

@@ -113,7 +113,7 @@ func TestBrowserFlow(t *testing.T) {
 	if parsers := entryParsers(a.title.item.Entry); len(parsers) != 2 || parsers[1].Type != 1 {
 		t.Fatalf("line with mixed parser types failed: %s", a.status)
 	}
-	click("1")
+	click("立即播放")
 	if !opened || a.status != "正在播放" {
 		t.Fatalf("opened %v, status %s", opened, a.status)
 	}
@@ -131,7 +131,7 @@ func TestBrowserFlow(t *testing.T) {
 	if len(a.library.feed.items) != 1 {
 		t.Fatal("searching discarded the home feed")
 	}
-	click("片源")
+	click("片源管理")
 	click("演示站点")
 	if a.route() != routeSite || a.browser.session == nil {
 		t.Fatalf("site did not open: %s; texts %v", a.status, tt.Texts())
@@ -167,7 +167,7 @@ func TestBrowserFlow(t *testing.T) {
 	if len(a.library.feed.items) != 1 {
 		t.Fatal("recommendations were not restored after reload")
 	}
-	click("片源")
+	click("片源管理")
 	click("移除片源")
 	if a.library.root == nil {
 		t.Fatal("first tap on remove source should arm confirmation before deleting")

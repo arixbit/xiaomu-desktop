@@ -343,6 +343,7 @@ func (a *app) openLocalFileAt(path string, subtitles []string, at time.Duration,
 		return false
 	}
 	open, touched := a.panelOpen, a.panelTouched
+	skipOpen, wasShown := a.panelSkipOpen, a.panelWasShown
 	a.prepareExternalPlayback()
 	a.closeCurrentPlayer()
 	clean := filepath.Clean(path)
@@ -358,6 +359,7 @@ func (a *app) openLocalFileAt(path string, subtitles []string, at time.Duration,
 	a.adoptPlayer(p)
 	if keepPanel {
 		a.panelOpen, a.panelTouched = open, touched
+		a.panelSkipOpen, a.panelWasShown = skipOpen, wasShown
 	}
 	a.playingName = filepath.Base(clean)
 	a.playingFilePath = clean

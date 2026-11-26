@@ -39,7 +39,8 @@ type itemID struct {
 	videoID  catalog.ID
 }
 
-// libraryScan is one pass over the library: the home feed, or a search.
+// libraryScan is one pass over the library: the home feed, a search, or a
+// saved title's source lookup.
 // A scan owns its sessions; a generation rejects replies of an older pass.
 type libraryScan struct {
 	items            []library.Item
@@ -55,6 +56,7 @@ type libraryScan struct {
 	hot              map[string]bool // Douban hot titles, for feed ranking
 	more             []library.Target
 	query            string
+	exactTitle       string // normalized title to retain for a playback lookup
 	selected         int
 	grid             ui.GridState
 	cancel           context.CancelFunc
@@ -131,6 +133,17 @@ func (a *app) resetLibraryWithCache(doc *config.Config, cached map[string]*confi
 		liveEPG:      cloneStringMap(liveEPG),
 		feed:         libraryScan{generation: l.feed.generation, selected: -1},
 		search:       libraryScan{generation: l.search.generation, selected: -1},
+	}
+	// A background config refresh can finish after a saved episode starts.
+	// Replace its source results while leaving the active stream alone.
+	if t := a.title; t != nil && t.sourceScan != nil {
+		if doc == nil {
+			a.stopScan(t.sourceScan)
+			t.sourceScan = nil
+		} else {
+			t.seeds = []library.Item{t.item}
+			a.startScan(t.sourceScan, t.name, false)
+		}
 	}
 	if doc != nil {
 		a.startScan(&l.feed, "", false)
@@ -243,6 +256,14 @@ func (a *app) startScanWithSkip(s *libraryScan, query string, more, skipFailed b
 		Interactive:   s == &a.library.search,
 		Latency:       a.latency.snapshot(),
 		PreferredKeys: preferred,
+	}
+	if t := a.title; t != nil && s == t.sourceScan {
+		// Refresh the other sites, even when a previous search cached a miss.
+		options.SearchCache = nil
+		if options.Skip == nil {
+			options.Skip = make(map[string]bool)
+		}
+		options.Skip[entryKey(t.item.Entry)] = true
 	}
 	if more {
 		options.More = append([]library.Target(nil), s.more...)
@@ -523,7 +544,7 @@ func (a *app) appendLibraryEvent(s *libraryScan, event library.Event) bool {
 		s.seen = make(map[itemID]struct{})
 	}
 	for _, video := range result.Page.Videos {
-		if video.ID == "" {
+		if video.ID == "" || s.exactTitle != "" && titleKey(video.Name) != s.exactTitle {
 			continue
 		}
 		id := itemID{entryKey: entryKey, videoID: video.ID}
@@ -664,40 +685,75 @@ func libraryItemRankWithKey(item library.Item, name, query string, hot map[strin
 
 func (s *libraryScan) summary() string {
 	verb := "推荐"
+	subject := ""
 	if s.query != "" {
 		verb = "搜索"
+		subject = "“" + s.query + "”"
 	}
-	state := verb + "完成"
-	if s.running {
-		state = fmt.Sprintf("正在%s · %d/%d 个站点", verb, s.progress.Completed, s.progress.Total)
+	var state string
+	switch {
+	case s.running:
+		if s.progress.Total > 0 {
+			state = fmt.Sprintf("正在%s%s · %d/%d 个站点", verb, subject, s.progress.Completed, s.progress.Total)
+		} else {
+			state = fmt.Sprintf("正在%s%s", verb, subject)
+		}
+	case s.stopped:
+		state = fmt.Sprintf("已停止%s%s，保留已找到的影片", verb, subject)
+	default:
+		state = fmt.Sprintf("%s%s完成", verb, subject)
 	}
-	if s.stopped {
-		state = "已停止，保留已找到的影片"
+	countLabel := fmt.Sprintf("已找到 %d 部影片", len(s.groups))
+	if s.query == "" {
+		countLabel = fmt.Sprintf("%d 部影片", len(s.groups))
 	}
-	text := fmt.Sprintf("%s · %d 部影片", state, len(s.groups))
+	text := state + " · " + countLabel
 	if unavailable := s.progress.Failed + s.progress.Cooling + s.progress.SkippedHealth; unavailable > 0 {
 		text += fmt.Sprintf(" · %d 个站点暂不可用", unavailable)
 	}
 	return text
 }
 
-// scanBar is a pass's progress with the buttons to stop or repeat it.
+func scanSpinner(c *ui.Context, p appPalette) {
+	ring := ui.Box(c).Key("scan-spinner").Size(14, 14).Shrink(0).Radius(7).
+		Border(1.75, ui.Transparent).
+		BorderConicGradient(ui.ConicGradient{
+			Stops: []ui.GradientStop{
+				{Color: p.accent, At: 0},
+				{Color: p.accent.Alpha(0.18), At: 0.72},
+				{Color: ui.RGBA(255, 255, 255, 0.12), At: 1},
+			},
+		}).PassThrough()
+	if !c.Preferences().ReduceMotion {
+		deg := ring.Loop("scan-spin", 900*time.Millisecond, ui.Linear) * 360
+		ring.Transform(ui.Rotation(deg))
+	}
+}
+
+// scanBar is a single-line compact matte status strip showing scan progress
+// and stop/reload actions without crowding the poster grid below.
 func (a *app) scanBar(c *ui.Context, s *libraryScan) {
 	p := paletteFor(c)
-	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, s.summary()).FontSize(13).TextColor(p.textMuted).Grow(1).ContentTransition(ctNumeric)
+	bar := ui.Row(c).Key("scan-bar").FillWidth().Height(40).Padding(0, 12).Gap(10).AlignItems(ui.Center)
+	applySurface(bar, p, 10).Children(func() {
 		if s.running {
-			if glassButton(c, "停止").Clicked() {
+			scanSpinner(c, p)
+		}
+		ui.Text(c, s.summary()).FontSize(12.5).TextColor(p.textMuted).SingleLine().Grow(1).MinWidth(0).ContentTransition(ctNumeric)
+		if s.running {
+			value := -1.0
+			if s.progress.Total > 0 {
+				value = float64(s.progress.Completed) / float64(s.progress.Total)
+			}
+			ui.Progress(c, value).Width(120).Height(3.5).Shrink(0).Label("进度")
+			if glassButton(c, "停止").Height(26).Padding(0, 12).Radius(7).FontSize(12).Shrink(0).Clicked() {
 				a.stopScan(s)
 				s.stopped = true
 			}
-		} else if glassButton(c, "重新加载").Clicked() {
+		} else if glassButton(c, "重新加载").Height(26).Padding(0, 12).Radius(7).FontSize(12).Shrink(0).Clicked() {
 			a.reloadScan(s)
 		}
 	})
-	if s.running && s.progress.Total > 0 {
-		ui.Progress(c, float64(s.progress.Completed)/float64(s.progress.Total)).FillWidth().Label("进度")
-	}
 }
 
 // hotTitles are the Douban hot titles already cached for the home page, by
@@ -744,7 +800,7 @@ func (a *app) titleGrid(c *ui.Context, s *libraryScan) {
 		if card.Clicked() {
 			a.openTitle(group.name, group.items[0].Video.Pic, group.items)
 		}
-	}).Gap(14).Grow(1).FillWidth()
+	}).Gap(14).Padding(0, scrollGutter, 0, 0).ScrollbarStyle(appScrollbar).Grow(1).FillWidth()
 	// Arrows move the choice without opening it; a click or Enter opens it.
 	if grid.Submitted() && s.selected >= 0 && s.selected < len(groups) {
 		group := groups[s.selected]
@@ -756,7 +812,9 @@ func (a *app) titleGrid(c *ui.Context, s *libraryScan) {
 // feedView is the home page's latest updates, gathered from every site.
 func (a *app) feedView(c *ui.Context) {
 	s := &a.library.feed
-	a.scanBar(c, s)
+	ui.Box(c).FillWidth().Padding(0, scrollGutter, 0, 0).Children(func() {
+		a.scanBar(c, s)
+	})
 	if len(s.groups) == 0 {
 		if s.running {
 			emptyState(c, "正在汇集影片", "可直接输入片名搜索，影片返回后会立即显示。")
@@ -772,9 +830,10 @@ func (a *app) feedView(c *ui.Context) {
 
 func (a *app) searchView(c *ui.Context) {
 	s := &a.library.search
-	ui.Column(c).Fill().Gap(14).Children(func() {
-		ui.Text(c, "“"+s.query+"”").FontSize(16).Bold().SingleLine()
-		a.scanBar(c, s)
+	ui.Column(c).Fill().Gap(12).Children(func() {
+		ui.Box(c).FillWidth().Padding(0, scrollGutter, 0, 0).Children(func() {
+			a.scanBar(c, s)
+		})
 		if len(s.groups) == 0 {
 			if s.running {
 				emptyState(c, "正在搜索", "找到的影片会立即显示。")

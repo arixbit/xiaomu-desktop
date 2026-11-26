@@ -111,7 +111,8 @@ func TestLiveImportPlaybackAndChannelControls(t *testing.T) {
 		t.Fatal(tt.Texts())
 	}
 	click("上一频道")
-	// The panel changes the channel without leaving the player.
+	// The panel starts collapsed by default; opening it changes the channel without leaving the player.
+	click("频道")
 	click("切换到 体育频道")
 	if !tt.HasText("直播 · 体育频道") {
 		t.Fatal(tt.Texts())
@@ -204,9 +205,12 @@ func TestLiveChannelListsVirtualizeLargePlaylists(t *testing.T) {
 	if !a.playingLive || a.live.playingChannel != 1999 {
 		t.Fatalf("clicking filtered channel did not start playback: playingLive=%v channel=%d", a.playingLive, a.live.playingChannel)
 	}
-	// Player panel also virtualizes the channel list while the header shows the current channel.
+	// Player panel starts collapsed; opening it virtualizes the channel list while the header shows the current channel.
 	if !tt.HasText("直播 · 频道 1999") {
 		t.Fatalf("player header did not show current channel: %v", tt.Texts())
+	}
+	if err := tt.Click("频道"); err != nil {
+		t.Fatal(err)
 	}
 	if _, ok := tt.Find("切换到 频道 0000"); !ok {
 		t.Fatalf("player channel panel did not render visible rows: %v", tt.Texts())
@@ -283,5 +287,69 @@ func TestLiveSupportsRTSPAndRTMPWithMPVHeaders(t *testing.T) {
 	a.playLiveChannel(0, 0)
 	if a.player != nil || a.status == "" {
 		t.Fatalf("unsupported protocol should fail with clear status: player=%v status=%q", a.player != nil, a.status)
+	}
+}
+
+func TestLiveHeaderConditionalSearchAndTwoColumnCards(t *testing.T) {
+	a := &app{nav: []routeKind{routeLive}}
+	defer a.close()
+	a.live.sources = []iptv.Source{
+		{Name: "高清主源"},
+		{Name: "卫视精选"},
+	}
+	a.live.selectedSource = 0
+	a.live.channels = []iptv.Channel{
+		{Name: "新闻综合", Group: "综合", Streams: []iptv.Stream{{URL: "https://example.com/1.m3u8"}, {URL: "https://example.com/1b.m3u8"}}},
+		{Name: "体育高清", Group: "体育", Streams: []iptv.Stream{{URL: "https://example.com/2.m3u8"}}},
+		{Name: "电影频道", Group: "影视", Streams: []iptv.Stream{{URL: "https://example.com/3.m3u8"}}},
+	}
+
+	tt := ui.NewTester(a.view, 1120, 760)
+	if _, ok := tt.Find("频道搜索"); ok {
+		t.Fatalf("channel search field should stay hidden when <=20 channels and empty query")
+	}
+	if !tt.HasText("共 3 个频道 · 2 个直播来源") || !tt.HasText("高清主源") || !tt.HasText("卫视精选") {
+		t.Fatalf("header tabs/count missing: %v", tt.Texts())
+	}
+	if !tt.HasText("综合 · 2 条线路") || !tt.HasText("体育 · 1 条线路") {
+		t.Fatalf("channel card meta missing: %v", tt.Texts())
+	}
+	if a.live.channelListCols != 2 {
+		t.Fatalf("1120x760 live list cols = %d, want 2", a.live.channelListCols)
+	}
+	// Star button toggles favorite using icon button while keeping accessibility labels.
+	if err := tt.Click("收藏 体育高清"); err != nil {
+		t.Fatalf("star button missing: %v", err)
+	}
+	if _, ok := tt.Find("取消收藏 体育高清"); !ok {
+		t.Fatalf("unstar label missing after toggling favorite")
+	}
+	if _, ok := tt.Find("收藏频道"); !ok {
+		t.Fatalf("favorites group missing after starring a channel")
+	}
+	if err := tt.Click("取消收藏 体育高清"); err != nil {
+		t.Fatalf("unstar click failed: %v", err)
+	}
+	if _, ok := tt.Find("收藏频道"); ok {
+		t.Fatalf("favorites group should disappear when no favorites remain")
+	}
+	// Narrow window falls back to 1 column cleanly.
+	ttNarrow := ui.NewTester(a.view, 860, 640)
+	if !ttNarrow.HasText("新闻综合") || a.live.channelListCols != 1 {
+		t.Fatalf("narrow window live list cols = %d, want 1", a.live.channelListCols)
+	}
+	// Adding >20 channels reveals the local channel search box.
+	more := make([]iptv.Channel, 21)
+	for i := range more {
+		more[i] = iptv.Channel{
+			Name:    fmt.Sprintf("频道 %02d", i),
+			Group:   "测试组",
+			Streams: []iptv.Stream{{URL: fmt.Sprintf("https://example.com/ch/%d.m3u8", i)}},
+		}
+	}
+	a.live.channels = more
+	tt.Frame()
+	if _, ok := tt.Find("频道搜索"); !ok {
+		t.Fatalf("channel search field did not appear for 21 channels: %v", tt.Texts())
 	}
 }

@@ -307,8 +307,11 @@ func TestSourcesPageSurfacesPanAndAListSitesDirectly(t *testing.T) {
 
 	tt := ui.NewTester(a.view, 1120, 760)
 	tt.Frame()
-	if !tt.HasText("已识别的网盘站点（2 个，点击直接浏览）") {
-		t.Fatalf("pan sites summary missing: %v", tt.Texts())
+	if !tt.HasText("网盘站 (2)") {
+		t.Fatalf("pan sites filter count missing: %v", tt.Texts())
+	}
+	if err := tt.Click("网盘站"); err != nil {
+		t.Fatalf("click 网盘站 filter: %v (texts=%v)", err, tt.Texts())
 	}
 	if !tt.HasText("玩偶4K示例") || !tt.HasText("公开AList示例") {
 		t.Fatalf("pan site buttons missing while line is collapsed: %v", tt.Texts())

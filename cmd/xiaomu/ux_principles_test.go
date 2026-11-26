@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image/png"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
 	"github.com/arixbit/xiaomu-desktop/internal/danmaku"
+	"github.com/arixbit/xiaomu-desktop/internal/douban"
 	"github.com/arixbit/xiaomu-desktop/internal/iptv"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/arixbit/xiaomu-desktop/internal/pan"
@@ -460,11 +462,10 @@ func TestSubtitleDialogLayoutClearanceAndUXSnapshots(t *testing.T) {
 	tt.Frame()
 	save("subtitle-dialog-local.png", tt)
 
-	// Side panel with series skip controls ("片头到这" / "片尾从这" + dynamic auto-next warning).
+	// Side panel with inline series skip controls ("片头到这" / "片尾从这" + dynamic auto-next warning).
 	sa := newKeyboardTestApp(t)
 	sa.autoNext = false
 	sa.panelOpen = true
-	sa.panelTab = 1
 	if err := sa.seriesSkips.set(sa.title.name, seriesSkipRule{Enabled: true, Opening: 90, Ending: 120}); err != nil {
 		t.Fatal(err)
 	}
@@ -643,6 +644,213 @@ func TestSubtitleDialogLayoutClearanceAndUXSnapshots(t *testing.T) {
 	pbtt.SetSize(640, 420)
 	pbtt.Advance(220 * time.Millisecond)
 	save("player-plan-b-640x420.png", pbtt)
+
+	// Full-App C1 Redesign Snapshots (Home H1, Detail Series/Movie/Failure, Search, Live, Favorites, History, Sources S2).
+	captureC1RedesignSnapshots(t, save)
+}
+
+func captureC1RedesignSnapshots(t *testing.T, save func(string, *ui.Tester)) {
+	t.Helper()
+	now := time.Now()
+	vodDoc := &config.Config{
+		URL: "https://example.com/tvbox/config.json",
+		Sites: []config.Site{
+			{Key: "s1", Name: "星河影库", Type: 3, API: "csp_Wogg", Ext: "https://example.com/pan1", Kind: config.KindPanWeb},
+			{Key: "s2", Name: "极光云盘", Type: 3, API: "csp_Alist", Ext: "https://example.com/pan2", Kind: config.KindAList},
+			{Key: "s3", Name: "光年蓝光", Type: 1, API: "https://example.com/cms1", Kind: config.KindJSON},
+			{Key: "s4", Name: "深蓝影视", Type: 1, API: "https://example.com/cms2", Kind: config.KindJSON},
+			{Key: "s5", Name: "暮色影院", Type: 1, API: "https://example.com/cms3", Kind: config.KindJSON},
+			{Key: "s6", Name: "失效站点", Type: 1, API: "https://example.com/dead", Kind: config.KindJSON},
+		},
+	}
+
+	// 1. Home H1 (Left Continue Watching + Right Follow with new ep & 0-ep unwatched + Douban grid).
+	ha := &app{nav: []routeKind{routeHome}}
+	t.Cleanup(ha.close)
+	ha.library.root = vodDoc
+	ha.library.documents = []libraryDocument{{doc: vodDoc, line: "主仓精选", open: true}}
+	ha.browser.configURL = vodDoc.URL
+	ha.history.entries = []historyEntry{
+		{Name: "深空回响", Episode: "第12集", Line: "夸克原画", Position: 1695, Duration: 2700, Origin: "星河影库", EntryKey: library.Entry{Site: vodDoc.Sites[0], Config: vodDoc, Line: "主仓精选"}.Key(), SiteKey: "s1", ConfigURL: vodDoc.URL, Updated: now},
+		{Name: "雨城手记", Episode: "第07集", Line: "极速M3U8", Position: 860, Duration: 2520, Origin: "光年蓝光", EntryKey: library.Entry{Site: vodDoc.Sites[2], Config: vodDoc, Line: "主仓精选"}.Key(), SiteKey: "s3", ConfigURL: vodDoc.URL, Updated: now.Add(-2 * time.Hour)},
+		{Name: "静海航线", Episode: "正片", Line: "4K原盘", Position: 3850, Duration: 7680, Origin: "极光云盘", EntryKey: library.Entry{Site: vodDoc.Sites[1], Config: vodDoc, Line: "主仓精选"}.Key(), SiteKey: "s2", ConfigURL: vodDoc.URL, Updated: now.Add(-36 * time.Hour)},
+		{Name: "云端信号", Episode: "第04集", Line: "夸克原画", Position: 1440, Duration: 1440, Origin: "星河影库", ConfigURL: vodDoc.URL, Updated: now.Add(-48 * time.Hour)},
+	}
+	ha.favorites.entries = []favoriteEntry{
+		{Name: "深空回响", EpisodeCount: 60, LatestEpisode: "第60集", Checked: now, ConfigURL: vodDoc.URL},
+		{Name: "云端信号", EpisodeCount: 16, LatestEpisode: "第16集", Checked: now, ConfigURL: vodDoc.URL},
+		{Name: "琥珀纪年", EpisodeCount: 28, LatestEpisode: "第28集", Checked: now, ConfigURL: vodDoc.URL},
+		{Name: "长夜渡口", EpisodeCount: 36, LatestEpisode: "第36集", Checked: now, ConfigURL: vodDoc.URL},
+	}
+	hotList := ha.discovery.listFor(douban.Hot)
+	hotList.feed = douban.Feed{
+		Kind:    douban.Hot,
+		Updated: now,
+		Total:   50,
+		Subjects: []douban.Subject{
+			{ID: "1", Title: "深空回响", Rating: "8.7", Episodes: "更至60集"},
+			{ID: "2", Title: "静海航线", Rating: "8.2", Episodes: "正片"},
+			{ID: "3", Title: "雨城手记", Rating: "8.5", Episodes: "全24集"},
+			{ID: "4", Title: "云端信号", Rating: "8.9", Episodes: "更至16集"},
+			{ID: "5", Title: "长夜渡口", Rating: "8.4", Episodes: "全36集"},
+			{ID: "6", Title: "雪原回声", Rating: "9.1", Episodes: "全6集"},
+			{ID: "7", Title: "微光实验室", Rating: "8.0", Episodes: "全12集"},
+			{ID: "8", Title: "南风列车", Rating: "8.3", Episodes: "正片"},
+			{ID: "9", Title: "琥珀纪年", Rating: "8.6", Episodes: "更至28集"},
+			{ID: "10", Title: "雾港探案", Rating: "8.1", Episodes: "全18集"},
+		},
+	}
+	htt := ui.NewTester(ha.view, 1120, 760)
+	htt.Advance(220 * time.Millisecond)
+	save("c1-home-h1.png", htt)
+
+	// 2. Favorites page (2-column cards).
+	ha.nav = []routeKind{routeFavorites}
+	htt.Frame()
+	htt.Advance(220 * time.Millisecond)
+	save("c1-favorites.png", htt)
+
+	// 3. History page (timeline rows).
+	ha.nav = []routeKind{routeHistory}
+	htt.Frame()
+	htt.Advance(220 * time.Millisecond)
+	save("c1-history.png", htt)
+
+	// 4. Sources S2 Tab 1 (VOD + embedded Pan Auth) & Tab 2 (Live sources).
+	ha.markSiteFailed(library.Entry{Site: vodDoc.Sites[5], Config: vodDoc, Line: "主仓精选"}.Key())
+	_ = ha.latency.record(library.Entry{Site: vodDoc.Sites[0], Config: vodDoc, Line: "主仓精选"}.Key(), 142*time.Millisecond)
+	_ = ha.latency.record(library.Entry{Site: vodDoc.Sites[1], Config: vodDoc, Line: "主仓精选"}.Key(), 218*time.Millisecond)
+	_ = ha.latency.record(library.Entry{Site: vodDoc.Sites[2], Config: vodDoc, Line: "主仓精选"}.Key(), 285*time.Millisecond)
+	_ = ha.latency.record(library.Entry{Site: vodDoc.Sites[3], Config: vodDoc, Line: "主仓精选"}.Key(), 410*time.Millisecond)
+	_ = ha.latency.record(library.Entry{Site: vodDoc.Sites[4], Config: vodDoc, Line: "主仓精选"}.Key(), 1800*time.Millisecond)
+	ha.panUI.creds = pan.Credentials{QuarkCookie: "k=v", AliToken: "tok_sample_123456"}
+	ha.live.url = "https://example.com/iptv/channels.m3u"
+	ha.live.selectedSource = 0
+	ha.live.sources = []iptv.Source{
+		{Name: "高清主源", URL: "https://example.com/iptv/main.m3u", EPG: "https://example.com/epg.xml", Channels: []iptv.Channel{
+			{Name: "新闻综合高清", Group: "综合", Streams: []iptv.Stream{{URL: "https://example.com/1.m3u8"}, {URL: "https://example.com/2.m3u8"}}},
+			{Name: "体育赛事 4K", Group: "体育", Streams: []iptv.Stream{{URL: "https://example.com/3.m3u8"}}},
+			{Name: "经典电影频道", Group: "电影", Streams: []iptv.Stream{{URL: "https://example.com/4.m3u8"}}},
+			{Name: "人文地理高清", Group: "纪录", Streams: []iptv.Stream{{URL: "https://example.com/5.m3u8"}}},
+			{Name: "东南卫视 HD", Group: "卫视", Streams: []iptv.Stream{{URL: "https://example.com/6.m3u8"}}},
+			{Name: "东方都市 HD", Group: "卫视", Streams: []iptv.Stream{{URL: "https://example.com/7.m3u8"}}},
+		}},
+		{Name: "卫视精选", URL: "https://example.com/iptv/sat.m3u", Channels: []iptv.Channel{
+			{Name: "精选频道 1", Group: "卫视", Streams: []iptv.Stream{{URL: "https://example.com/8.m3u8"}}},
+		}},
+	}
+	ha.live.channels = ha.live.sources[0].Channels
+	ha.live.state.toggleFavorite("新闻综合高清")
+	ha.live.state.toggleFavorite("体育赛事 4K")
+	ha.live.state.last = &liveLastChannel{ChannelName: "新闻综合高清", SourceName: "高清主源", SourceURL: "https://example.com/iptv/main.m3u", Group: "综合", Updated: now}
+
+	ha.nav = []routeKind{routeSources}
+	ha.sourcesTab = 0
+	htt.Frame()
+	htt.Advance(220 * time.Millisecond)
+	save("c1-sources-s2-vod.png", htt)
+
+	ha.sourcesTab = 1
+	htt.Frame()
+	htt.Advance(220 * time.Millisecond)
+	save("c1-sources-s2-live.png", htt)
+
+	// 5. Live page (2-column virtualized cards + gold stars + last resume bar).
+	ha.nav = []routeKind{routeLive}
+	htt.Frame()
+	htt.Advance(220 * time.Millisecond)
+	save("c1-live.png", htt)
+
+	// 6. Search page (single-row scan bar + poster grid).
+	ha.browser.query = "深空"
+	ha.library.search = libraryScan{
+		query:    "深空",
+		running:  true,
+		progress: library.Event{Completed: 18, Total: 42},
+		groups: []titleGroup{
+			{name: "深空回响", items: []library.Item{
+				{Entry: library.Entry{Site: vodDoc.Sites[0], Config: vodDoc, Line: "主仓精选"}, Video: catalog.Video{ID: "1", Name: "深空回响", Type: "科幻 · 悬疑", Remarks: "更至60集"}},
+				{Entry: library.Entry{Site: vodDoc.Sites[1], Config: vodDoc, Line: "主仓精选"}, Video: catalog.Video{ID: "2", Name: "深空回响"}},
+			}},
+			{name: "深空迷航", items: []library.Item{
+				{Entry: library.Entry{Site: vodDoc.Sites[2], Config: vodDoc, Line: "主仓精选"}, Video: catalog.Video{ID: "3", Name: "深空迷航", Type: "冒险", Remarks: "正片"}},
+			}},
+		},
+	}
+	ha.nav = []routeKind{routeHome, routeSearch}
+	htt.Frame()
+	htt.Advance(220 * time.Millisecond)
+	save("c1-search.png", htt)
+
+	// 7. Detail page: 60-ep series + multi-source + followed bookmark + resume progress.
+	eps60 := make([]catalog.Episode, 60)
+	for i := range eps60 {
+		eps60[i] = catalog.Episode{Name: fmt.Sprintf("第%d集", i+1), ID: fmt.Sprintf("ep-%d", i+1)}
+	}
+	seeds := make([]library.Item, 5)
+	for i := range 5 {
+		seeds[i] = library.Item{
+			Entry: library.Entry{Site: vodDoc.Sites[i], Config: vodDoc, Line: "主仓精选"},
+			Video: catalog.Video{ID: catalog.ID(fmt.Sprintf("v-%d", i+1)), Name: "深空回响", Remarks: "更新至 60 集"},
+		}
+	}
+	ha.title = &titlePage{
+		name:   "深空回响",
+		score:  "8.7",
+		seeds:  seeds,
+		item:   seeds[0],
+		failed: map[string]string{},
+		detail: &catalog.Detail{
+			Name:    "深空回响",
+			Year:    "2026",
+			Type:    "科幻 · 悬疑",
+			Content: "公元 2089 年，位于木卫二轨道的深空监听站接收到一段来自十年前失联科考船的加密脉冲。声学工程师林澈与前航行长沈砚在通讯窗口关闭前的七十二小时内潜入冰下轨道，揭开跨越两代星际远征队的静默真相。",
+			Sources: []catalog.Source{
+				{Name: "夸克原画", Episodes: eps60},
+				{Name: "夸克备用", Episodes: eps60},
+				{Name: "UC 4K", Episodes: eps60[:30]},
+				{Name: "极速 M3U8", Episodes: eps60[:24]},
+			},
+		},
+	}
+	ha.nav = []routeKind{routeHome, routeDetail}
+	htt.Frame()
+	htt.Advance(220 * time.Millisecond)
+	save("c1-detail-series.png", htt)
+
+	// 8. Detail page: playback failure recovery banner + current-failed red source chip.
+	ha.playFailure = &episodeFailure{
+		line:    "夸克原画",
+		episode: eps60[11],
+		at:      1695 * time.Second,
+		err:     errors.New("视频加载超时（30s）"),
+	}
+	htt.Frame()
+	htt.Advance(220 * time.Millisecond)
+	save("c1-detail-failure.png", htt)
+
+	// 9. Detail page: single-episode movie (hides redundant episode grid).
+	ha.playFailure = nil
+	ha.title = &titlePage{
+		name:   "静海航线",
+		score:  "8.2",
+		seeds:  seeds[:2],
+		item:   seeds[1],
+		failed: map[string]string{},
+		detail: &catalog.Detail{
+			Name:    "静海航线",
+			Year:    "2025",
+			Type:    "剧情 · 冒险",
+			Content: "在横跨赤道静风带的远洋航线上，两位水文测绘员在信号中断的夜晚重新审视彼此的过往。",
+			Sources: []catalog.Source{
+				{Name: "4K 原盘", Episodes: []catalog.Episode{{Name: "正片", ID: "movie-1"}}},
+				{Name: "高清直连", Episodes: []catalog.Episode{{Name: "正片", ID: "movie-2"}}},
+			},
+		},
+	}
+	htt.Frame()
+	htt.Advance(220 * time.Millisecond)
+	save("c1-detail-movie.png", htt)
 }
 
 func TestPanCleanupRequiresTwoStepConfirmationAndShowsCustomTempDir(t *testing.T) {

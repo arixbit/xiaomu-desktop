@@ -11,14 +11,44 @@ import (
 	"github.com/arixbit/xiaomu-desktop/internal/source"
 )
 
+// A saved entry opens its recorded episode first. Discover the other sites
+// independently so the viewer can switch without leaving playback.
+func (a *app) savedEpisodeResult(t *titlePage, play catalog.Playback, episode catalog.Episode, at time.Duration) jobResult {
+	return jobResult{discard: t.session.Close, apply: func() {
+		a.clearTitle()
+		a.title = t
+		t.failed = map[string]string{}
+		t.seeds = a.candidates() // keep already known sources available while the others respond
+		a.startEpisode(play, t.detail.Sources[t.line].Name, episode, at)
+		if a.player == nil && a.route() != routeDetail {
+			a.clearTitle()
+			return
+		}
+		if key := titleKey(t.name); a.playFailure == nil && key != "" && a.library.root != nil {
+			t.sourceScan = &libraryScan{exactTitle: key}
+			a.startScan(t.sourceScan, t.name, false)
+		}
+	}}
+}
+
+func (a *app) titleSearch() *libraryScan {
+	if t := a.title; t != nil && t.sourceScan != nil {
+		return t.sourceScan
+	}
+	return &a.library.search
+}
+
 // The chooser owns an alternate site's session while the current player,
 // history and recovery controls still belong to the original site.
 type playerSourceChoice struct {
 	item    library.Item
 	session source.Session
 	detail  *catalog.Detail
+	line    string
+	episode catalog.Episode
 	message string
 	failed  bool
+	retried bool
 }
 
 func (a *app) clearPanelChoice() {
@@ -48,9 +78,17 @@ func (a *app) singleMovieMatch(currentLine int, requested catalog.Episode, targe
 }
 
 func (a *app) switchSource(item library.Item) {
+	a.switchSourceInternal(item, false)
+}
+
+func (a *app) switchSourceInternal(item library.Item, isRetry bool) {
 	t := a.title
 	if t == nil {
 		return
+	}
+	prevMessage := ""
+	if isRetry && a.panelChoice != nil && sourceMemoryItemKey(a.panelChoice.item) == sourceMemoryItemKey(item) {
+		prevMessage = a.panelChoice.message
 	}
 	a.cancelJob(jobPlay)
 	a.clearPanelChoice()
@@ -59,7 +97,11 @@ func (a *app) switchSource(item library.Item) {
 		return
 	}
 	a.cancelJob(jobTitle)
-	choice := &playerSourceChoice{item: item, message: "正在读取线路…"}
+	msg := "正在读取线路…"
+	if prevMessage != "" {
+		msg = prevMessage
+	}
+	choice := &playerSourceChoice{item: item, message: msg}
 	a.panelChoice = choice
 	assets := strings.TrimSpace(a.browser.assets)
 	a.run(jobPlay, "读取来源", func(ctx context.Context) (jobResult, error) {
@@ -79,9 +121,19 @@ func (a *app) switchSource(item library.Item) {
 			a.recordLatency(item.Entry.Key(), elapsed)
 			a.panelSource = a.preferredLine(t.name, item, detail)
 			if len(detail.Sources) == 0 {
+				a.failureUI.retrying = false
+				a.failureUI.retryJobGen = 0
+				a.failureUI.copySeq++
+				a.failureUI.copied = false
+				a.failureUI.copyFailed = false
 				choice.failed = true
+				choice.retried = isRetry
 				choice.message = "这个来源没有提供可播放线路"
-				a.showPlayerOSD("该来源无可播放线路")
+				if a.playFailure != nil {
+					a.showPlayerOSD("切换失败：" + item.Entry.Label())
+				} else {
+					a.showPlayerOSD("该来源无可播放线路")
+				}
 				return
 			}
 			curLine, _, requested, at, ok := a.recoveryEpisode()
@@ -94,10 +146,12 @@ func (a *app) switchSource(item library.Item) {
 				}
 				if found {
 					a.panelSource = line
-					a.playPanelEpisode(line, ep, at)
+					a.playPanelEpisodeInternal(line, ep, at, isRetry)
 					return
 				}
 			}
+			a.failureUI.retrying = false
+			a.failureUI.retryJobGen = 0
 			choice.failed = false
 			choice.message = "请选择要播放的分集"
 			a.showPlayerOSD("未匹配当前分集，请在右侧选集")
@@ -106,10 +160,20 @@ func (a *app) switchSource(item library.Item) {
 		if a.panelChoice != choice {
 			return
 		}
+		a.failureUI.retrying = false
+		a.failureUI.retryJobGen = 0
+		a.failureUI.copySeq++
+		a.failureUI.copied = false
+		a.failureUI.copyFailed = false
 		choice.failed = true
+		choice.retried = isRetry
 		choice.message = jobError("读取来源", err)
 		a.status = ""
-		a.showPlayerOSD("切换来源失败，继续播放原视频")
+		if a.playFailure != nil {
+			a.showPlayerOSD("切换失败：" + item.Entry.Label())
+		} else {
+			a.showPlayerOSD("切换来源失败，继续播放原视频")
+		}
 		_ = a.sourceMemory.record(t.name, item, "", 0, false, time.Now())
 	})
 }
@@ -151,6 +215,10 @@ func (a *app) selectPanelLine(detail *catalog.Detail, line int) {
 }
 
 func (a *app) playPanelEpisode(line int, episode catalog.Episode, at time.Duration) {
+	a.playPanelEpisodeInternal(line, episode, at, false)
+}
+
+func (a *app) playPanelEpisodeInternal(line int, episode catalog.Episode, at time.Duration, isRetry bool) {
 	choice := a.panelChoice
 	if choice == nil {
 		a.playEpisodeAt(a.title.detail.Sources[line].Name, episode, at)
@@ -158,16 +226,32 @@ func (a *app) playPanelEpisode(line int, episode catalog.Episode, at time.Durati
 	}
 	name := choice.detail.Sources[line].Name
 	resolver := resolve.Resolver{Sniff: a.sniffPage, Parsers: entryParsers(choice.item.Entry)}
-	choice.failed = false
-	choice.message = "正在解析分集…"
+	choice.line = name
+	choice.episode = episode
+	if !isRetry {
+		choice.failed = false
+		choice.retried = false
+		choice.message = "正在解析分集…"
+	}
 	start := time.Now()
 	fail := func(message string) {
 		if a.panelChoice != choice {
 			return
 		}
+		a.failureUI.retrying = false
+		a.failureUI.retryJobGen = 0
+		a.failureUI.copySeq++
+		a.failureUI.copied = false
+		a.failureUI.copyFailed = false
 		choice.failed = true
+		choice.retried = isRetry
 		choice.message, a.status = message, ""
-		a.showPlayerOSD("切换失败，继续播放原视频")
+		if a.playFailure != nil {
+			route := formatRouteLabel(choice.item.Entry, name, choice.detail != nil && len(choice.detail.Sources) > 1)
+			a.showPlayerOSD("切换失败：" + route)
+		} else {
+			a.showPlayerOSD("切换失败，继续播放原视频")
+		}
 		if a.title != nil {
 			_ = a.sourceMemory.record(a.title.name, choice.item, name, time.Since(start), false, time.Now())
 		}

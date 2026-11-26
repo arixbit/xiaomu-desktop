@@ -116,7 +116,7 @@ func TestSourcePageShowsLatency(t *testing.T) {
 	}
 	tt := ui.NewTester(a.view, 1120, 760)
 	tt.SetTitleBar(dragBar)
-	if err := tt.Click("片源"); err != nil {
+	if err := tt.Click("片源管理"); err != nil {
 		t.Fatal(err)
 	}
 	if !tt.HasText("850ms") || !tt.HasText("示例来源") {
@@ -191,8 +191,8 @@ func TestDetailSourceCardShowsLatency(t *testing.T) {
 	if !tt.HasText("2.3s") || !tt.HasText("850ms") {
 		t.Fatalf("latency labels missing: %v", tt.Texts())
 	}
-	// The list shows the fastest source first, so row 1 sits above
-	// row 0 even though seed 0 was listed first.
+	// The horizontal source strip shows the fastest source first on the left,
+	// so seed 1 sits before seed 0 even though seed 0 was listed first.
 	first, ok := tt.Find("来源 " + seeds[1].Entry.Label())
 	if !ok {
 		t.Fatal("fastest card is missing")
@@ -201,7 +201,7 @@ func TestDetailSourceCardShowsLatency(t *testing.T) {
 	if !ok {
 		t.Fatal("slower card is missing")
 	}
-	if first.Y >= second.Y {
-		t.Fatalf("fastest card is not first: first=%+v second=%+v", first, second)
+	if first.X >= second.X {
+		t.Fatalf("fastest chip is not first: first=%+v second=%+v", first, second)
 	}
 }

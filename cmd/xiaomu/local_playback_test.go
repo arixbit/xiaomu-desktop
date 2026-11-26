@@ -238,10 +238,16 @@ func TestLocalVideoSameDirectoryAutoNextAndControls(t *testing.T) {
 		t.Fatalf("unexpected NowPlaying commands for first local file: %v", fakeNP.info.Commands)
 	}
 
-	// Render player screen: sibling panel and next button exist, then advance to end for auto-next.
+	// Floating playlist starts collapsed by default; clicking 列表 opens it cleanly.
 	tt := ui.NewTester(a.view, 1120, 760)
+	if a.panelOpen || tt.HasText("同目录视频") {
+		t.Fatalf("local playlist panel should start collapsed by default: open=%v texts=%v", a.panelOpen, tt.Texts())
+	}
+	if err := tt.Click("列表"); err != nil {
+		t.Fatalf("open local playlist panel: %v", err)
+	}
 	if !tt.HasText("同目录视频") || !tt.HasText("S01E02.mp4") {
-		t.Fatalf("local playlist panel missing: %v", tt.Texts())
+		t.Fatalf("local playlist panel missing after clicking 列表: %v", tt.Texts())
 	}
 
 	// Advance into up-next countdown window (last 8 seconds of 60s timedVideo).

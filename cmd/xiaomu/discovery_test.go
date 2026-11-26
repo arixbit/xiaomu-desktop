@@ -202,7 +202,7 @@ func TestDoubanCardsSearchUserLibraryAndPlay(t *testing.T) {
 		opened = true
 		return nil, nil
 	}
-	click("1")
+	click("立即播放")
 	if !opened {
 		t.Fatal(a.status)
 	}
@@ -462,13 +462,16 @@ func TestDiscoveryHeaderLayoutWideAndCompact(t *testing.T) {
 		if tabsEl.X+tabsEl.W > float32(width)+1 {
 			t.Fatalf("width=%d tabs overflow: tabs=%+v", width, tabsEl)
 		}
-		if lastTab.X+lastTab.W > float32(width)+1 {
+		if width >= 960 && lastTab.X+lastTab.W > float32(width)+1 {
 			t.Fatalf("width=%d last tab outside window: lastTab=%+v", width, lastTab)
 		}
 		// Updated time and refresh button must not overlap tabs on the same row.
 		sameRow := btn.Y < tabsEl.Y+tabsEl.H && tabsEl.Y < btn.Y+btn.H
 		if sameRow && (meta.X < tabsEl.X+tabsEl.W-0.5 || btn.X < meta.X+meta.W-0.5) {
 			t.Fatalf("width=%d header items overlap: tabs=%+v meta=%+v btn=%+v", width, tabsEl, meta, btn)
+		}
+		if lastTab.X+lastTab.W > tabsEl.X+tabsEl.W {
+			tt.Scroll(tabsEl.X+tabsEl.W/2, tabsEl.Y+tabsEl.H/2, 400, 0)
 		}
 		if err := tt.Click("最近更新"); err != nil {
 			t.Fatalf("width=%d click last tab: %v", width, err)

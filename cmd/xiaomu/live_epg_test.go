@@ -486,6 +486,12 @@ func TestSingleChannelLiveSourceOpensEPGPanel(t *testing.T) {
 
 	a.playLiveChannel(0, 0)
 	tt := ui.NewTester(a.view, 1120, 760)
+	if a.panelOpen || tt.HasText("晚间新闻") || !tt.HasText("节目单") {
+		t.Fatalf("single-channel live source with EPG should start collapsed with 节目单 toggle: open=%v texts=%v", a.panelOpen, tt.Texts())
+	}
+	if err := tt.Click("节目单"); err != nil {
+		t.Fatalf("open EPG panel failed: %v", err)
+	}
 	if !a.panelOpen || !tt.HasText("节目单") || !tt.HasText("晚间新闻") || !tt.HasText("新闻联播") {
 		t.Fatalf("single-channel live source with EPG did not open EPG panel: open=%v texts=%v", a.panelOpen, tt.Texts())
 	}

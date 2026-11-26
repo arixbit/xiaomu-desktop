@@ -294,9 +294,14 @@ var homeTabs = []homeTabSpec{
 }
 
 // homeView is the first page: the welcome before a source is imported, then
-// what is popular on Douban and the sites' latest updates.
+// the H1 focus split (continue watching + followed series) and the Douban
+// discovery lists / latest site updates.
 func (a *app) homeView(c *ui.Context) {
-	if a.library.root == nil && len(continueWatchingEntries(a.history.entries)) == 0 && len(a.favorites.entries) == 0 {
+	cwEntries := continueWatchingEntries(a.history.entries)
+	favEntries := a.favorites.entries
+	hasCW := len(cwEntries) > 0
+	hasFav := len(favEntries) > 0
+	if a.library.root == nil && !hasCW && !hasFav {
 		a.welcomeView(c)
 		return
 	}
@@ -307,16 +312,11 @@ func (a *app) homeView(c *ui.Context) {
 	d := &a.discovery
 	list := d.current()
 	hasMeta := d.tab != "sites" && !list.feed.Updated.IsZero()
-	// Wrap tabs below 1180px so wider CJK fallback/scaled fonts never crowd
-	// or clip the inline refresh icon button alongside all 9 tabs.
-	wrapTabs := width < 1180
-	separateMetaRow := hasMeta && width < 1380
-	headerReserve := float32(180)
+	showMeta := d.tab != "sites" && (hasMeta || list.message == "")
+	separateMetaRow := showMeta && width < 1080
+	headerReserve := float32(160)
 	if separateMetaRow {
-		headerReserve = 224
-	}
-	if wrapTabs {
-		headerReserve += 44
+		headerReserve = 194
 	}
 	recommendationHeight := max(float32(300), height-headerReserve)
 	tab := 0
@@ -331,15 +331,22 @@ func (a *app) homeView(c *ui.Context) {
 			return
 		}
 		tip := "刷新榜单"
-		iconColor := p.text
+		iconColor := p.textMuted
 		if list.loading {
 			tip = "刷新中…"
-			iconColor = p.textMuted
+			iconColor = p.textFaint
 		}
-		btn := glassButton(c.Key("discovery-refresh"), "").Size(34, 34).Shrink(0).Radius(17).Padding(0).Center().
-			Label("刷新榜单").Tooltip(tip).Disabled(list.loading)
+		btn := ui.ButtonBase(c.Key("discovery-refresh")).Size(30, 30).Shrink(0).Radius(8).Center().
+			Cursor(ui.CursorPointer).Label("刷新榜单").Tooltip(tip).Disabled(list.loading)
+		bg := p.controlBg
+		if btn.Hovered() && !list.loading {
+			bg = p.controlHover
+			iconColor = p.text
+		}
+		btn.Background(btn.AnimateColor("disc-ref-bg", bg, animColor)).Border(1, p.borderControl)
+		applyPressPose(btn)
 		btn.Children(func() {
-			ui.Icon(c, iconRefresh).Size(16, 16).TextColor(iconColor).PassThrough()
+			ui.Icon(c, iconRefresh).Size(14, 14).TextColor(iconColor).PassThrough()
 		})
 		if btn.Clicked() {
 			a.loadDiscoveryTab(true)
@@ -350,66 +357,95 @@ func (a *app) homeView(c *ui.Context) {
 			return
 		}
 		if hasMeta {
-			ui.Text(c, "豆瓣榜单 · 更新于 "+list.feed.Updated.Local().Format("01-02 15:04")).FontSize(13).TextColor(p.textMuted)
+			ui.Text(c, "豆瓣榜单 · 更新于 "+list.feed.Updated.Local().Format("01-02 15:04")).
+				FontSize(12).TextColor(p.textMuted).SingleLine().Shrink(0)
 		}
 		if separateRow {
 			ui.Spacer(c)
 		}
 		renderRefreshButton()
 	}
-	ui.Scroll(c).Key("home-scroll").Label("首页内容").Fill().Gap(14).Children(func() {
-		a.continueWatchingStrip(c)
-		a.favoritesStrip(c)
+	renderTabs := func(grow bool) {
+		tabsBar := ui.ScrollHorizontal(c).Key("home-discovery-tabs").Label("榜单").
+			Gap(14).Scrollbars(false).AlignItems(ui.End)
+		if grow {
+			tabsBar.Grow(1).MinWidth(0)
+		} else {
+			tabsBar.FillWidth()
+		}
+		tabsBar.Children(func() {
+			for i, spec := range homeTabs {
+				if underlineTab(c, "home-tab-"+spec.key, spec.label, tab == i).Shrink(0).Clicked() {
+					if d.tab != spec.key {
+						d.tab = spec.key
+						a.loadDiscoveryTab(false)
+					}
+				}
+			}
+		})
+	}
+	ui.Scroll(c).Key("home-scroll").Label("首页内容").Fill().Gap(14).ScrollbarStyle(appScrollbar).Children(func() {
+		if hasCW || hasFav {
+			ui.Column(c).FillWidth().Padding(0, scrollGutter, 0, 0).Gap(14).Children(func() {
+				switch {
+				case hasCW && hasFav && width >= 860:
+					ui.Row(c).Key("home-focus-split").FillWidth().Gap(14).AlignItems(ui.Start).Children(func() {
+						ui.Column(c).Grow(61).MinWidth(0).Children(func() {
+							a.homeContinueWatchingSection(c, cwEntries)
+						})
+						ui.Column(c).Grow(39).MinWidth(0).Children(func() {
+							a.homeFavoritesColumn(c)
+						})
+					})
+				case hasCW && hasFav:
+					a.homeContinueWatchingSection(c, cwEntries)
+					a.favoritesStrip(c)
+				case hasCW:
+					a.homeContinueWatchingSection(c, cwEntries)
+				case hasFav:
+					a.favoritesStrip(c)
+				}
+			})
+		}
 		if a.library.root == nil {
-			card := ui.Column(c).FillWidth().Padding(20).Gap(12).Radius(22)
-			applyPane(card, p, p.paneMat)
-			card.Children(func() {
-				ui.Text(c, "添加片源，继续观看").FontSize(22).Bold()
-				ui.Text(c, "观看记录和追剧仍保存在本机。重新添加片源后即可继续播放，也可直接打开或拖入本地视频文件。").TextColor(p.textMuted)
-				ui.Row(c).Gap(10).Children(func() {
-					if primaryButton(c, "添加片源").Clicked() {
-						a.openImportDialog()
-					}
-					if glassButton(c, "打开本地视频").Clicked() {
-						a.openLocalFileDialog()
-					}
+			ui.Box(c).FillWidth().Padding(0, scrollGutter, 0, 0).Children(func() {
+				card := ui.Column(c).FillWidth().Padding(20).Gap(12).Radius(14)
+				applyPane(card, p, p.paneMat)
+				card.Children(func() {
+					ui.Text(c, "添加片源，继续观看").FontSize(22).Bold()
+					ui.Text(c, "观看记录和追剧仍保存在本机。重新添加片源后即可继续播放，也可直接打开或拖入本地视频文件。").TextColor(p.textMuted)
+					ui.Row(c).Gap(10).Children(func() {
+						if primaryButton(c, "添加片源").Clicked() {
+							a.openImportDialog()
+						}
+						if glassButton(c, "打开本地视频").Clicked() {
+							a.openLocalFileDialog()
+						}
+					})
 				})
 			})
 			return
 		}
-		if wrapTabs {
-			ui.Row(c).Label("榜单").FillWidth().Wrap().Gap(8).AlignItems(ui.Center).Children(func() {
-				for i, spec := range homeTabs {
-					if chip(c.Key("home-tab-"+spec.key), spec.label, tab == i).Clicked() {
-						if d.tab != spec.key {
-							d.tab = spec.key
-							a.loadDiscoveryTab(false)
-						}
+		ui.Column(c).FillWidth().Padding(0, scrollGutter, 0, 0).Gap(0).Children(func() {
+			if separateMetaRow {
+				renderTabs(false)
+			} else {
+				ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
+					renderTabs(true)
+					if showMeta {
+						ui.Row(c).Shrink(0).Gap(8).AlignItems(ui.Center).Children(func() {
+							renderDiscoveryMeta(false)
+						})
 					}
-				}
-				if !separateMetaRow {
-					renderRefreshButton()
-				}
-			})
-		} else {
-			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
-				if ui.Segmented(c, &tab, "实时热门", "热门电影", "热门剧集", "热门综艺", "热门动漫", "热门短剧", "热门纪录片", "Top 250", "最近更新").Label("榜单").Changed() {
-					d.tab = homeTabs[tab].key
-					a.loadDiscoveryTab(false)
-				}
-				if !separateMetaRow && d.tab != "sites" {
-					ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-						renderDiscoveryMeta(false)
-					})
-				}
-			})
-		}
-		if separateMetaRow {
-			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-				renderDiscoveryMeta(true)
-			})
-		}
-		ui.Column(c).Label("首页推荐").FillWidth().Height(recommendationHeight).MinHeight(recommendationHeight).Gap(14).Children(func() {
+				})
+			}
+			if separateMetaRow {
+				ui.Row(c).FillWidth().Padding(8, 0, 0, 0).Gap(8).AlignItems(ui.Center).Children(func() {
+					renderDiscoveryMeta(true)
+				})
+			}
+		})
+		ui.Column(c).Label("首页推荐").FillWidth().Height(recommendationHeight).MinHeight(recommendationHeight).Gap(12).Children(func() {
 			if d.tab == "sites" {
 				a.feedView(c)
 			} else {
@@ -439,7 +475,7 @@ func (a *app) discoveryView(c *ui.Context) {
 	list := a.discovery.listFor(kind)
 	p := paletteFor(c)
 	if list.message != "" {
-		ui.Row(c).Key("discovery-message").FillWidth().Gap(10).AlignItems(ui.Center).Transition(transInlineBanner).Children(func() {
+		ui.Row(c).Key("discovery-message").FillWidth().Padding(0, scrollGutter, 0, 0).Gap(10).AlignItems(ui.Center).Transition(transInlineBanner).Children(func() {
 			ui.Text(c, list.message).FontSize(13).Grow(1)
 			if glassButton(c, "重试").Disabled(list.loading || list.loadingMore).Clicked() {
 				if list.moreFailed && list.feed.HasMore() {
@@ -470,7 +506,7 @@ func (a *app) discoveryView(c *ui.Context) {
 		if card.Clicked() {
 			a.openTitleWithScore(subject.Title, subject.Cover, nil, subject.Rating)
 		}
-	}).Gap(14).Grow(1).FillWidth().TrackScroll(&list.scroll)
+	}).Gap(14).Padding(0, scrollGutter, 0, 0).ScrollbarStyle(appScrollbar).Grow(1).FillWidth().TrackScroll(&list.scroll)
 	// Arrows move the choice without opening it; a click or Enter opens it.
 	if grid.Submitted() && list.selected >= 0 && list.selected < len(list.feed.Subjects) {
 		subject := list.feed.Subjects[list.selected]

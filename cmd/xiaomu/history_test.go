@@ -335,3 +335,63 @@ func TestReadHistoryIgnoresLegacyNASEntries(t *testing.T) {
 		t.Fatalf("continueWatchingEntries included legacy NAS entry: %+v", entries)
 	}
 }
+
+func TestHistoryViewClearUndoAndUnavailableActions(t *testing.T) {
+	now := time.Now()
+	a := &app{nav: []routeKind{routeHistory}}
+	defer a.close()
+	a.library.root = &config.Config{URL: "https://example.com/current.json"}
+	a.history.note(historyEntry{
+		Name: "更早影片", ConfigURL: "https://example.com/removed.json", EntryKey: "old", SiteKey: "s1",
+		Kind: historyKindSite, Origin: "旧站点", VideoID: "1", Episode: "正片", Position: 120, Duration: 600,
+		Updated: now.Add(-48 * time.Hour),
+	})
+	a.history.note(historyEntry{
+		Name: "今日影片", ConfigURL: "https://example.com/current.json", EntryKey: "cur", SiteKey: "s2",
+		Kind: historyKindSite, Origin: "当前站点", VideoID: "2", Episode: "第1集", Position: 60, Duration: 600,
+		Updated: now,
+	})
+
+	tt := ui.NewTester(a.view, 1120, 760)
+	if !tt.HasText("观看记录仅保存在本机") || !tt.HasText("今天") || !tt.HasText("更早") {
+		t.Fatalf("history header/groups missing: %v", tt.Texts())
+	}
+	if _, ok := tt.Find("继续播放 今日影片"); !ok {
+		t.Fatalf("resume button missing for available entry: %v", tt.Texts())
+	}
+	if _, ok := tt.Find("搜片库 更早影片"); !ok {
+		t.Fatalf("search fallback button missing for removed source entry: %v", tt.Texts())
+	}
+	// Single row remove + undo restores entry.
+	if err := tt.Click("移除 更早影片"); err != nil {
+		t.Fatalf("remove button click failed: %v", err)
+	}
+	if len(a.history.entries) != 1 {
+		t.Fatalf("entries after remove = %d, want 1", len(a.history.entries))
+	}
+	if err := tt.Click("撤销"); err != nil {
+		t.Fatalf("undo remove failed: %v (texts=%v)", err, tt.Texts())
+	}
+	if len(a.history.entries) != 2 {
+		t.Fatalf("entries after undo remove = %d, want 2", len(a.history.entries))
+	}
+	// Two-step clear history + undo restores all entries.
+	if err := tt.Click("清空历史"); err != nil {
+		t.Fatalf("first click clear history failed: %v", err)
+	}
+	if len(a.history.entries) != 2 {
+		t.Fatal("first click should only arm confirmation, not clear history")
+	}
+	if err := tt.Click("确认清空？"); err != nil {
+		t.Fatalf("second click confirm clear failed: %v (texts=%v)", err, tt.Texts())
+	}
+	if len(a.history.entries) != 0 || !tt.HasText("还没有播放记录") {
+		t.Fatalf("history not cleared after confirm: len=%d texts=%v", len(a.history.entries), tt.Texts())
+	}
+	if err := tt.Click("撤销"); err != nil {
+		t.Fatalf("undo clear history failed: %v (texts=%v)", err, tt.Texts())
+	}
+	if len(a.history.entries) != 2 {
+		t.Fatalf("entries after undo clear = %d, want 2", len(a.history.entries))
+	}
+}

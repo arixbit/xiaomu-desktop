@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,6 +44,149 @@ func playerWithTwoSites(t *testing.T, lines, episodes string) (*app, library.Ite
 	return a, item
 }
 
+func TestSavedPlaybackDiscoversSwitchableSources(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		follow    bool
+		preferred bool
+	}{
+		{name: "history"},
+		{name: "history with a preferred site", preferred: true},
+		{name: "following without history", follow: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, other := playerWithTwoSites(t, "主线", "第1集$/one.mp4#第2集$/two.mp4")
+			saved := a.title.item
+			a.leavePlayer()
+			a.library.search.query = "之前搜的片名"
+			start, target := saved, other
+			wantEpisode, wantAt := "第2集", 25*time.Second
+			if tc.follow {
+				a.openFollowing(favoriteEntry{Name: saved.Video.Name, ConfigURL: configURL(saved.Entry), SiteKey: saved.Entry.Site.Key, VideoID: string(saved.Video.ID)})
+				wantEpisode, wantAt = "第1集", 0
+			} else {
+				if tc.preferred {
+					if err := a.sourceMemory.record(saved.Video.Name, other, "主线", time.Second, true, time.Now()); err != nil {
+						t.Fatal(err)
+					}
+					start, target = other, saved
+				}
+				a.resume(historyEntry{Name: saved.Video.Name, ConfigURL: configURL(saved.Entry), SiteKey: saved.Entry.Site.Key, VideoID: string(saved.Video.ID),
+					Line: "主线", Episode: wantEpisode, Position: wantAt.Seconds(), Duration: 60})
+			}
+			old := a.player
+			if old == nil || !a.title.isCurrent(start) || a.playingEpisode != wantEpisode || a.playbackPosition() != wantAt {
+				t.Fatalf("saved playback changed during lookup: episode=%q at=%s status=%q", a.playingEpisode, a.playbackPosition(), a.status)
+			}
+			tt := ui.NewTester(a.view, 1120, 760)
+			if err := tt.Click("选集"); err != nil {
+				t.Fatalf("open episode panel: %v", err)
+			}
+			if err := tt.Click("选择来源"); err != nil {
+				t.Fatalf("saved playback has no source menu: %v", tt.Texts())
+			}
+			if len(tt.Menu()) != 2 {
+				t.Fatalf("expected only the two exact-title sources: %v", tt.Menu())
+			}
+			if err := tt.ChooseMenuItem(target.Entry.Label()); err != nil {
+				t.Fatal(err)
+			}
+			if a.player == old || !a.title.isCurrent(target) || a.playingEpisode != wantEpisode || a.playbackPosition() < wantAt {
+				t.Fatalf("switch did not continue the episode: episode=%q at=%s status=%q", a.playingEpisode, a.playbackPosition(), a.status)
+			}
+			if a.library.search.query != "之前搜的片名" {
+				t.Fatal("playback lookup replaced the viewer's search")
+			}
+		})
+	}
+}
+
+func TestSavedPlaybackShowsFastSourceWhileSlowLookupIsCanceledOnExit(t *testing.T) {
+	a, _ := playerWithTwoSites(t, "主线", "第1集$/one.mp4#第2集$/two.mp4")
+	saved := a.title.item
+	a.leavePlayer()
+	started, canceled := make(chan struct{}), make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+		close(canceled)
+	}))
+	defer slow.Close()
+	defer slow.CloseClientConnections()
+	doc := a.library.root
+	doc.Sites = append(doc.Sites, config.Site{Key: "slow", Kind: config.KindJSON, API: slow.URL})
+	updates := make(chan func(), 16)
+	a.dispatch = func(fn func()) { updates <- fn }
+	a.resume(historyEntry{Name: saved.Video.Name, ConfigURL: doc.URL, SiteKey: saved.Entry.Site.Key, VideoID: string(saved.Video.ID),
+		Line: "主线", Episode: "第2集", Position: 25, Duration: 60})
+	deadline := time.After(3 * time.Second)
+	for a.player == nil {
+		select {
+		case fn := <-updates:
+			fn()
+		case <-deadline:
+			t.Fatal("saved episode did not open")
+		}
+	}
+	player := a.player
+	select {
+	case <-started:
+	case <-deadline:
+		t.Fatal("background lookup did not reach the slow site")
+	}
+	for len(a.candidates()) < 2 {
+		select {
+		case fn := <-updates:
+			fn()
+		case <-deadline:
+			t.Fatal("fast source was held up by the slow site")
+		}
+	}
+	if a.player != player || !a.title.isCurrent(saved) || a.playingEpisode != "第2集" || a.playbackPosition() != 25*time.Second {
+		t.Fatal("a background result interrupted playback")
+	}
+	a.leavePlayer()
+	select {
+	case <-canceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("leaving playback did not cancel the site request")
+	}
+}
+
+func TestSavedPlaybackRechecksCachedMissAndTracksConfigRefresh(t *testing.T) {
+	a, _ := playerWithTwoSites(t, "主线", "第1集$/one.mp4#第2集$/two.mp4")
+	saved := a.title.item
+	a.leavePlayer()
+	var searches atomic.Int32
+	newSite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if searches.Add(1) == 1 {
+			fmt.Fprint(w, `{"list":[]}`)
+			return
+		}
+		fmt.Fprint(w, `{"list":[{"vod_id":"9","vod_name":"示例片"}]}`)
+	}))
+	defer newSite.Close()
+	doc := a.library.root
+	doc.Sites[1].API = newSite.URL
+	a.startScan(&a.library.search, saved.Video.Name, false)
+	a.resume(historyEntry{Name: saved.Video.Name, ConfigURL: doc.URL, SiteKey: saved.Entry.Site.Key, VideoID: string(saved.Video.ID),
+		Line: "主线", Episode: "第1集", Position: 25, Duration: 60})
+	if a.player == nil || len(a.candidates()) != 2 || searches.Load() != 2 {
+		t.Fatalf("newly available site missing after a cached miss: candidates=%v requests=%d", a.candidates(), searches.Load())
+	}
+	player := a.player
+	refreshed := *doc
+	refreshed.Sites = doc.Sites[:1]
+	a.applyLibraryConfigMode(doc.URL, &refreshed, nil, nil, nil, true)
+	tt := ui.NewTester(a.view, 1120, 760)
+	if err := tt.Click("选集"); err != nil {
+		t.Fatalf("open episode panel: %v", err)
+	}
+	if !tt.HasText("暂未找到其他来源") || len(a.candidates()) != 1 || a.player != player || a.playbackPosition() < 25*time.Second {
+		t.Fatalf("config refresh left an obsolete source or interrupted playback: %v", tt.Texts())
+	}
+}
+
 func TestPlayerSwitchesKnownSourcesAndRecoversOnChosenLine(t *testing.T) {
 	a, other := playerWithTwoSites(t, "主线$$$备用线", "02$/broken.mp4#01$/first.mp4$$$03$/third.mp4#2$/second.mp4")
 	a.library.search.query = "示例"
@@ -63,7 +207,6 @@ func TestPlayerSwitchesKnownSourcesAndRecoversOnChosenLine(t *testing.T) {
 	a.library.search.items = append(a.library.search.items, other)
 	tt.Frame()
 	click("换来源")
-	click("选择来源")
 	if len(tt.Menu()) != 2 {
 		t.Fatalf("expected the two exact-title sources: %v", tt.Menu())
 	}

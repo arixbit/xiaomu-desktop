@@ -600,15 +600,8 @@ func (a *app) resume(e historyEntry) {
 				session.Close()
 				return jobResult{}, false
 			}
-			return jobResult{discard: session.Close, apply: func() {
-				a.clearTitle()
-				a.title = &titlePage{name: e.Name, pic: e.Pic, seeds: []library.Item{item}, failed: map[string]string{},
-					item: item, session: session, detail: &detail, line: line}
-				a.startEpisode(play, detail.Sources[line].Name, episode, at)
-				if a.player == nil && a.route() != routeDetail {
-					a.clearTitle()
-				}
-			}}, true
+			t := &titlePage{name: e.Name, pic: e.Pic, item: item, session: session, detail: &detail, line: line}
+			return a.savedEpisodeResult(t, play, episode, at), true
 		}
 		if !e.finished() {
 			if result, ok := tryPreferred(e.Episode, time.Duration(e.Position*float64(time.Second))); ok {
@@ -650,16 +643,56 @@ func (a *app) resume(e historyEntry) {
 			session.Close()
 			return jobResult{}, err
 		}
-		return jobResult{discard: session.Close, apply: func() {
-			a.clearTitle()
-			a.title = &titlePage{name: e.Name, pic: e.Pic, seeds: []library.Item{item}, failed: map[string]string{},
-				item: item, session: session, detail: &detail, line: line}
-			a.startEpisode(play, detail.Sources[line].Name, episode, at)
-			if a.player == nil && a.route() != routeDetail {
-				a.clearTitle()
-			}
-		}}, nil
+		t := &titlePage{name: e.Name, pic: e.Pic, item: item, session: session, detail: &detail, line: line}
+		return a.savedEpisodeResult(t, play, episode, at), nil
 	}, nil)
+}
+
+func (a *app) historyClearButton(c *ui.Context) bool {
+	const key = "clear-history"
+	p := paletteFor(c)
+	now := c.Now()
+	armed := a.armed.key == key && now.Before(a.armed.until)
+	if a.armed.key == key && !armed {
+		a.armed = armedConfirmState{}
+	}
+	if armed {
+		c.After(a.armed.until.Sub(now))
+	}
+	shownLabel := "清空历史"
+	if armed {
+		shownLabel = "确认清空？"
+	}
+	var btn ui.Element
+	if armed {
+		btn = ui.Button(c.Key("armed-"+key), "").Label(shownLabel).Radius(9).Padding(6, 13).
+			Background(p.danger).TextColor(p.dangerText)
+		applyPressPose(btn)
+		btn.Children(func() {
+			ui.Text(c, shownLabel).FontSize(12.5).Bold().SingleLine().ContentTransition(ctReplace).PassThrough()
+		})
+	} else {
+		btn = ghostButton(c.Key("armed-"+key), "").Label(shownLabel).Padding(6, 13)
+		btn.Children(func() {
+			fg := p.textMuted
+			if btn.Hovered() {
+				fg = p.text
+			}
+			ui.Text(c, shownLabel).FontSize(12.5).TextColor(fg).SingleLine().ContentTransition(ctReplace).PassThrough()
+		})
+	}
+	if btn.Clicked() {
+		if armed {
+			a.armed = armedConfirmState{}
+			return true
+		}
+		a.armed = armedConfirmState{
+			key:   key,
+			until: now.Add(armedConfirmTTL),
+		}
+		c.After(armedConfirmTTL)
+	}
+	return false
 }
 
 func (a *app) historyView(c *ui.Context) {
@@ -677,10 +710,10 @@ func (a *app) historyView(c *ui.Context) {
 		}
 		return
 	}
-	ui.Column(c).Fill().Gap(14).Children(func() {
-		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "只保存在本机").FontSize(13).TextColor(p.textMuted).Grow(1)
-			if a.armedDangerButton(c, "clear-history", "清空历史", "确认清空？") {
+	ui.Column(c).Fill().Gap(12).Children(func() {
+		ui.Row(c).FillWidth().Padding(0, scrollGutter, 0, 0).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "观看记录仅保存在本机").FontSize(12.5).TextColor(p.textMuted).Grow(1)
+			if a.historyClearButton(c) {
 				snapshot := append([]historyEntry(nil), h.entries...)
 				h.entries, h.dirty = nil, true
 				h.byTitle, h.rowsCache, h.list = nil, nil, ui.ListState{}
@@ -705,75 +738,113 @@ func (a *app) historyView(c *ui.Context) {
 		ui.List(c, &h.list, len(rows), func(row int) {
 			r := rows[row]
 			if r.entry < 0 {
-				ui.Text(c, r.heading).Key(r.key).FontSize(16).Bold().Padding(6, 0, 0, 0)
+				topPad := float32(2)
+				if row > 0 {
+					topPad = 8
+				}
+				ui.Text(c, r.heading).Key(r.key).FontSize(13).Bold().TextColor(p.textMuted).Padding(topPad, 0, 2, 0)
 				return
 			}
 			if r.entry < len(h.entries) {
 				a.historyRow(c, r.entry, h.entries[r.entry])
 			}
-		}).Grow(1).FillWidth().MinHeight(0).Gap(8)
+		}).Grow(1).FillWidth().MinHeight(0).Padding(0, scrollGutter, 0, 0).Gap(8).ScrollbarStyle(appScrollbar)
 	})
 }
 
 func (a *app) historyRow(c *ui.Context, i int, e historyEntry) {
 	p := paletteFor(c)
 	available := a.historyAvailable(e)
-	row := ui.Row(c).Key(e.dedupKey()).FillWidth().Padding(10, 14, 10, 10).Gap(14).
+	row := ui.Row(c).Key(e.dedupKey()).FillWidth().Padding(10, 14, 10, 12).Gap(14).
 		AlignItems(ui.Center)
-	applySurface(row, p, 18).Children(func() {
+	applyInteractiveSurface(row, p, 12, row.Hovered())
+	row.Children(func() {
 		mainArea := ui.Row(c).Grow(1).MinWidth(0).Gap(14).AlignItems(ui.Center)
 		if available {
 			mainArea.Cursor(ui.CursorPointer)
 		}
 		mainArea.Children(func() {
-			posterBox := ui.Box(c).Size(60, 90).Radius(10).Clip().Background(p.cardPlaceholder)
+			posterBox := ui.Box(c).Size(48, 68).Radius(8).Clip().Background(p.cardPlaceholder).Border(1, p.border)
 			posterBox.Children(func() {
 				applyPosterImage(c, posterBox, a.poster(c, e.Pic))
 			})
-			ui.Column(c).Grow(1).MinWidth(0).Gap(5).Children(func() {
-				ui.Text(c, e.Name).Bold().SingleLine()
-				ui.Text(c, e.progress()).FontSize(13).TextColor(p.textMuted).SingleLine()
+			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+				ui.Text(c, e.Name).FontSize(14).Bold().TextColor(p.text).SingleLine()
+				ui.Text(c, e.progress()).FontSize(12).TextColor(p.textMuted).SingleLine()
 				if e.Duration > 0 {
-					ui.Progress(c, min(e.Position/e.Duration, 1)).FillWidth().MaxWidth(360).Label("观看进度")
+					progress := max(0, min(e.Position/e.Duration, 1))
+					ui.Progress(c, progress).Height(3).FillWidth().MaxWidth(260).Label("观看进度")
 				}
 				origin := e.Origin
+				originColor := p.textFaint
 				if !available {
 					if e.isLocal() {
 						origin = "文件已移除"
 					} else {
 						origin = "片源已移除"
 					}
+					originColor = p.warning
 				}
-				ui.Text(c, origin).FontSize(12).TextColor(p.textMuted).SingleLine()
+				if origin != "" {
+					ui.Text(c, origin).FontSize(11.5).TextColor(originColor).SingleLine()
+				}
 			})
 		})
 		if available && mainArea.Clicked() {
 			a.resume(e)
 		}
-		switch {
-		case available:
-			if primaryButton(c, "继续播放").Label("继续播放 " + e.Name).Clicked() {
-				a.resume(e)
-			}
-		case !e.isLocal() && a.library.root != nil:
-			if primaryButton(c, "搜片库").Label("搜片库 " + e.Name).Clicked() {
-				a.openTitle(e.Name, e.Pic, nil)
-			}
-		case !e.isLocal():
-			if primaryButton(c, "添加片源").Label("添加片源以恢复 " + e.Name).Clicked() {
-				a.openImportDialog()
-			}
-		}
-		ui.Box(c).Width(4)
-		if glassButton(c, "移除").Label("移除 " + e.Name).Clicked() {
-			idx := i
-			if removed, ok := a.history.remove(idx); ok {
-				a.flushHistory()
-				a.setUndoNotice("已移除「"+removed.Name+"」", "撤销", func() {
-					a.history.restore(idx, removed)
-					a.flushHistory()
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			switch {
+			case available:
+				resumeBtn := ui.ButtonBase(c.Key("hist-resume-"+e.dedupKey())).Height(34).Padding(0, 14).Gap(6).Radius(9).
+					AlignItems(ui.Center).Cursor(ui.CursorPointer).Label("继续播放 " + e.Name)
+				bg := p.accent
+				if resumeBtn.Hovered() {
+					bg = p.accentHover
+				}
+				resumeBtn.Background(resumeBtn.AnimateColor("hres-bg", bg, animColor))
+				applyPressPose(resumeBtn)
+				resumeBtn.Children(func() {
+					ui.Icon(c, iconPlay).Size(11, 11).TextColor(p.accentText).PassThrough()
+					ui.Text(c, "继续播放").FontSize(12.5).Bold().TextColor(p.accentText).SingleLine().PassThrough()
 				})
+				if resumeBtn.Clicked() {
+					a.resume(e)
+				}
+			case !e.isLocal() && a.library.root != nil:
+				if glassButton(c, "搜片库").Height(34).Padding(0, 14).FontSize(12.5).Label("搜片库 " + e.Name).Clicked() {
+					a.openTitle(e.Name, e.Pic, nil)
+				}
+			case !e.isLocal():
+				if glassButton(c, "添加片源").Height(34).Padding(0, 14).FontSize(12.5).Label("添加片源以恢复 " + e.Name).Clicked() {
+					a.openImportDialog()
+				}
 			}
-		}
+			removeBtn := ui.ButtonBase(c.Key("hist-remove-"+e.dedupKey())).Size(30, 30).Radius(8).Center().
+				Cursor(ui.CursorPointer).Label("移除 " + e.Name).Tooltip("移除记录")
+			rmBg := p.surfaceSubtle
+			rmBorder := p.border
+			rmFg := p.textMuted
+			if removeBtn.Hovered() {
+				rmBg = p.surfaceHover
+				rmBorder = p.borderControl
+				rmFg = p.text
+			}
+			removeBtn.Background(removeBtn.AnimateColor("hrm-bg", rmBg, animColor)).Border(1, rmBorder)
+			applyPressPose(removeBtn)
+			removeBtn.Children(func() {
+				ui.Icon(c, iconClose).Size(13, 13).TextColor(removeBtn.AnimateColor("hrm-fg", rmFg, animColor)).PassThrough()
+			})
+			if removeBtn.Clicked() {
+				idx := i
+				if removed, ok := a.history.remove(idx); ok {
+					a.flushHistory()
+					a.setUndoNotice("已移除「"+removed.Name+"」", "撤销", func() {
+						a.history.restore(idx, removed)
+						a.flushHistory()
+					})
+				}
+			}
+		})
 	})
 }

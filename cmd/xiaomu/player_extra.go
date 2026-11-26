@@ -454,7 +454,8 @@ func (a *app) rightHoldBoostPill(c *ui.Context) {
 		return
 	}
 	label := fmt.Sprintf("▶▶ %.0f× 倍速中", rh.boostRate)
-	ui.Row(c.Key("right-hold-pill")).Absolute().Top(76).Left(0).Right(0).Justify(ui.Center).PassThrough().
+	top := float32(76)
+	ui.Row(c.Key("right-hold-pill")).Absolute().Top(top).Left(0).Right(0).Justify(ui.Center).PassThrough().
 		Transition(transOSD).Children(func() {
 		ui.Row(c).Padding(7, 15).Radius(16).
 			Material(glass.Glass{Style: glass.Regular, Tint: ui.RGBA(12, 16, 28, 0.82)}).
@@ -727,11 +728,11 @@ func (a *app) playbackStatsOverlay(c *ui.Context, p mediaPlayer) {
 		}
 	}
 	c.After(time.Second)
-	top := float32(72)
+	top, left := float32(72), float32(18)
 	if bar := c.TitleBar(); bar.Bottom+56 > top {
 		top = bar.Bottom + 56
 	}
-	ui.Column(c.Key("playback-stats")).Absolute().Top(top).Left(18).Padding(10, 14).Gap(4).Radius(14).
+	ui.Column(c.Key("playback-stats")).Absolute().Top(top).Left(left).Padding(10, 14).Gap(4).Radius(14).
 		Material(glass.Glass{Style: glass.Regular, Tint: ui.RGBA(10, 14, 26, 0.80)}).
 		TextColor(playerText).PassThrough().Label("播放信息浮层").Children(func() {
 		ui.Text(c, "播放信息").FontSize(12).Bold().TextColor(ui.RGBA(248, 249, 255, 0.92))

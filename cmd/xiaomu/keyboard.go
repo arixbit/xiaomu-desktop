@@ -51,8 +51,14 @@ func (a *app) handleKeyboard(c *ui.Context) {
 		return
 	}
 	if a.player != nil && a.panelOpen && c.Shortcut(0, ui.KeyEscape) && !c.ShortcutRepeated() {
-		a.panelOpen = false
-		a.panelTouched = true
+		a.closeEpisodePanel()
+		return
+	}
+	if a.player != nil && a.hasPlayerFailureOverlay(a.player) && a.failureUI.detailsOpen && c.Shortcut(0, ui.KeyEscape) && !c.ShortcutRepeated() {
+		a.failureUI.detailsOpen = false
+		a.failureUI.copySeq++
+		a.failureUI.copied = false
+		a.failureUI.copyFailed = false
 		return
 	}
 	if a.player == nil && c.Shortcut(0, ui.KeyEscape) && !c.ShortcutRepeated() && len(a.nav) > 1 {

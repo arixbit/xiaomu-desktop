@@ -80,9 +80,12 @@ type app struct {
 	searchFocused   bool
 	searchFocus     ui.Handle
 	latency         latencyStore
-	siteHealth      siteHealthStore
-	showFailedSites bool
-	speedTest       sourceSpeedTest
+	siteHealth        siteHealthStore
+	showFailedSites   bool
+	homeResumeIdx     int
+	sourcesTab        int
+	sourcesSiteFilter int
+	speedTest         sourceSpeedTest
 	sourceMemory    sourceMemoryStore
 	sourceAttempt   sourcePlaybackAttempt
 	seriesSkips     seriesSkipStore
@@ -94,6 +97,7 @@ type app struct {
 	sourcePath      string
 	playbackWait    playbackWait
 	playFailure     *episodeFailure
+	failureUI       playerFailureUIState
 	linkOpen        bool
 	linkAdvanced    bool
 	linkErr         string
@@ -134,12 +138,15 @@ type app struct {
 	speedBytes       int64
 	speedAt          time.Time
 	speedText        string
-	panelSource      int
-	panelChoice      *playerSourceChoice
-	panelTab         int
-	panelOpen        bool
-	panelTouched     bool
-	fullScreen       bool
+	panelSource         int
+	panelChoice         *playerSourceChoice
+	panelOpen           bool
+	panelTouched        bool
+	panelSkipOpen       bool
+	panelWasShown       bool
+	panelRevealEpisode  bool
+	panelLastEpisodeKey string
+	fullScreen          bool
 	playerOverlay    playerOverlayState
 	playerPopovers   playerPopoverState
 	playerPointer    playerPointerState
@@ -151,10 +158,12 @@ type app struct {
 	savedVolume      float64
 	episodeEnd       playbackEnd
 	playerExtra      playerExtraState
+	marquee          hoverMarqueeState
 	seekPreview      seekPreviewState
 }
 
 func (a *app) view(c *ui.Context) {
+	a.marquee.beginFrame()
 	defer a.observeNowPlaying()
 	defer a.syncPlaybackPower(time.Now())
 	a.handleKeyboard(c)
@@ -204,13 +213,15 @@ func (a *app) adoptPlayer(p mediaPlayer) {
 	a.applyPlayerPreferences(p)
 	a.playbackWait = playbackWait{}
 	a.playFailure = nil
+	a.resetFailureUI()
 	// A new episode starts with no flow yet, so the speed reads
 	// neutral until the first sample a second later.
 	a.speedAt = time.Time{}
 	a.speedText = "—"
 	a.resumeAt, a.lastPosition = 0, 0
 	a.resumeIssued = false
-	a.panelOpen, a.panelTouched, a.panelSource, a.panelTab = !a.fullScreen, false, -1, 0
+	a.panelOpen, a.panelTouched, a.panelSource = false, false, -1
+	a.panelSkipOpen, a.panelWasShown, a.panelRevealEpisode, a.panelLastEpisodeKey = true, false, true, ""
 	a.playerOverlay = playerOverlayState{}
 	a.closePlayerPopovers()
 	a.playerPointer = playerPointerState{}

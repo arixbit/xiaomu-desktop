@@ -516,7 +516,7 @@ func (a *app) playCatchupProgram(channelIndex, streamIndex int, prog iptv.Progra
 
 // panelChannelEPG renders the current channel's daily program schedule and
 // clickable catchup replay buttons for past broadcasts.
-func (a *app) panelChannelEPG(c *ui.Context) {
+func (a *app) panelChannelEPG(c *ui.Context, pad float32) {
 	live := &a.live
 	if live.playingChannel < 0 || live.playingChannel >= len(live.channels) {
 		return
@@ -524,59 +524,66 @@ func (a *app) panelChannelEPG(c *ui.Context) {
 	ch := live.channels[live.playingChannel]
 	epgURL := a.activeEPGURL()
 	if epgURL == "" {
-		ui.Text(c, "当前直播源未提供 EPG 节目单地址。").FontSize(13).TextColor(ui.RGBA(248, 249, 255, 0.72))
+		ui.Box(c).FillWidth().Padding(0, pad).Children(func() {
+			ui.Text(c, "当前直播源未提供 EPG 节目单地址。").FontSize(13).TextColor(ui.RGBA(248, 249, 255, 0.72))
+		})
 		return
 	}
 	progs := a.channelEPGPrograms(ch)
 	if len(progs) == 0 {
-		if a.running(jobEPG) {
-			ui.Text(c, "正在加载节目单…").FontSize(13).TextColor(ui.RGBA(248, 249, 255, 0.75))
-		} else if live.epgErr != "" {
-			ui.Text(c, "节目单加载失败："+live.epgErr).FontSize(12).TextColor(ui.RGB(255, 166, 130))
-		} else {
-			ui.Text(c, "暂无该频道今日节目单").FontSize(13).TextColor(ui.RGBA(248, 249, 255, 0.72))
-		}
+		ui.Box(c).FillWidth().Padding(0, pad).Children(func() {
+			if a.running(jobEPG) {
+				ui.Text(c, "正在加载节目单…").FontSize(13).TextColor(ui.RGBA(248, 249, 255, 0.75))
+			} else if live.epgErr != "" {
+				ui.Text(c, "节目单加载失败："+live.epgErr).FontSize(12).TextColor(ui.RGB(255, 166, 130))
+			} else {
+				ui.Text(c, "暂无该频道今日节目单").FontSize(13).TextColor(ui.RGBA(248, 249, 255, 0.72))
+			}
+		})
 		return
 	}
 	now := a.liveNow()
-	ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).Gap(6).ScrollbarStyle(danmakuScrollbar).Children(func() {
-		for i, prog := range progs {
-			isLive := prog.LiveAt(now)
-			isCatchup := live.catchupProgram != nil && live.catchupProgram.Start.Equal(prog.Start) && live.catchupProgram.Title == prog.Title
-			canReplay := prog.EndedAt(now) && iptv.SupportsCatchup(ch)
-			if canReplay {
-				_, canReplay = iptv.CatchupURL(ch, live.playingStream, prog, now)
-			}
-			bg := ui.RGBA(255, 255, 255, 0.05)
-			border := ui.RGBA(255, 255, 255, 0.08)
-			if isLive || isCatchup {
-				bg = playerCoralSoft
-				border = playerCoralBorder
-			}
-			ui.Row(c.Key(fmt.Sprintf("epg-%d", i))).FillWidth().Padding(8, 10).Gap(8).Radius(11).
-				AlignItems(ui.Center).
-				Background(bg).Border(1, border).Children(func() {
-				ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-					ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, prog.TimeRange()).FontSize(11).TextColor(playerMutedText).SingleLine()
-						if isCatchup {
-							ui.Text(c, "回看中").FontSize(10).Bold().TextColor(ui.RGB(255, 198, 130)).SingleLine()
-						} else if isLive {
-							ui.Text(c, "播出中").FontSize(10).Bold().TextColor(ui.RGB(142, 230, 178)).SingleLine()
+	scrollOuterRight, scrollContentRight := panelScrollInsets(pad)
+	ui.Box(c).FillWidth().Grow(1).MinHeight(0).Padding(0, scrollOuterRight, 0, 0).Children(func() {
+		ui.Scroll(c).FillWidth().FillHeight().Padding(0, scrollContentRight, 0, pad).Gap(6).ScrollbarStyle(panelScrollbar).KeepScrollbars(true).Children(func() {
+			for i, prog := range progs {
+				isLive := prog.LiveAt(now)
+				isCatchup := live.catchupProgram != nil && live.catchupProgram.Start.Equal(prog.Start) && live.catchupProgram.Title == prog.Title
+				canReplay := prog.EndedAt(now) && iptv.SupportsCatchup(ch)
+				if canReplay {
+					_, canReplay = iptv.CatchupURL(ch, live.playingStream, prog, now)
+				}
+				bg := ui.RGBA(255, 255, 255, 0.05)
+				border := ui.RGBA(255, 255, 255, 0.08)
+				if isLive || isCatchup {
+					bg = playerCoralSoft
+					border = playerCoralBorder
+				}
+				ui.Row(c.Key(fmt.Sprintf("epg-%d", i))).FillWidth().Padding(8, 10).Gap(8).Radius(11).
+					AlignItems(ui.Center).
+					Background(bg).Border(1, border).Children(func() {
+					ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+						ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+							ui.Text(c, prog.TimeRange()).FontSize(11).TextColor(playerMutedText).SingleLine()
+							if isCatchup {
+								ui.Text(c, "回看中").FontSize(10).Bold().TextColor(ui.RGB(255, 198, 130)).SingleLine()
+							} else if isLive {
+								ui.Text(c, "播出中").FontSize(10).Bold().TextColor(ui.RGB(142, 230, 178)).SingleLine()
+							}
+						})
+						title := ui.Text(c, prog.Title).FontSize(12.5).SingleLine()
+						if isLive || isCatchup {
+							title.Bold()
 						}
 					})
-					title := ui.Text(c, prog.Title).FontSize(12.5).SingleLine()
-					if isLive || isCatchup {
-						title.Bold()
+					if canReplay {
+						if playerPopoverSmallChip(c, "回看", "回看 "+prog.Title, "回看 "+prog.Title).Clicked() {
+							a.playCatchupProgram(live.playingChannel, live.playingStream, prog)
+						}
 					}
 				})
-				if canReplay {
-					if playerPopoverSmallChip(c, "回看", "回看 "+prog.Title, "回看 "+prog.Title).Clicked() {
-						a.playCatchupProgram(live.playingChannel, live.playingStream, prog)
-					}
-				}
-			})
-		}
+			}
+		})
 	})
 }
 
@@ -589,22 +596,34 @@ func (a *app) liveLastResumeBar(c *ui.Context) {
 	}
 	last := a.live.state.last
 	p := paletteFor(c)
-	bar := ui.Row(c).Key("live-last-resume").FillWidth().Padding(10, 14).Gap(12).AlignItems(ui.Center)
-	applySurface(bar, p, 16).Children(func() {
-		a.renderChannelLogo(c, iptv.Channel{Name: last.ChannelName, Logo: last.Logo}, 32)
-		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-			ui.Text(c, "上次观看 · "+last.ChannelName).Bold().SingleLine()
-			sub := last.Group
-			if idx := a.findLiveChannelByName(last.ChannelName); idx >= 0 {
-				if cur, _ := a.channelEPGCurrent(a.live.channels[idx]); cur != nil {
-					sub = "正在播出：" + cur.Title
-				}
-			}
+	sub := last.Group
+	if idx := a.findLiveChannelByName(last.ChannelName); idx >= 0 {
+		if cur, _ := a.channelEPGCurrent(a.live.channels[idx]); cur != nil {
+			sub = "正在播出：" + cur.Title
+		}
+	}
+	bar := ui.Row(c).Key("live-last-resume").FillWidth().Padding(10, 14).Gap(10).AlignItems(ui.Center)
+	applySurface(bar, p, 11).Children(func() {
+		ui.Box(c).Size(7, 7).Radius(4).Background(p.accent).PassThrough()
+		ui.Row(c).Grow(1).MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "上次观看 · "+last.ChannelName).FontSize(13).Bold().TextColor(p.text).SingleLine()
 			if sub != "" {
-				ui.Text(c, sub).FontSize(12).TextColor(p.textMuted).SingleLine()
+				ui.Text(c, "·  "+sub).FontSize(12.5).TextColor(p.textMuted).SingleLine().Grow(1).MinWidth(0)
 			}
 		})
-		if primaryButton(c, "继续观看").Label("恢复上次频道").Padding(6, 14).Clicked() {
+		resumeBtn := ui.ButtonBase(c.Key("live-last-resume-btn")).Height(32).Padding(0, 14).Gap(6).Radius(9).
+			AlignItems(ui.Center).Cursor(ui.CursorPointer).Label("恢复上次频道")
+		bg := p.accent
+		if resumeBtn.Hovered() {
+			bg = p.accentHover
+		}
+		resumeBtn.Background(resumeBtn.AnimateColor("lres-bg", bg, animColor))
+		applyPressPose(resumeBtn)
+		resumeBtn.Children(func() {
+			ui.Icon(c, iconPlay).Size(11, 11).TextColor(p.accentText).PassThrough()
+			ui.Text(c, "继续观看").FontSize(12.5).Bold().TextColor(p.accentText).SingleLine().PassThrough()
+		})
+		if resumeBtn.Clicked() {
 			a.resumeLastLiveChannel()
 		}
 	})
