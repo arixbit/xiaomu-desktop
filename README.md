@@ -4,7 +4,7 @@
 
 一款基于 MyGo 构建的原生多源播放器。导入自己的 TVBox 配置、IPTV 列表，或直接打开视频链接。 [MyGo 项目](https://github.com/egoist/mygo)
 
-macOS 13+ · Apple Silicon / Intel · Windows 10/11 · x64 · [下载最新版](https://github.com/arixbit/xiaomu-desktop/releases/latest)
+macOS 13+ · Apple Silicon / Intel · Windows 10/11 · x64 / ARM64 · [下载最新版](https://github.com/arixbit/xiaomu-desktop/releases/latest)
 
 - **跨站搜索**　按 `⌘K` 输入片名，同名影片的多个来源集中显示。
 - **选集播放**　在详情页选线路和分集，播放中也能切换来源。
@@ -37,16 +37,16 @@ macOS 13+ · Apple Silicon / Intel · Windows 10/11 · x64 · [下载最新版](
 
 ## 下载与安装
 
-v0.9.9 带来统一影院深色外观与重设计的播放页 HUD/侧栏（新增真实分辨率角标）、播放页 4K 网盘切 1080P 线路/来源的集数归一化匹配与清晰失败反馈、全链路外部 HTTP 连接池调优与请求去重（多仓失效冷却、并发配置读取合并、`drpy` 模块与脚本探测缓存、代理连接池复用），以及片库任务原子取消与详情页「相近结果」闪退修复。macOS 按芯片提供 `arm64` / `amd64` 轻量单架构 DMG 与 ZIP，Windows 提供 x64 安装包；`v0.3.0–v0.9.7` 老版 macOS 仍可通过内置桥接清单自动两跳升级。下载页附有 `SHA256SUMS` 校验文件。[最新版下载](https://github.com/arixbit/xiaomu-desktop/releases/latest) · [v0.9.9 版本说明](docs/releases/v0.9.9.md)
+v0.10.0 带来全项目 Apple 级统一动效语言（弹簧滑移指示条、持久主壳路由连续性、边缘翻转弹层、可打断交互与全链路 `ReduceMotion` 适配）、播放进度条悬停 16:9 实时画面预览、影院深色悬浮舞台与原生失败路由卡、优酷公开直连弹幕与综艺精准匹配，并升级 `mygo-player v0.5.2` 恢复 Windows ARM64 原生支持。macOS 按芯片提供 `arm64` / `amd64` 轻量单架构 DMG 与 ZIP，Windows 提供 `x64` 与 `ARM64` 安装包（均内置对应架构 `mpv-2.dll`）；`v0.3.0–v0.9.7` 老版 macOS 仍可通过内置桥接清单自动两跳升级。下载页附有 `SHA256SUMS` 校验文件。[最新版下载](https://github.com/arixbit/xiaomu-desktop/releases/latest) · [v0.10.0 版本说明](docs/releases/v0.10.0.md)
 
 ### macOS
 
-1. 按芯片架构选择对应安装包：Apple Silicon（M 系列）下载 `xiaomu-0.9.9-arm64.dmg`（或 `xiaomu-0.9.9-macos-arm64.zip`），Intel 下载 `xiaomu-0.9.9-amd64.dmg`（或 `xiaomu-0.9.9-macos-amd64.zip`）；打开 `.dmg` 将 `Xiaomu.app` 拖到“应用程序”（或解压 ZIP 后移动 App）。
+1. 按芯片架构选择对应安装包：Apple Silicon（M 系列）下载 `xiaomu-0.10.0-arm64.dmg`（或 `xiaomu-0.10.0-macos-arm64.zip`），Intel 下载 `xiaomu-0.10.0-amd64.dmg`（或 `xiaomu-0.10.0-macos-amd64.zip`）；打开 `.dmg` 将 `Xiaomu.app` 拖到“应用程序”（或解压 ZIP 后移动 App）。
 2. 本版使用本地签名，尚无 Developer ID 签名及 Apple 公证。首次打开如被系统拦截，请在确认下载来源后，到“系统设置 → 隐私与安全性”选择“仍要打开”。也可以在终端执行 `xattr -d com.apple.quarantine /Applications/Xiaomu.app` 去掉隔离标记，之后双击即可打开；这会跳过 Gatekeeper 的首次检查，只在你信任下载来源时使用。
 
 ### Windows
 
-在 GitHub Releases 下载 `xiaomu-setup-0.9.9-amd64.exe`（Windows x64，内置 `mpv-2.dll`）。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
+在 GitHub Releases 按架构下载 `xiaomu-setup-0.10.0-amd64.exe`（Windows x64）或 `xiaomu-setup-0.10.0-arm64.exe`（Windows ARM64），均内置对应架构 `mpv-2.dll`。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
 
 打开小幕，在首页导入自己的配置。之后可以在侧边栏“片源”页更换配置，或在“直播”页导入自己的频道列表。
 
@@ -55,6 +55,8 @@ v0.9.9 带来统一影院深色外观与重设计的播放页 HUD/侧栏（新�
 小幕只是播放器。它不提供、不收录、不分发任何影视内容。配置和规则由使用者自己提供，使用后果也由使用者自己承担。
 
 ## 功能
+
+v0.10.0 Apple 级统一动效、进度条画面预览、优酷弹幕直连与 Windows ARM64：桌面端与官网收敛至 5 个共享动效原语（弹簧滑移 `Match` 指示条、持久主壳路由连续性、边缘翻转弹层、可打断交互、模糊背景缓存优化与全链路 `ReduceMotion` 适配）；播放进度条新增悬停 16:9 实时画面预览与 `?preview=1` 轻量代理路径；影院深色全页焕新并新增悬浮播放舞台、长标题悬停跑马灯与原生失败路由卡；弹幕新增优酷公开直连来源与综艺精准匹配；升级 `mygo-player v0.5.2` 恢复 Windows ARM64 原生支持。
 
 v0.9.9 影院深色播放页重构、网络性能调优与切源可靠性修复：全应用锁定统一影院深色主题并重设计播放页 HUD、浮层、右侧选集/跳过/直播面板与真实分辨率角标；修复网盘 4K 文件名/单集电影跨源切换 1080P 分集匹配失效及切换失败静默残留旧画面的问题（补齐 OSD 确认、失败红框卡片、仍在播放提示、一键回到当前与重试）；引入 `internal/httpx` 统一调优外部 HTTP 连接池、Keep-Alive 排空与 `httptrace` 慢请求观测，新增多仓失效冷却/并发读取合并、`drpy` 远程模块缓存与 404 负缓存、脚本探测缓存复用及切集代理连接池复用；修复详情页「相近结果」空指针闪退并实现片库后台任务原子取消。
 
