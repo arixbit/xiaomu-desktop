@@ -602,9 +602,10 @@ func (a *app) liveLastResumeBar(c *ui.Context) {
 			sub = "正在播出：" + cur.Title
 		}
 	}
-	bar := ui.Row(c).Key("live-last-resume").FillWidth().Padding(10, 14).Gap(10).AlignItems(ui.Center)
+	bar := ui.Row(c).Key("live-last-resume").FillWidth().Padding(10, 14).Gap(10).AlignItems(ui.Center).
+		Transition(transInlineReveal)
 	applySurface(bar, p, 11).Children(func() {
-		ui.Box(c).Size(7, 7).Radius(4).Background(p.accent).PassThrough()
+		ui.Box(c.Key("live-resume-dot")).Size(7, 7).Radius(4).Background(p.accent).PassThrough()
 		ui.Row(c).Grow(1).MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "上次观看 · "+last.ChannelName).FontSize(13).Bold().TextColor(p.text).SingleLine()
 			if sub != "" {

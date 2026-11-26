@@ -284,7 +284,7 @@ func skipSecondsInput(c *ui.Context, key string, value *int, label string, compa
 	if focused {
 		border = playerCoralBorder
 	}
-	box.Border(1, border)
+	box.Border(1, box.AnimateColor("skip-in-bd", border, animColor))
 	return changed
 }
 
@@ -299,19 +299,21 @@ func skipStampButton(c *ui.Context, key, text, tooltip string, disabled, medium,
 		fontSize = 11
 	}
 	btn := ui.ButtonBase(c.Key(key)).Padding(padY, padX).Radius(7).Center().
-		Cursor(ui.CursorPointer).Label(text).Tooltip(tooltip).Disabled(disabled).Shrink(0).
-		Border(1, ui.RGBA(255, 255, 255, 0.13))
+		Cursor(ui.CursorPointer).Label(text).Tooltip(tooltip).Disabled(disabled).Shrink(0)
 	bg := ui.RGBA(255, 255, 255, 0.06)
+	border := ui.RGBA(255, 255, 255, 0.13)
 	fg := playerText
 	if disabled {
 		fg = ui.RGBA(248, 249, 255, 0.34)
+		border = ui.RGBA(255, 255, 255, 0.08)
 	} else if btn.Hovered() {
 		bg = ui.RGBA(255, 255, 255, 0.14)
+		border = ui.RGBA(255, 255, 255, 0.24)
 	}
-	btn.Background(btn.AnimateColor("skip-stamp-bg", bg, animColor))
+	fgAnim := animateButtonChrome(btn, "skip-stamp", bg, border, fg)
 	applyPressPose(btn)
 	btn.Children(func() {
-		ui.Text(c, text).FontSize(fontSize).TextColor(fg).SingleLine().PassThrough()
+		ui.Text(c, text).FontSize(fontSize).TextColor(fgAnim).SingleLine().PassThrough()
 	})
 	return btn
 }
@@ -369,23 +371,24 @@ func (a *app) panelSeriesSkipsInline(c *ui.Context, panelContentH float32) {
 			if foldBtn.Hovered() {
 				fg = ui.RGB(255, 182, 159)
 			}
+			animFg := foldBtn.AnimateColor("skip-fold-fg", fg, animColor)
+			applyPressPose(foldBtn)
 			foldBtn.Children(func() {
-				ui.Text(c, "片头片尾").FontSize(headingSize).Bold().TextColor(fg).SingleLine().PassThrough()
+				ui.Text(c, "片头片尾").FontSize(headingSize).Bold().TextColor(animFg).SingleLine().PassThrough()
 				if !a.panelSkipOpen && !compact {
 					ui.Spacer(c)
-					ui.Text(c, summary).FontSize(metaSize).TextColor(playerMutedText).SingleLine().PassThrough()
+					ui.Text(c.Key("skip-summary"), summary).FontSize(metaSize).FontFeatures("tnum").
+						TextColor(playerMutedText).SingleLine().Transition(transMicroBadge).PassThrough()
 				}
-				chev := ui.Icon(c, iconChevronDown).Size(13, 13).TextColor(playerMutedText).PassThrough()
-				if a.panelSkipOpen {
-					chev.Rotate(180)
-				}
+				chev := ui.Icon(c.Key("skip-fold-chev"), iconChevronDown).Size(13, 13).TextColor(playerMutedText).PassThrough()
+				applyChevronPose(chev, a.panelSkipOpen)
 			})
 			if foldBtn.Clicked() {
 				a.panelSkipOpen = !a.panelSkipOpen
 				a.panelRevealEpisode = true
 			}
 			if a.panelSkipOpen {
-				ui.Row(c).Gap(5).AlignItems(ui.Center).Shrink(0).Children(func() {
+				ui.Row(c.Key("skip-auto-row")).Gap(5).AlignItems(ui.Center).Shrink(0).Transition(transMicroBadge).Children(func() {
 					ui.Text(c, "自动跳过").FontSize(metaSize).TextColor(playerMutedText).SingleLine()
 					if ui.Switch(c, &rule.Enabled).Label("启用本剧跳过").Changed() {
 						changed = true
@@ -401,62 +404,64 @@ func (a *app) panelSeriesSkipsInline(c *ui.Context, panelContentH float32) {
 			} else if medium {
 				editorPadY = 3
 			}
-			ui.Box(c).FillWidth().Height(1).Background(ui.RGBA(255, 255, 255, 0.08)).Shrink(0).PassThrough()
-			ui.Column(c.Key("panel-skip-editor")).FillWidth().Gap(editorGap).Padding(editorPadY, 0, editorPadY, 0).Children(func() {
-				ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "片头").FontSize(rowSize).TextColor(ui.RGBA(237, 238, 241, 0.92)).SingleLine().Grow(1)
-					if skipSecondsInput(c, "skip-opening-input", &rule.Opening, "跳过片头秒数", compact) {
-						changed = true
-						if rule.Opening > 0 {
-							rule.Enabled = true
+			ui.Column(c.Key("panel-skip-editor")).FillWidth().Gap(editorGap).Transition(transInlineReveal).Children(func() {
+				ui.Box(c).FillWidth().Height(1).Background(ui.RGBA(255, 255, 255, 0.08)).Shrink(0).PassThrough()
+				ui.Column(c).FillWidth().Gap(editorGap).Padding(editorPadY, 0, editorPadY, 0).Children(func() {
+					ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "片头").FontSize(rowSize).TextColor(ui.RGBA(237, 238, 241, 0.92)).SingleLine().Grow(1)
+						if skipSecondsInput(c, "skip-opening-input", &rule.Opening, "跳过片头秒数", compact) {
+							changed = true
+							if rule.Opening > 0 {
+								rule.Enabled = true
+							}
 						}
-					}
-					if skipStampButton(c, "skip-mark-intro", "片头到这", "将当前播放位置设为跳过片头时长", !canStamp, medium, compact).Clicked() {
-						pos := min(int(math.Round(a.player.Position().Seconds())), maxSeriesSkipSeconds)
-						if pos > 0 {
-							rule.Opening, rule.Enabled, changed, stampedOpening = pos, true, true, true
-							a.showPlayerOSD(fmt.Sprintf("已设片头 %d 秒", pos))
+						if skipStampButton(c, "skip-mark-intro", "片头到这", "将当前播放位置设为跳过片头时长", !canStamp, medium, compact).Clicked() {
+							pos := min(int(math.Round(a.player.Position().Seconds())), maxSeriesSkipSeconds)
+							if pos > 0 {
+								rule.Opening, rule.Enabled, changed, stampedOpening = pos, true, true, true
+								a.showPlayerOSD(fmt.Sprintf("已设片头 %d 秒", pos))
+							}
 						}
-					}
-				})
-				ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "片尾").FontSize(rowSize).TextColor(ui.RGBA(237, 238, 241, 0.92)).SingleLine().Grow(1)
-					if skipSecondsInput(c, "skip-ending-input", &rule.Ending, "跳过片尾秒数", compact) {
-						changed = true
-						if rule.Ending > 0 {
-							rule.Enabled = true
+					})
+					ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "片尾").FontSize(rowSize).TextColor(ui.RGBA(237, 238, 241, 0.92)).SingleLine().Grow(1)
+						if skipSecondsInput(c, "skip-ending-input", &rule.Ending, "跳过片尾秒数", compact) {
+							changed = true
+							if rule.Ending > 0 {
+								rule.Enabled = true
+							}
 						}
-					}
-					if skipStampButton(c, "skip-mark-outro", "片尾从这", "将当前位置到片尾的剩余时长设为跳过片尾", !canStamp, medium, compact).Clicked() {
-						rem := min(int(math.Round((dur - a.player.Position()).Seconds())), maxSeriesSkipSeconds)
-						if rem > 0 {
-							rule.Ending, rule.Enabled, changed = rem, true, true
-							a.showPlayerOSD(fmt.Sprintf("已设片尾 %d 秒", rem))
+						if skipStampButton(c, "skip-mark-outro", "片尾从这", "将当前位置到片尾的剩余时长设为跳过片尾", !canStamp, medium, compact).Clicked() {
+							rem := min(int(math.Round((dur - a.player.Position()).Seconds())), maxSeriesSkipSeconds)
+							if rem > 0 {
+								rule.Ending, rule.Enabled, changed = rem, true, true
+								a.showPlayerOSD(fmt.Sprintf("已设片尾 %d 秒", rem))
+							}
 						}
-					}
-				})
-				hint := "填入秒数即启用，本剧各集沿用"
-				if isLocal {
-					hint = "填入秒数即启用，同目录各集沿用"
-				}
-				hintColor := playerMutedText
-				if rule.Opening > 0 || rule.Ending > 0 {
-					hint = "本剧各集沿用"
+					})
+					hint := "填入秒数即启用，本剧各集沿用"
 					if isLocal {
-						hint = "同目录各集沿用"
+						hint = "填入秒数即启用，同目录各集沿用"
 					}
-				}
-				if rule.Enabled && dur > 0 && time.Duration(rule.Opening+rule.Ending)*time.Second >= dur {
-					hint = "片头和片尾合计需短于本集时长"
-					hintColor = ui.RGB(255, 198, 130)
-				} else if rule.Enabled && rule.Ending > 0 && !a.autoNext {
-					hint = "开启「播完自动下一集」后会跳过片尾"
-				}
-				noteSize := float32(11)
-				if compact {
-					noteSize = 10
-				}
-				ui.Text(c, hint).FontSize(noteSize).TextColor(hintColor).SingleLine()
+					hintColor := playerMutedText
+					if rule.Opening > 0 || rule.Ending > 0 {
+						hint = "本剧各集沿用"
+						if isLocal {
+							hint = "同目录各集沿用"
+						}
+					}
+					if rule.Enabled && dur > 0 && time.Duration(rule.Opening+rule.Ending)*time.Second >= dur {
+						hint = "片头和片尾合计需短于本集时长"
+						hintColor = ui.RGB(255, 198, 130)
+					} else if rule.Enabled && rule.Ending > 0 && !a.autoNext {
+						hint = "开启「播完自动下一集」后会跳过片尾"
+					}
+					noteSize := float32(11)
+					if compact {
+						noteSize = 10
+					}
+					ui.Text(c, hint).FontSize(noteSize).TextColor(hintColor).SingleLine().ContentTransition(ctReplace)
+				})
 			})
 		}
 	})

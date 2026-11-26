@@ -1017,17 +1017,17 @@ func (a *app) detailView(c *ui.Context) {
 	posterSrc := a.poster(c, pic)
 
 	ui.Box(c).Fill().Children(func() {
-		if posterSrc != nil && !p.reduceTransparency {
-			ui.Box(c.Key("detail-ambient")).Absolute().Top(0).Left(0).Right(0).Height(310).ZIndex(-1).Clip().PassThrough().Children(func() {
-				ui.Image(c, posterSrc).Fill().Fit(ui.Cover).Blur(46).Opacity(0.28).Cache().
-					MaskLinearGradient(ui.LinearGradient{
-						Angle: 180,
-						Stops: []ui.GradientStop{
-							{Color: ui.RGBA(0, 0, 0, 1), At: 0},
-							{Color: ui.RGBA(0, 0, 0, 0.52), At: 0.55},
-							{Color: ui.Transparent, At: 1},
-						},
-					}).PassThrough()
+		if !p.reduceTransparency {
+			ambient := ui.Box(c.Key("detail-ambient")).Absolute().Top(0).Left(0).Right(0).Height(310).ZIndex(-1).Clip().PassThrough()
+			ambient.Children(func() {
+				applyAmbientPoster(c, ambient, posterSrc, 0.28, 46, ui.LinearGradient{
+					Angle: 180,
+					Stops: []ui.GradientStop{
+						{Color: ui.RGBA(0, 0, 0, 1), At: 0},
+						{Color: ui.RGBA(0, 0, 0, 0.52), At: 0.55},
+						{Color: ui.Transparent, At: 1},
+					},
+				})
 			})
 		}
 		ui.Scroll(c.Key("detail-scroll")).Fill().Padding(62, 24, 24, 24).Gap(18).ScrollbarStyle(appScrollbar).Children(func() {
@@ -1110,8 +1110,12 @@ func (a *app) detailHero(c *ui.Context, t *titlePage, posterSrc ui.ImageSource) 
 					}
 					cta.Background(cta.AnimateColor("detail-cta-bg", bg, animColor))
 					cta.Children(func() {
-						ui.Icon(c, iconPlay).Size(13, 13).TextColor(p.accentText).PassThrough()
-						ui.Text(c, shown).FontSize(13.5).Bold().TextColor(p.accentText).SingleLine().PassThrough()
+						if playingNow {
+							loadingIndicator(c, 12, p.accentText)
+						} else {
+							ui.Icon(c, iconPlay).Size(13, 13).TextColor(p.accentText).PassThrough()
+						}
+						ui.Text(c, shown).FontSize(13.5).Bold().TextColor(p.accentText).SingleLine().ContentTransition(ctReplace).PassThrough()
 					})
 					if applyPressPose(cta).Clicked() {
 						a.playEpisodeAt(lineName, ep, at)
@@ -1176,10 +1180,13 @@ func (a *app) detailHeroSynopsis(c *ui.Context, t *titlePage) {
 		return
 	}
 	ui.Column(c).FillWidth().Gap(4).Children(func() {
-		synopsis := ui.Text(c, t.detail.Content).FontSize(13).LineHeight(1.55).TextColor(p.textMuted)
-		if !t.synopsisExpanded {
-			synopsis.MaxLines(2)
-		}
+		ui.Box(c.Key("detail-synopsis-wrap")).FillWidth().Clip().
+			Transition(ui.ElementTransition{Animation: &animSurface, Height: true}).Children(func() {
+			synopsis := ui.Text(c, t.detail.Content).FontSize(13).LineHeight(1.55).TextColor(p.textMuted)
+			if !t.synopsisExpanded {
+				synopsis.MaxLines(2)
+			}
+		})
 		shown, a11y := "更多", "展开简介"
 		if t.synopsisExpanded {
 			shown, a11y = "收起", "收起简介"
@@ -1190,8 +1197,9 @@ func (a *app) detailHeroSynopsis(c *ui.Context, t *titlePage) {
 		if toggle.Hovered() {
 			fg = p.accent
 		}
+		animFg := toggle.AnimateColor("syn-fg", fg, animColor)
 		toggle.Children(func() {
-			ui.Text(c, shown).FontSize(12.5).Bold().TextColor(fg).SingleLine().PassThrough()
+			ui.Text(c, shown).FontSize(12.5).Bold().TextColor(animFg).SingleLine().ContentTransition(ctReplace).PassThrough()
 		})
 		if applyPressPose(toggle).Clicked() {
 			t.synopsisExpanded = !t.synopsisExpanded
@@ -1212,9 +1220,9 @@ func (a *app) detailRelatedButton(c *ui.Context, count int) {
 		border = p.borderControl
 		fg = p.text
 	}
-	btn.Background(btn.AnimateColor("detail-related-bg", bg, animColor)).Border(1, border)
+	animFg := animateButtonChrome(btn, "detail-related", bg, border, fg)
 	btn.Children(func() {
-		ui.Text(c, label+" ›").FontSize(12).TextColor(fg).SingleLine().PassThrough()
+		ui.Text(c, label+" ›").FontSize(12).FontFeatures("tnum").TextColor(animFg).SingleLine().ContentTransition(ctNumeric).PassThrough()
 	})
 	if applyPressPose(btn).Clicked() {
 		a.showRelated()
@@ -1315,7 +1323,7 @@ func (a *app) detailSourceStrip(c *ui.Context, candidates []library.Item) {
 			ui.Text(c, "片源").FontSize(14).Bold().TextColor(p.text).SingleLine().Shrink(0)
 			if len(candidates) > 0 {
 				ui.Text(c, fmt.Sprintf("共 %d 个来源", len(candidates))).
-					FontSize(12).TextColor(p.textFaint).SingleLine().Shrink(0).ContentTransition(ctNumeric)
+					FontSize(12).FontFeatures("tnum").TextColor(p.textFaint).SingleLine().Shrink(0).ContentTransition(ctNumeric)
 			}
 			switch {
 			case searching:
@@ -1328,9 +1336,9 @@ func (a *app) detailSourceStrip(c *ui.Context, candidates []library.Item) {
 				}
 				stopBtn.Background(stopBtn.AnimateColor("detail-search-bg", bg, animColor)).Border(1, p.accentBorder)
 				stopBtn.Children(func() {
-					ui.Spinner(c).Size(11, 11).TextColor(p.accent).PassThrough()
+					loadingIndicator(c, 11, p.accent)
 					ui.Text(c, fmt.Sprintf("后台找源 %d/%d", search.progress.Completed, search.progress.Total)).
-						FontSize(12).TextColor(p.accentLightText).SingleLine().ContentTransition(ctNumeric).PassThrough()
+						FontSize(12).FontFeatures("tnum").TextColor(p.accentLightText).SingleLine().ContentTransition(ctNumeric).PassThrough()
 					ui.Text(c, "· 停止").FontSize(11.5).TextColor(p.textMuted).SingleLine().PassThrough()
 				})
 				if applyPressPose(stopBtn).Clicked() {
@@ -1347,10 +1355,10 @@ func (a *app) detailSourceStrip(c *ui.Context, candidates []library.Item) {
 					border = p.borderControl
 					fg = p.text
 				}
-				findBtn.Background(findBtn.AnimateColor("detail-find-bg", bg, animColor)).Border(1, border)
+				animFg := animateButtonChrome(findBtn, "detail-find", bg, border, fg)
 				findBtn.Children(func() {
-					ui.Icon(c, librarySearchIcon).Size(12, 12).TextColor(fg).PassThrough()
-					ui.Text(c, "查找其他来源").FontSize(12).TextColor(fg).SingleLine().PassThrough()
+					ui.Icon(c, librarySearchIcon).Size(12, 12).TextColor(animFg).PassThrough()
+					ui.Text(c, "查找其他来源").FontSize(12).TextColor(animFg).SingleLine().PassThrough()
 				})
 				if applyPressPose(findBtn).Clicked() {
 					a.startScan(search, t.name, false)
@@ -1412,7 +1420,7 @@ func (a *app) detailSourceStrip(c *ui.Context, candidates []library.Item) {
 			if reason := t.failed[itemKey(t.item)]; reason != "" {
 				failHint += " · " + reason
 			}
-			ui.Text(c, failHint).FontSize(12.5).TextColor(p.dangerLightText)
+			ui.Text(c.Key("detail-cur-failed"), failHint).FontSize(12.5).TextColor(p.dangerLightText).Transition(transInlineBanner)
 		}
 		if len(candidates) == 0 && !searching {
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
@@ -1428,7 +1436,7 @@ func (a *app) detailSourceStrip(c *ui.Context, candidates []library.Item) {
 func (a *app) detailFailureBanner(c *ui.Context, f *episodeFailure) {
 	p := paletteFor(c)
 	ui.Row(c.Key("detail-failure")).FillWidth().Padding(10, 14).Gap(12).AlignItems(ui.Center).Wrap().
-		Radius(11).Background(p.dangerSoft).Border(1, p.dangerBorder).Transition(transInlineBanner).Children(func() {
+		Radius(11).Background(p.dangerSoft).Border(1, p.dangerBorder).Transition(transInlineReveal).Children(func() {
 		ui.Column(c).Grow(1).MinWidth(220).Gap(3).Children(func() {
 			ui.Text(c, f.line+" · "+f.episode.Name).FontSize(13).Bold().TextColor(p.dangerLightText)
 			ui.Text(c, f.err.Error()).FontSize(12.5).Selectable().TextColor(p.textMuted)
@@ -1502,7 +1510,7 @@ func (a *app) detailPlaybackSection(c *ui.Context) {
 							if name == "" {
 								name = fmt.Sprintf("线路 %d", i+1)
 							}
-							if underlineTab(c, fmt.Sprintf("line-%d", i), name, i == t.line).Clicked() {
+							if underlineTab(c, "detail-line", fmt.Sprintf("line-%d", i), name, i == t.line).Clicked() {
 								t.line, t.chunk = i, 0
 								a.playFailure = nil
 							}
@@ -1515,13 +1523,13 @@ func (a *app) detailPlaybackSection(c *ui.Context) {
 					ui.Row(c).Gap(14).AlignItems(ui.Center).Shrink(0).Children(func() {
 						for i := 0; i*episodeChunk < count; i++ {
 							label := fmt.Sprintf("%d–%d", i*episodeChunk+1, min((i+1)*episodeChunk, count))
-							if underlineTab(c, fmt.Sprintf("chunk-%d", i), label, i == t.chunk).Clicked() {
+							if underlineTab(c, "detail-chunk", fmt.Sprintf("chunk-%d", i), label, i == t.chunk).Clicked() {
 								t.chunk = i
 							}
 						}
 					})
 				} else if count > 1 {
-					ui.Text(c, fmt.Sprintf("共 %d 集", count)).FontSize(12).TextColor(p.textFaint).
+					ui.Text(c, fmt.Sprintf("共 %d 集", count)).FontSize(12).FontFeatures("tnum").TextColor(p.textFaint).
 						SingleLine().Shrink(0).ContentTransition(ctNumeric)
 				}
 			})
@@ -1656,7 +1664,7 @@ func (a *app) detailEpisodeButton(c *ui.Context, key int, episode catalog.Episod
 			fg = p.text
 		}
 	}
-	btn.Background(btn.AnimateColor("ep-bg", bg, animColor)).Border(1, border)
+	animFg := animateButtonChrome(btn, "ep", bg, border, fg)
 	innerW := max(float32(0), btn.Bounds().W-2*padX-2)
 	btn.Children(func() {
 		a.hoverMarqueeText(c, marqueeTextOptions{
@@ -1664,7 +1672,7 @@ func (a *app) detailEpisodeButton(c *ui.Context, key int, episode catalog.Episod
 			text:       label,
 			fontSize:   13,
 			bold:       active,
-			color:      fg,
+			color:      animFg,
 			hovered:    hovered,
 			centered:   true,
 			fillHeight: true,

@@ -133,15 +133,36 @@ func (a *app) followingRefreshButton(c *ui.Context) {
 	if a.library.root == nil {
 		return
 	}
-	if a.favorites.refreshing {
-		if glassButton(c, "取消检查").Label("取消检查更新").Clicked() {
+	p := paletteFor(c)
+	refreshing := a.favorites.refreshing
+	label, a11y := "刷新追剧", "刷新追剧"
+	if refreshing {
+		label, a11y = "取消检查", "取消检查更新"
+	}
+	btn := ui.ButtonBase(c.Key("fav-page-refresh")).Radius(9).Padding(7, 14).Gap(6).
+		AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(a11y)
+	bg := p.controlBg
+	border := p.borderControl
+	fg := p.text
+	if btn.Hovered() {
+		bg = p.controlHover
+		border = ui.RGBA(255, 255, 255, 0.20)
+	}
+	animFg := animateButtonChrome(btn, "fav-ref", bg, border, fg)
+	applyPressPose(btn)
+	btn.Children(func() {
+		if refreshing {
+			loadingIndicator(c, 12, p.accent)
+		}
+		ui.Text(c, label).FontSize(13).TextColor(animFg).SingleLine().ContentTransition(ctReplace).PassThrough()
+	})
+	if btn.Clicked() {
+		if refreshing {
 			a.cancelFollowingRefresh()
 			a.setNotice("已取消检查更新")
+		} else {
+			a.refreshFollowingMode(true)
 		}
-		return
-	}
-	if glassButton(c, "刷新追剧").Clicked() {
-		a.refreshFollowingMode(true)
 	}
 }
 

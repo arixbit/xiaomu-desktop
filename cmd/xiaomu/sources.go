@@ -140,13 +140,13 @@ func (a *app) sourcesView(c *ui.Context) {
 	ui.Column(c).Fill().Gap(12).Children(func() {
 		ui.Row(c).FillWidth().Padding(0, scrollGutter, 0, 0).Wrap().Gap(10).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
 			ui.Row(c).Gap(20).AlignItems(ui.End).Children(func() {
-				if underlineTab(c, "sources-tab-vod", vodTabText, a.sourcesTab == 0).Label("影视点播").Clicked() {
+				if underlineTab(c, "sources-pillar", "sources-tab-vod", vodTabText, a.sourcesTab == 0).Label("影视点播").Clicked() {
 					if a.sourcesTab != 0 {
 						a.sourcesTab = 0
 						a.clearArmed()
 					}
 				}
-				if underlineTab(c, "sources-tab-live", liveTabText, a.sourcesTab == 1).Label("直播源").Clicked() {
+				if underlineTab(c, "sources-pillar", "sources-tab-live", liveTabText, a.sourcesTab == 1).Label("直播源").Clicked() {
 					if a.sourcesTab != 1 {
 						a.sourcesTab = 1
 						a.clearArmed()
@@ -193,22 +193,26 @@ func (a *app) sourcesView(c *ui.Context) {
 			})
 		})
 		if a.speedTest.running {
-			ui.Box(c).FillWidth().Padding(0, scrollGutter, 0, 0).Children(func() {
-				banner := ui.Row(c).Key("speed-progress").FillWidth().Padding(8, 12).Gap(10).AlignItems(ui.Center).Transition(transInlineBanner)
-				applyInnerSurface(banner, p, 9).Children(func() {
-					ui.Text(c, fmt.Sprintf("测速中 %d/%d…", a.speedTest.done, a.speedTest.total)).
-						FontSize(12.5).TextColor(p.textMuted).ContentTransition(ctNumeric)
-					if a.speedTest.total > 0 {
-						ui.Progress(c, float64(a.speedTest.done)/float64(a.speedTest.total)).Grow(1).Label("测速进度")
-					}
-				})
+			banner := ui.Row(c.Key("speed-progress")).FillWidth().Margin(0, scrollGutter, 0, 0).Padding(8, 12).Gap(10).
+				AlignItems(ui.Center).Transition(transInlineBanner)
+			applyInnerSurface(banner, p, 9).Children(func() {
+				loadingIndicator(c, 12, p.accent)
+				ui.Text(c, fmt.Sprintf("测速中 %d/%d…", a.speedTest.done, a.speedTest.total)).
+					FontSize(12.5).FontFeatures("tnum").TextColor(p.textMuted).ContentTransition(ctNumeric)
+				if a.speedTest.total > 0 {
+					ui.Progress(c, float64(a.speedTest.done)/float64(a.speedTest.total)).Grow(1).Label("测速进度")
+				}
 			})
 		}
-		if a.sourcesTab == 0 {
-			a.sourcesVODTab(c, stats)
-		} else {
-			a.sourcesLiveTab(c, liveChannels)
-		}
+		ui.Box(c.Key("sources-tab-host")).Grow(1).FillWidth().MinHeight(0).Clip().Children(func() {
+			ui.Box(c.Key(fmt.Sprintf("sources-tab-%d", a.sourcesTab))).Fill().Transition(transTabPage).Children(func() {
+				if a.sourcesTab == 0 {
+					a.sourcesVODTab(c, stats)
+				} else {
+					a.sourcesLiveTab(c, liveChannels)
+				}
+			})
+		})
 	})
 }
 
@@ -252,8 +256,11 @@ func (a *app) sourcesVODTab(c *ui.Context, stats sourcesSiteStats) {
 					})
 				}
 			})
-			if a.running(jobConfig) {
-				ui.Text(c, "正在加载配置…").FontSize(12.5).TextColor(p.textMuted)
+			if a.running(jobConfig) && l.root == nil {
+				ui.Row(c.Key("config-loading-row")).Gap(8).AlignItems(ui.Center).Transition(transInlineBanner).Children(func() {
+					loadingIndicator(c, 12, p.textMuted)
+					ui.Text(c, "正在加载配置…").FontSize(12.5).TextColor(p.textMuted)
+				})
 			}
 			ui.Box(c).FillWidth().Height(1).Background(p.divider).PassThrough()
 			a.panCredentialsSection(c)
@@ -266,13 +273,13 @@ func (a *app) sourcesVODTab(c *ui.Context, stats sourcesSiteStats) {
 					ui.Row(c).Wrap().Gap(16).AlignItems(ui.Center).Children(func() {
 						ui.Text(c, "可用站点").FontSize(15.5).Bold()
 						ui.Row(c).Gap(14).AlignItems(ui.End).Children(func() {
-							if underlineTab(c, "sources-filter-all", fmt.Sprintf("全部 (%d)", stats.allVisible), a.sourcesSiteFilter == 0).Label("全部").Clicked() {
+							if underlineTab(c, "sources-filter", "sources-filter-all", fmt.Sprintf("全部 (%d)", stats.allVisible), a.sourcesSiteFilter == 0).Label("全部").Clicked() {
 								a.sourcesSiteFilter = 0
 							}
-							if underlineTab(c, "sources-filter-pan", fmt.Sprintf("网盘站 (%d)", stats.panVisible), a.sourcesSiteFilter == 1).Label("网盘站").Clicked() {
+							if underlineTab(c, "sources-filter", "sources-filter-pan", fmt.Sprintf("网盘站 (%d)", stats.panVisible), a.sourcesSiteFilter == 1).Label("网盘站").Clicked() {
 								a.sourcesSiteFilter = 1
 							}
-							if underlineTab(c, "sources-filter-regular", fmt.Sprintf("常规站 (%d)", stats.regularVisible), a.sourcesSiteFilter == 2).Label("常规站").Clicked() {
+							if underlineTab(c, "sources-filter", "sources-filter-regular", fmt.Sprintf("常规站 (%d)", stats.regularVisible), a.sourcesSiteFilter == 2).Label("常规站").Clicked() {
 								a.sourcesSiteFilter = 2
 							}
 						})
@@ -349,7 +356,7 @@ func (a *app) sourcesLiveTab(c *ui.Context, liveChannels int) {
 					ui.Text(c, "当前直播源配置").FontSize(15.5).Bold()
 					if liveChannels > 0 {
 						ui.Text(c, fmt.Sprintf("%d 频道", liveChannels)).
-							Padding(2, 8).Radius(5).FontSize(11).Bold().
+							Padding(2, 8).Radius(5).FontSize(11).Bold().FontFeatures("tnum").
 							Background(ui.RGBA(63, 185, 106, 0.16)).
 							Border(1, ui.RGBA(63, 185, 106, 0.36)).
 							TextColor(p.successText).SingleLine().ContentTransition(ctNumeric)
@@ -395,8 +402,10 @@ func (a *app) sourcesLiveTab(c *ui.Context, liveChannels int) {
 				if goLive.Hovered() {
 					fg = p.text
 				}
+				animGoLiveFg := goLive.AnimateColor("go-live-fg", fg, animColor)
+				applyPressPose(goLive)
 				goLive.Children(func() {
-					ui.Text(c, "前往直播 ›").FontSize(12).TextColor(fg).SingleLine().PassThrough()
+					ui.Text(c, "前往直播 ›").FontSize(12).TextColor(animGoLiveFg).SingleLine().PassThrough()
 				})
 				if goLive.Clicked() {
 					a.switchTab(routeLive)
@@ -411,17 +420,20 @@ func (a *app) sourcesLiveTab(c *ui.Context, liveChannels int) {
 					}
 					row := ui.Row(c).Key(fmt.Sprintf("live-src-%d", i)).FillWidth().Padding(11, 14).Gap(12).AlignItems(ui.Center)
 					applyInnerSurface(row, p, 10)
+					rowBorder := p.border
 					if active {
-						row.Border(1, p.accentBorder)
+						rowBorder = p.accentBorder
 					}
+					row.Border(1, row.AnimateColor("lsrc-bd", rowBorder, animColor))
 					row.Children(func() {
 						dotColor := p.success
 						if active {
 							dotColor = p.accent
 						}
+						animDot := row.AnimateColor("lsrc-dot", dotColor, animColor)
 						ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
 							ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
-								ui.Box(c).Size(7, 7).Radius(4).Background(dotColor).PassThrough()
+								ui.Box(c).Size(7, 7).Radius(4).Background(animDot).PassThrough()
 								ui.Text(c, name).FontSize(13.5).Bold().SingleLine()
 								if active {
 									specMicroBadge(c, "当前源", true)

@@ -161,16 +161,18 @@ func updateButton(c *ui.Context, version string) ui.Element {
 		fg = p.text
 	}
 	button.Background(button.AnimateColor("side-upd-bg", bg, animColor))
+	animFg := button.AnimateColor("side-upd-fg", fg, animColor)
 	applyPressPose(button)
 	if version != "" {
 		button.Tooltip("新版本 " + version + " 可用，点击查看更新")
 	}
 	button.Children(func() {
-		ui.Icon(c, navIconUpdate).Size(16, 16).TextColor(fg).PassThrough()
-		ui.Text(c, label).FontSize(13).TextColor(fg).SingleLine().ContentTransition(ctReplace).PassThrough()
+		ui.Icon(c, navIconUpdate).Size(16, 16).TextColor(animFg).PassThrough()
+		ui.Text(c, label).FontSize(13).TextColor(animFg).SingleLine().ContentTransition(ctReplace).PassThrough()
 		if version != "" {
 			ui.Spacer(c)
-			ui.Box(c).Size(7, 7).Radius(4).Background(p.accent).Label("新版本提示").PassThrough()
+			ui.Box(c.Key("upd-dot")).Size(7, 7).Radius(4).Background(p.accent).
+				Label("新版本提示").Transition(transMicroBadge).PassThrough()
 		}
 	})
 	return button
@@ -200,11 +202,13 @@ func updateRailButton(c *ui.Context, version string, height float32) ui.Element 
 		fg = p.text
 	}
 	btn.Background(btn.AnimateColor("rail-upd-bg", bg, animColor))
+	animFg := btn.AnimateColor("rail-upd-fg", fg, animColor)
 	applyPressPose(btn)
 	btn.Children(func() {
-		ui.Icon(c, navIconUpdate).Size(17, 17).TextColor(fg).PassThrough()
+		ui.Icon(c, navIconUpdate).Size(17, 17).TextColor(animFg).PassThrough()
 		if version != "" {
-			ui.Box(c).Size(7, 7).Radius(4).Absolute().Right(10).Top(8).Background(p.accent).Label("新版本提示").PassThrough()
+			ui.Box(c.Key("rail-upd-dot")).Size(7, 7).Radius(4).Absolute().Right(10).Top(8).
+				Background(p.accent).Label("新版本提示").Transition(transMicroBadge).PassThrough()
 		}
 	})
 	return btn

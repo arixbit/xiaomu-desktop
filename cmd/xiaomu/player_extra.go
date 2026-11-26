@@ -174,7 +174,7 @@ func (a *app) toggleMiniMode() {
 		return
 	}
 	a.enterMiniMode()
-	a.showPlayerOSD("迷你置顶小窗")
+	a.showPlayerOSD("已进入迷你小窗")
 }
 
 func (a *app) enterMiniMode() {
@@ -238,11 +238,9 @@ func (a *app) playerMiniDragStrip(c *ui.Context, height float32, showHandle bool
 	strip := ui.Row(c).Key("hud-mini-drag").Absolute().Top(0).Left(0).Right(0).Height(height).
 		Padding(0, bar.Right, 0, bar.Left).Justify(ui.Center).AlignItems(ui.Center).
 		DragWindow().Label("拖动窗口（迷你小窗）")
-	if !showHandle {
-		return
-	}
 	strip.Children(func() {
-		ui.Box(c).Width(36).Height(4).Radius(2).Background(ui.RGBA(248, 249, 255, 0.45))
+		handle := ui.Box(c.Key("mini-drag-handle")).Width(36).Height(4).Radius(2).Background(ui.RGBA(248, 249, 255, 0.45)).PassThrough()
+		applyFadeInOut(handle, showHandle)
 	})
 }
 
@@ -255,12 +253,14 @@ func (a *app) playerMiniControls(c *ui.Context, p mediaPlayer) {
 			TextColor(playerText).Children(func() {
 			playLabel := "暂停"
 			playIcon := iconPause
+			playTip := "暂停 (Space)"
 			if !p.Playing() {
 				playLabel = "播放"
 				playIcon = iconPlay
+				playTip = "播放 (Space)"
 			}
 			playBtn := ui.ButtonBase(c.Key("mini-play-toggle")).Size(30, 30).Radius(15).Center().
-				Cursor(ui.CursorPointer).Label(playLabel).Tooltip("播放 / 暂停 (Space)").
+				Cursor(ui.CursorPointer).Label(playLabel).Tooltip(playTip).
 				Border(1, ui.RGBA(255, 255, 255, 0.14))
 			playBg := ui.RGBA(255, 255, 255, 0.18)
 			if playBtn.Hovered() {
@@ -269,7 +269,7 @@ func (a *app) playerMiniControls(c *ui.Context, p mediaPlayer) {
 			playBtn.Background(playBtn.AnimateColor("mini-play-bg", playBg, animColor))
 			applyPressPose(playBtn)
 			playBtn.Children(func() {
-				ui.Icon(c, playIcon).Size(15, 15).TextColor(playerText).PassThrough()
+				ui.Icon(c, playIcon).Size(15, 15).TextColor(playerText).ContentTransition(ctIcon).PassThrough()
 			})
 			if playBtn.Clicked() {
 				togglePlayback(p)
@@ -734,10 +734,10 @@ func (a *app) playbackStatsOverlay(c *ui.Context, p mediaPlayer) {
 	}
 	ui.Column(c.Key("playback-stats")).Absolute().Top(top).Left(left).Padding(10, 14).Gap(4).Radius(14).
 		Material(glass.Glass{Style: glass.Regular, Tint: ui.RGBA(10, 14, 26, 0.80)}).
-		TextColor(playerText).PassThrough().Label("播放信息浮层").Children(func() {
+		TextColor(playerText).PassThrough().Label("播放信息浮层").Transition(transOSD).Children(func() {
 		ui.Text(c, "播放信息").FontSize(12).Bold().TextColor(ui.RGBA(248, 249, 255, 0.92))
 		for _, line := range a.playerExtra.statsCache.lines {
-			ui.Text(c, line).FontSize(11).TextColor(ui.RGBA(228, 234, 250, 0.86)).SingleLine()
+			ui.Text(c, line).FontSize(11).FontFeatures("tnum").TextColor(ui.RGBA(228, 234, 250, 0.86)).SingleLine()
 		}
 		ui.Text(c, "按 I 键关闭").FontSize(10).TextColor(ui.RGBA(200, 210, 235, 0.56)).SingleLine()
 	})
@@ -1196,9 +1196,6 @@ func (a *app) loadOnlineSubtitle(cand subtitle.Candidate) {
 
 func (a *app) subtitleDialog(c *ui.Context, p mediaPlayer) {
 	so := &a.playerExtra.subOnline
-	if !so.open {
-		return
-	}
 	tp, ok := p.(trackCapablePlayer)
 	if !ok {
 		so.open = false
@@ -1206,190 +1203,199 @@ func (a *app) subtitleDialog(c *ui.Context, p mediaPlayer) {
 	}
 	a.ensurePreferences()
 	sp := &a.preferences.Subtitle
-	ui.Themed(c, appDarkTheme(c)).Absolute().Left(0).Right(0).Top(0).Bottom(0).
-		Background(ui.Transparent).PassThrough().Children(func() {
-		pal := paletteFor(c)
-		ui.DialogBase(c, &so.open, func(backdrop, panel ui.Element) {
-			backdrop.Background(ui.RGBA(2, 8, 22, 0.24)).Transition(transDialogScrim)
-			_, height := c.Size()
-			panel.Width(548).MaxWidth(548).Height(min(float32(680), height-32)).
-				Padding(18, 8, 16, 20).Gap(10).Radius(24).
-				Material(glass.Glass{Style: glass.Regular, Tint: ui.RGBA(18, 22, 38, 0.86)}).
-				TextColor(playerText).Transition(transDialogPanel)
-			ui.Row(c).FillWidth().Padding(0, 16, 0, 0).Gap(10).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "字幕设置与在线匹配").FontSize(20).Bold().Grow(1)
-				ui.Text(c, "[ / ] 微调偏移").FontSize(12).TextColor(pal.textMuted)
-			})
-			ui.Scroll(c).Label("字幕设置内容").FillWidth().Grow(1).MinHeight(0).
-				Padding(4, 16, 4, 0).Gap(10).
-				ScrollbarStyle(danmakuScrollbar).ScrollbarInsets(4, 0, 4, 0).
-				Children(func() {
-					// 1. Offset, Style & Language Preference
-					subActive := hasActiveSubtitleTrack(p)
-					danmakuSection(c, func() {
-						ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, "时间偏移").Width(64)
-							for _, step := range []struct {
-								label string
-								delta time.Duration
-							}{
-								{"提前 2s", -2 * time.Second},
-								{"提前 0.5s", -500 * time.Millisecond},
-								{"推迟 0.5s", 500 * time.Millisecond},
-								{"推迟 2s", 2 * time.Second},
-							} {
-								if glassButton(c, step.label).Label("字幕偏移 "+step.label).FontSize(12).Padding(5, 7).
-									Disabled(!subActive).Clicked() {
-									a.adjustSubtitleDelay(p, step.delta)
-								}
+	pal := paletteFor(c)
+	keyedDialog(c, "dlg-subtitle", &so.open, func(backdrop, panel ui.Element) {
+		backdrop.Background(ui.RGBA(2, 8, 22, 0.24)).Transition(transDialogScrim)
+		_, height := c.Size()
+		panel.Width(548).MaxWidth(548).Height(min(float32(680), height-32)).
+			Padding(18, 8, 16, 20).Gap(10).Radius(24).
+			Material(glass.Glass{Style: glass.Regular, Tint: ui.RGBA(18, 22, 38, 0.86)}).
+			TextColor(playerText)
+		applyDialogPanelPose(c, panel)
+		ui.Row(c).FillWidth().Padding(0, 16, 0, 0).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "字幕设置与在线匹配").FontSize(20).Bold().Grow(1)
+			ui.Text(c, "[ / ] 微调偏移").FontSize(12).TextColor(pal.textMuted)
+		})
+		ui.Scroll(c).Label("字幕设置内容").FillWidth().Grow(1).MinHeight(0).
+			Padding(4, 16, 4, 0).Gap(10).
+			ScrollbarStyle(danmakuScrollbar).ScrollbarInsets(4, 0, 4, 0).
+			Children(func() {
+				// 1. Offset, Style & Language Preference
+				subActive := hasActiveSubtitleTrack(p)
+				danmakuSection(c, func() {
+					ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "时间偏移").Width(64)
+						for _, step := range []struct {
+							label string
+							delta time.Duration
+						}{
+							{"提前 2s", -2 * time.Second},
+							{"提前 0.5s", -500 * time.Millisecond},
+							{"推迟 0.5s", 500 * time.Millisecond},
+							{"推迟 2s", 2 * time.Second},
+						} {
+							if glassButton(c, step.label).Label("字幕偏移 "+step.label).FontSize(12).Padding(5, 7).
+								Disabled(!subActive).Clicked() {
+								a.adjustSubtitleDelay(p, step.delta)
 							}
-							ui.Text(c, formatSubtitleDelay(a.playerExtra.subDelay)).FontSize(12).
-								TextColor(pal.textMuted).TextAlign(ui.End).Grow(1).ContentTransition(ctNumeric)
-							if glassButton(c, "重置").Label("重置字幕偏移").Padding(5, 9).
-								Disabled(!subActive || a.playerExtra.subDelay == 0).Clicked() {
-								a.resetSubtitleDelay(p)
-							}
-						})
-						ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, "字号缩放").Width(64)
-							if ui.Slider(c, &sp.Scale, 0.5, 2.0).Label("字幕字号缩放").Grow(1).Changed() {
-								a.applySubtitlePreferences(p)
-								a.savePreferences()
-							}
-							ui.Text(c, fmt.Sprintf("%.0f%%", sp.Scale*100)).Width(46).TextAlign(ui.End).
-								TextColor(pal.textMuted).ContentTransition(ctNumeric)
-						})
-						posFloat := float64(sp.Pos)
-						ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, "垂直位置").Width(64)
-							if ui.Slider(c, &posFloat, 50, 100).Label("字幕垂直位置").Grow(1).Changed() {
-								sp.Pos = int(math.Round(posFloat))
-								a.applySubtitlePreferences(p)
-								a.savePreferences()
-							}
-							ui.Text(c, fmt.Sprintf("%d%%", sp.Pos)).Width(46).TextAlign(ui.End).
-								TextColor(pal.textMuted).ContentTransition(ctNumeric)
-						})
-						ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, "优先自动选择中文字幕").Grow(1)
-							if ui.Switch(c, &sp.PreferChinese).Label("优先中文字幕").Changed() {
-								a.applySubtitlePreferences(p)
-								a.savePreferences()
-							}
-						})
-					})
-
-					// 2. Local & Track quick actions
-					danmakuSection(c, func() {
-						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, "当前字幕轨").Bold().Grow(1)
-							if glassButton(c, "加载本地字幕…").Padding(5, 10).Clicked() {
-								a.openSubtitleFileDialog()
-							}
-						})
-						tracks := tp.SubtitleTracks()
-						visible := tp.SubtitleVisible()
-						if len(tracks) == 0 {
-							ui.Text(c, "当前视频无内嵌或已加载字幕").FontSize(12).TextColor(pal.textMuted)
-						} else {
-							ui.Column(c).FillWidth().Gap(6).Children(func() {
-								for i, tr := range tracks {
-									selected := tr.Selected && visible
-									label := formatSubtitleTrackLabel(tr, i)
-									if danmakuEpisodeButton(c.Key(fmt.Sprintf("subdlg-%d", tr.ID)), label, selected).Clicked() {
-										if err := tp.SelectSubtitleTrack(tr.ID); err != nil {
-											so.failed = true
-											so.message = "切换字幕失败：" + err.Error()
-										}
-									}
-								}
-							})
+						}
+						ui.Text(c, formatSubtitleDelay(a.playerExtra.subDelay)).FontSize(12).FontFeatures("tnum").
+							TextColor(pal.textMuted).TextAlign(ui.End).Grow(1).ContentTransition(ctNumeric)
+						if glassButton(c, "重置").Label("重置字幕偏移").Padding(5, 9).
+							Disabled(!subActive || a.playerExtra.subDelay == 0).Clicked() {
+							a.resetSubtitleDelay(p)
 						}
 					})
+					ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "字号缩放").Width(64)
+						if ui.Slider(c, &sp.Scale, 0.5, 2.0).Label("字幕字号缩放").Grow(1).Changed() {
+							a.applySubtitlePreferences(p)
+							a.savePreferences()
+						}
+						ui.Text(c, fmt.Sprintf("%.0f%%", sp.Scale*100)).Width(46).FontFeatures("tnum").TextAlign(ui.End).
+							TextColor(pal.textMuted).ContentTransition(ctNumeric)
+					})
+					posFloat := float64(sp.Pos)
+					ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "垂直位置").Width(64)
+						if ui.Slider(c, &posFloat, 50, 100).Label("字幕垂直位置").Grow(1).Changed() {
+							sp.Pos = int(math.Round(posFloat))
+							a.applySubtitlePreferences(p)
+							a.savePreferences()
+						}
+						ui.Text(c, fmt.Sprintf("%d%%", sp.Pos)).Width(46).FontFeatures("tnum").TextAlign(ui.End).
+							TextColor(pal.textMuted).ContentTransition(ctNumeric)
+					})
+					ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "优先自动选择中文字幕").Grow(1)
+						if ui.Switch(c, &sp.PreferChinese).Label("优先中文字幕").Changed() {
+							a.applySubtitlePreferences(p)
+							a.savePreferences()
+						}
+					})
+				})
 
-					// 3. Online Subtitle Matching (Shooter Hash + User-Token ASSRT)
-					danmakuSection(c, func() {
-						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, "在线匹配字幕").Bold().Grow(1)
-							if a.playingFile {
-								matchLabel := "自动匹配字幕（免登录）"
-								if a.running(jobSubtitle) {
-									matchLabel = "匹配中…"
-								}
-								if primaryButton(c, matchLabel).Label("射手哈希自动匹配").
-									Tooltip("按视频文件指纹免登录匹配射手字幕").
-									Padding(5, 11).Disabled(a.running(jobSubtitle)).Clicked() {
-									a.searchOnlineSubtitlesByHash()
+				// 2. Local & Track quick actions
+				danmakuSection(c, func() {
+					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "当前字幕轨").Bold().Grow(1)
+						if glassButton(c, "加载本地字幕…").Padding(5, 10).Clicked() {
+							a.openSubtitleFileDialog()
+						}
+					})
+					tracks := tp.SubtitleTracks()
+					visible := tp.SubtitleVisible()
+					if len(tracks) == 0 {
+						ui.Text(c, "当前视频无内嵌或已加载字幕").FontSize(12).TextColor(pal.textMuted)
+					} else {
+						ui.Column(c).FillWidth().Gap(6).Children(func() {
+							for i, tr := range tracks {
+								selected := tr.Selected && visible
+								label := formatSubtitleTrackLabel(tr, i)
+								if danmakuEpisodeButton(c.Key(fmt.Sprintf("subdlg-%d", tr.ID)), label, selected).Clicked() {
+									if err := tp.SelectSubtitleTrack(tr.ID); err != nil {
+										so.failed = true
+										so.message = "切换字幕失败：" + err.Error()
+									}
 								}
 							}
 						})
-						hasToken := strings.TrimSpace(sp.ASSRTToken) != ""
-						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-							qInput := ui.TextInput(c, &so.query).Label("在线字幕片名").Placeholder("输入片名关键词（如 沙丘 2024）").Grow(1)
-							searchLabel := "按片名搜索"
+					}
+				})
+
+				// 3. Online Subtitle Matching (Shooter Hash + User-Token ASSRT)
+				danmakuSection(c, func() {
+					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "在线匹配字幕").Bold().Grow(1)
+						if a.playingFile {
+							matchLabel := "自动匹配字幕（免登录）"
 							if a.running(jobSubtitle) {
-								searchLabel = "搜索中…"
+								matchLabel = "匹配中…"
 							}
-							searchBtn := glassButton(c, searchLabel).Label("搜索字幕").Disabled(a.running(jobSubtitle) || !hasToken)
-							if !hasToken {
-								searchBtn.Tooltip("请先在下方填写并保存个人 ASSRT Token")
+							if primaryButton(c, matchLabel).Label("射手哈希自动匹配").
+								Tooltip("按视频文件指纹免登录匹配射手字幕").
+								Padding(5, 11).Disabled(a.running(jobSubtitle)).Clicked() {
+								a.searchOnlineSubtitlesByHash()
 							}
-							doSearch := searchBtn.Clicked()
-							if !a.running(jobSubtitle) && qInput.Submitted() {
-								if hasToken {
-									doSearch = true
-								} else {
-									so.tokenOpen = true
-									so.failed = false
-									so.message = "请先在下方填写并保存个人 ASSRT Token 后再按片名搜索"
+						}
+					})
+					hasToken := strings.TrimSpace(sp.ASSRTToken) != ""
+					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+						qInput := ui.TextInput(c, &so.query).Label("在线字幕片名").Placeholder("输入片名关键词（如 沙丘 2024）").Grow(1)
+						searchLabel := "按片名搜索"
+						if a.running(jobSubtitle) {
+							searchLabel = "搜索中…"
+						}
+						searchBtn := glassButton(c, searchLabel).Label("搜索字幕").Disabled(a.running(jobSubtitle) || !hasToken)
+						if !hasToken {
+							searchBtn.Tooltip("请先在下方填写并保存个人 ASSRT Token")
+						}
+						doSearch := searchBtn.Clicked()
+						if !a.running(jobSubtitle) && qInput.Submitted() {
+							if hasToken {
+								doSearch = true
+							} else {
+								so.tokenOpen = true
+								so.failed = false
+								so.message = "请先在下方填写并保存个人 ASSRT Token 后再按片名搜索"
+							}
+						}
+						if doSearch {
+							a.searchOnlineSubtitlesByKeyword()
+						}
+					})
+					if so.message != "" {
+						msgColor := pal.textMuted
+						if so.failed {
+							msgColor = ui.RGB(255, 166, 130)
+						}
+						ui.Text(c, so.message).FontSize(12).TextColor(msgColor).ContentTransition(ctReplace)
+					}
+					if len(so.results) > 0 {
+						ui.Column(c).FillWidth().Gap(6).Children(func() {
+							for i, cand := range so.results {
+								srcLabel := "射手"
+								if cand.Source == "assrt" {
+									srcLabel = "ASSRT"
 								}
-							}
-							if doSearch {
-								a.searchOnlineSubtitlesByKeyword()
+								parts := []string{cand.Title}
+								if cand.Lang != "" {
+									parts = append(parts, cand.Lang)
+								}
+								if cand.Format != "" {
+									parts = append(parts, strings.ToUpper(cand.Format))
+								}
+								parts = append(parts, srcLabel)
+								if danmakuEpisodeButton(c.Key(fmt.Sprintf("subcand-%d", i)), strings.Join(parts, " · "), false).
+									Disabled(a.running(jobSubtitle)).Clicked() {
+									a.loadOnlineSubtitle(cand)
+								}
 							}
 						})
-						if so.message != "" {
-							msgColor := pal.textMuted
-							if so.failed {
-								msgColor = ui.RGB(255, 166, 130)
-							}
-							ui.Text(c, so.message).FontSize(12).TextColor(msgColor)
-						}
-						if len(so.results) > 0 {
-							ui.Column(c).FillWidth().Gap(6).Children(func() {
-								for i, cand := range so.results {
-									srcLabel := "射手"
-									if cand.Source == "assrt" {
-										srcLabel = "ASSRT"
-									}
-									parts := []string{cand.Title}
-									if cand.Lang != "" {
-										parts = append(parts, cand.Lang)
-									}
-									if cand.Format != "" {
-										parts = append(parts, strings.ToUpper(cand.Format))
-									}
-									parts = append(parts, srcLabel)
-									if danmakuEpisodeButton(c.Key(fmt.Sprintf("subcand-%d", i)), strings.Join(parts, " · "), false).
-										Disabled(a.running(jobSubtitle)).Clicked() {
-										a.loadOnlineSubtitle(cand)
-									}
-								}
-							})
-						}
-						tokPrefix := "▸ "
-						if so.tokenOpen {
-							tokPrefix = "▾ "
-						}
-						tokTitle := "按片名搜索设置（需填写 ASSRT Token）"
-						if hasToken {
-							tokTitle = "按片名搜索设置（已配置 ASSRT Token）"
-						}
-						if glassButton(c, tokPrefix+tokTitle).
-							Label("伪射手 Token 设置").FillWidth().Clicked() {
-							so.tokenOpen = !so.tokenOpen
-						}
-						if so.tokenOpen {
+					}
+					tokTitle := "按片名搜索设置（需填写 ASSRT Token）"
+					if hasToken {
+						tokTitle = "按片名搜索设置（已配置 ASSRT Token）"
+					}
+					tokBtn := ui.ButtonBase(c.Key("assrt-token-toggle")).FillWidth().Padding(7, 12).Gap(8).Radius(9).
+						AlignItems(ui.Center).Cursor(ui.CursorPointer).Label("伪射手 Token 设置").Expanded(so.tokenOpen)
+					tokBg, tokBd := pal.controlBg, pal.borderControl
+					if tokBtn.Hovered() {
+						tokBg, tokBd = pal.controlHover, ui.RGBA(255, 255, 255, 0.20)
+					}
+					tokBtn.Background(tokBtn.AnimateColor("tok-bg", tokBg, animColor)).
+						Border(1, tokBtn.AnimateColor("tok-bd", tokBd, animColor))
+					applyPressPose(tokBtn)
+					tokBtn.Children(func() {
+						ui.Text(c, tokTitle).FontSize(13).TextColor(pal.text).Grow(1).SingleLine().ContentTransition(ctReplace).PassThrough()
+						chev := ui.Icon(c.Key("assrt-chev"), iconChevronDown).Size(13, 13).TextColor(pal.textMuted).PassThrough()
+						applyChevronPose(chev, so.tokenOpen)
+					})
+					if tokBtn.Clicked() {
+						so.tokenOpen = !so.tokenOpen
+					}
+					if so.tokenOpen {
+						ui.Column(c.Key("assrt-token-body")).FillWidth().Gap(8).Transition(transInlineReveal).Children(func() {
 							tokHint := "按片名在线搜索使用伪射手（ASSRT）接口，需填写你自己的 Token（仅保存在本机）。"
 							if a.playingFile {
 								tokHint += "本地视频可直接免登录使用上方「自动匹配字幕」。"
@@ -1414,14 +1420,14 @@ func (a *app) subtitleDialog(c *ui.Context, p mediaPlayer) {
 									}
 								}
 							})
-						}
-					})
+						})
+					}
 				})
-			ui.Row(c).FillWidth().Padding(0, 16, 0, 0).Justify(ui.End).Children(func() {
-				if glassButton(c, "完成").Clicked() {
-					so.open = false
-				}
 			})
+		ui.Row(c).FillWidth().Padding(0, 16, 0, 0).Justify(ui.End).Children(func() {
+			if glassButton(c, "完成").Clicked() {
+				so.open = false
+			}
 		})
 	})
 }
@@ -1448,7 +1454,8 @@ func (a *app) morePlayerControls(c *ui.Context, p mediaPlayer) {
 	btn.Children(func() {
 		ui.Icon(c, iconMore).Size(18, 18).TextColor(playerText).PassThrough()
 		if hasActive {
-			ui.Box(c).Size(5, 5).Radius(3).Absolute().Top(5).Right(5).Background(playerCoral).PassThrough()
+			ui.Box(c.Key("more-active-dot")).Size(5, 5).Radius(3).Absolute().Top(5).Right(5).
+				Background(playerCoral).Transition(transMicroBadge).PassThrough()
 		}
 	})
 	btn.PopoverMenuButton(func(m *ui.Menu) {

@@ -616,23 +616,25 @@ func liveGroupRow(c *ui.Context, key, label, a11yLabel string, count int, select
 	row := ui.Row(c.Key(key)).FillWidth().Height(36).Padding(0, 10, 0, 12).Gap(7).Radius(9).
 		AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(a11yLabel)
 	targetBg := ui.Transparent
+	targetBorder := ui.Transparent
 	targetFg := p.textMuted
 	countColor := p.textFaint
 	if selected {
 		targetBg = p.accentSoft
+		targetBorder = p.accentBorder
 		targetFg = p.text
 		countColor = p.accentLightText
-		row.Border(1, p.accentBorder)
 	} else if row.Hovered() {
 		targetBg = p.surfaceHover
 		targetFg = p.text
 	}
-	row.Background(row.AnimateColor("lgrp-bg", targetBg, animColor))
+	fg := animateButtonChrome(row, "lgrp", targetBg, targetBorder, targetFg)
+	animCount := row.AnimateColor("lgrp-cnt", countColor, animColor)
 	applyPressPose(row)
-	fg := row.AnimateColor("lgrp-fg", targetFg, animColor)
 	row.Children(func() {
 		if selected {
-			ui.Box(c).Absolute().Left(4).Top(8).Bottom(8).Width(3).Radius(2).Background(p.accent).PassThrough()
+			ui.Box(c.Key("lgrp-ind-"+key)).Absolute().Left(4).Top(8).Bottom(8).Width(3).Radius(2).
+				Background(p.accent).Transition(transMatchIndicator(liveGroupIndicatorMatch{}, true)).PassThrough()
 		}
 		if icon != nil {
 			ui.Icon(c, icon).Size(12, 12).TextColor(iconColor).PassThrough()
@@ -642,7 +644,8 @@ func liveGroupRow(c *ui.Context, key, label, a11yLabel string, count int, select
 			text.Bold()
 		}
 		if count >= 0 {
-			ui.Text(c, fmt.Sprintf("%d", count)).FontSize(11.5).TextColor(countColor).SingleLine().ContentTransition(ctNumeric).PassThrough()
+			ui.Text(c, fmt.Sprintf("%d", count)).FontSize(11.5).FontFeatures("tnum").TextColor(animCount).
+				SingleLine().ContentTransition(ctNumeric).PassThrough()
 		}
 	})
 	return row
@@ -673,12 +676,12 @@ func (a *app) liveChannelCard(c *ui.Context, index int) {
 		Padding(10, 12).Gap(10).AlignItems(ui.Center)
 	applyInteractiveSurface(card, p, 11, card.Hovered())
 	if isLast {
-		card.Border(1, p.accentBorder)
+		card.Border(1, card.AnimateColor("lcard-last-bd", p.accentBorder, animColor))
 	}
-	applyPressPose(card)
 	card.Children(func() {
 		mainArea := ui.Row(c).Grow(1).MinWidth(0).FillHeight().Gap(10).AlignItems(ui.Center).
 			Cursor(ui.CursorPointer).Label("播放 " + channel.Name)
+		applyPressPose(mainArea)
 		mainArea.Children(func() {
 			a.renderChannelLogo(c, channel, 38)
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
@@ -720,10 +723,10 @@ func (a *app) liveChannelCard(c *ui.Context, index int) {
 			starBorder = p.borderControl
 			starFg = p.text
 		}
-		starBtn.Background(starBtn.AnimateColor("lfav-bg", starBg, animColor)).Border(1, starBorder)
+		animStarFg := animateButtonChrome(starBtn, "lfav", starBg, starBorder, starFg)
 		applyPressPose(starBtn)
 		starBtn.Children(func() {
-			ui.Icon(c, starIcon).Size(14, 14).TextColor(starBtn.AnimateColor("lfav-fg", starFg, animColor)).PassThrough()
+			ui.Icon(c, starIcon).Size(14, 14).TextColor(animStarFg).ContentTransition(ctIcon).PassThrough()
 		})
 		if starBtn.Clicked() {
 			a.toggleLiveChannelFavorite(channel)
@@ -750,7 +753,7 @@ func (a *app) liveView(c *ui.Context) {
 					if showSources {
 						ui.ScrollHorizontal(c).Grow(1).MinWidth(0).Gap(18).Scrollbars(false).Children(func() {
 							for i, source := range live.sources {
-								if underlineTab(c, fmt.Sprintf("live-source-%d", i), source.Name, i == live.selectedSource).Clicked() {
+								if underlineTab(c, "live-source", fmt.Sprintf("live-source-%d", i), source.Name, i == live.selectedSource).Clicked() {
 									a.loadLiveSource(i)
 								}
 							}
@@ -759,8 +762,12 @@ func (a *app) liveView(c *ui.Context) {
 						ui.Spacer(c)
 					}
 					if showSearch {
-						sf := ui.SearchField(c, &live.query).Label("频道搜索").Placeholder("搜索频道").Width(228).Radius(10).
-							Border(1, p.borderControl)
+						sf := ui.SearchField(c, &live.query).Label("频道搜索").Placeholder("搜索频道").Width(228).Radius(10)
+						sfBorder := p.borderControl
+						if sf.Hovered() {
+							sfBorder = ui.RGBA(255, 255, 255, 0.22)
+						}
+						sf.Border(1, sf.AnimateColor("live-sf-bd", sfBorder, animColor))
 						if p.reduceTransparency {
 							sf.Background(p.surface)
 						} else {
@@ -774,7 +781,7 @@ func (a *app) liveView(c *ui.Context) {
 						if len(live.sources) > 1 {
 							countText = fmt.Sprintf("共 %d 个频道 · %d 个直播来源", len(live.channels), len(live.sources))
 						}
-						ui.Text(c, countText).FontSize(12).TextColor(p.textFaint).SingleLine().ContentTransition(ctNumeric)
+						ui.Text(c, countText).FontSize(12).FontFeatures("tnum").TextColor(p.textFaint).SingleLine().ContentTransition(ctNumeric)
 					}
 				})
 			})
@@ -903,10 +910,11 @@ func (a *app) liveDialog(c *ui.Context) {
 	}
 	p := paletteFor(c)
 	_, winH := c.Size()
-	ui.DialogBase(c, &live.importOpen, func(backdrop, panel ui.Element) {
+	keyedDialog(c, "dlg-live", &live.importOpen, func(backdrop, panel ui.Element) {
 		backdrop.Background(p.dialogScrim).Transition(transDialogScrim)
-		panel.Width(520).MaxWidth(520).MaxHeight(max(float32(240), winH-32)).Padding(24).Gap(12).Radius(26).TextColor(p.text).Transition(transDialogPanel)
+		panel.Width(520).MaxWidth(520).MaxHeight(max(float32(240), winH-32)).Padding(24).Gap(12).Radius(26).TextColor(p.text)
 		applyPane(panel, p, p.dialogMat)
+		applyDialogPanelPose(c, panel)
 		title := "添加直播源"
 		hint := "粘贴直播频道表地址（支持 M3U、TXT 或含直播的影视配置）。"
 		if live.url != "" {
@@ -922,7 +930,7 @@ func (a *app) liveDialog(c *ui.Context) {
 				}
 			}
 			if live.importErr != "" {
-				ui.Text(c, live.importErr).FontSize(13).TextColor(p.warning)
+				ui.Text(c.Key("live-import-err"), live.importErr).FontSize(13).TextColor(p.warning).Transition(transInlineBanner)
 			}
 		})
 		ui.Row(c).FillWidth().Gap(8).Justify(ui.End).Children(func() {

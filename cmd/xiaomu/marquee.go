@@ -139,7 +139,7 @@ func (a *app) hoverMarqueeText(c *ui.Context, o marqueeTextOptions) {
 			t.Grow(1)
 		}
 	}
-	if !o.hovered {
+	if !o.hovered || c.Preferences().ReduceMotion {
 		renderStatic()
 		return
 	}

@@ -868,6 +868,16 @@ func (a *app) playerSeekBar(c *ui.Context, p mediaPlayer, duration time.Duration
 	accent := c.Theme().Accent
 	focusVis := seekAxis.FocusVisible()
 	hoverActive := over || s.dragging || s.active
+	hoverTarget := float32(0)
+	if hoverActive {
+		hoverTarget = 1
+	}
+	dragTarget := float32(0)
+	if s.dragging {
+		dragTarget = 1
+	}
+	hoverT := seekAxis.AnimateTo("seek-hover", hoverTarget, animSnap)
+	dragT := seekAxis.AnimateTo("seek-drag", dragTarget, animSnap)
 
 	seekAxis.Children(func() {
 		if hasCurve {
@@ -877,12 +887,9 @@ func (a *app) playerSeekBar(c *ui.Context, p mediaPlayer, duration time.Duration
 			if r.W <= 0 || r.H <= 0 {
 				return
 			}
-			trackH := float32(4)
-			knobD := float32(11)
-			if hoverActive {
-				trackH = 5
-				knobD = 12.5
-			}
+			// Smooth spring thickness/size on hover & drag while keeping X tracking 100% direct.
+			trackH := 4 + 1.5*hoverT
+			knobD := 11 + 1.5*hoverT + 1.5*dragT
 			cy := r.Y + r.H/2
 			rail := ui.Rect{X: r.X, Y: cy - trackH/2, W: r.W, H: trackH}
 			pt.Fill(rail, ui.RGBA(255, 255, 255, 0.24), trackH/2)
@@ -897,7 +904,8 @@ func (a *app) playerSeekBar(c *ui.Context, p mediaPlayer, duration time.Duration
 				previewFrac := float32(min(max(s.target.Seconds()/duration.Seconds(), 0), 1))
 				hx := r.X + r.W*previewFrac
 				if hx > r.X+playedW {
-					pt.Fill(ui.Rect{X: r.X + playedW, Y: rail.Y, W: hx - (r.X + playedW), H: trackH}, ui.RGBA(255, 255, 255, 0.18), trackH/2)
+					alpha := float32(0.18) * max(hoverT, 0.35)
+					pt.Fill(ui.Rect{X: r.X + playedW, Y: rail.Y, W: hx - (r.X + playedW), H: trackH}, ui.RGBA(255, 255, 255, alpha), trackH/2)
 				}
 			}
 
@@ -927,7 +935,8 @@ func (a *app) playerSeekBar(c *ui.Context, p mediaPlayer, duration time.Duration
 		top := r.Y + 1
 		bot := r.Y + r.H - 4
 		if bot > top {
-			pt.Fill(ui.Rect{X: gx, Y: top, W: 1.25, H: bot - top}, ui.RGBA(255, 255, 255, 0.78), 0.5)
+			guideAlpha := float32(0.78) * max(hoverT, 0.45)
+			pt.Fill(ui.Rect{X: gx, Y: top, W: 1.25, H: bot - top}, ui.RGBA(255, 255, 255, guideAlpha), 0.5)
 		}
 	})
 
@@ -1037,13 +1046,14 @@ func (a *app) renderSeekPreviewOverlay(c *ui.Context, p mediaPlayer, duration ti
 				Radius(9).Clip().
 				Background(ui.RGB(18, 22, 32)).
 				Shadow(0, 10, 26, -4, ui.RGBA(0, 0, 0, 0.64)).
-				PassThrough().Label("进度预览")
+				PassThrough().Label("进度预览").Transition(transSeekPreview)
 			card.Children(func() {
 				if imgSrc != nil {
 					ui.Image(c.Key("seek-preview-frame"), imgSrc).Fill().Fit(ui.Contain).
 						Background(ui.RGB(10, 14, 22)).PassThrough().Label("进度预览画面")
 				} else {
-					ui.Box(c).Fill().Center().Padding(0, 8, 20, 8).PassThrough().Children(func() {
+					ui.Row(c).Fill().Center().Gap(6).Padding(0, 8, 20, 8).PassThrough().Children(func() {
+						loadingIndicator(c, 11, ui.RGBA(248, 249, 255, 0.56))
 						ui.Text(c, "加载画面…").FontSize(11).TextColor(ui.RGBA(248, 249, 255, 0.56)).SingleLine().PassThrough()
 					})
 				}
@@ -1052,7 +1062,7 @@ func (a *app) renderSeekPreviewOverlay(c *ui.Context, p mediaPlayer, duration ti
 						Background(ui.RGBA(12, 16, 26, 0.86)).
 						Border(1, ui.RGBA(255, 255, 255, 0.16)).
 						PassThrough().Children(func() {
-						ui.Text(c, timeText).FontSize(11.5).Bold().TextColor(playerText).SingleLine().PassThrough()
+						ui.Text(c, timeText).FontSize(11.5).Bold().FontFeatures("tnum").TextColor(playerText).SingleLine().PassThrough()
 					})
 				})
 			})
@@ -1086,8 +1096,8 @@ func (a *app) renderSeekPreviewOverlay(c *ui.Context, p mediaPlayer, duration ti
 			Background(ui.RGBA(16, 20, 32, 0.94)).
 			Border(1, ui.RGBA(255, 255, 255, 0.30)).
 			Shadow(0, 6, 18, -4, ui.RGBA(0, 0, 0, 0.52)).
-			PassThrough().Label("进度预览").Children(func() {
-			ui.Text(c, timeText).FontSize(12).Bold().TextColor(playerText).SingleLine().PassThrough()
+			PassThrough().Label("进度预览").Transition(transSeekPreview).Children(func() {
+			ui.Text(c, timeText).FontSize(12).Bold().FontFeatures("tnum").TextColor(playerText).SingleLine().PassThrough()
 		})
 	})
 }

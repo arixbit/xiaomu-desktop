@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/arixbit/xiaomu-desktop/internal/catalog"
 	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/iptv"
 	"github.com/arixbit/xiaomu-desktop/internal/library"
 	"github.com/egoist/mygo/ui"
 )
@@ -400,5 +402,239 @@ func TestResponsiveThemesAndRailRenderCleanly(t *testing.T) {
 			_ = png.Encode(f, htt.Image())
 			_ = f.Close()
 		}
+	}
+}
+
+func TestMarqueeHonorsReduceMotion(t *testing.T) {
+	a := &app{}
+	defer a.close()
+	hovered := true
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Box(c).Width(100).Height(32).Children(func() {
+			a.hoverMarqueeText(c, marqueeTextOptions{
+				key:        "rm-marquee",
+				text:       "这是一段非常非常长的剧集标题用来验证减少动态效果时不会自动滚动",
+				fontSize:   13,
+				color:      ui.RGB(255, 255, 255),
+				hovered:    hovered,
+				knownWidth: 100,
+			})
+		})
+	}, 200, 60)
+	tt.SetPreferences(ui.Preferences{ReduceMotion: true})
+	tt.Frame()
+	tt.Advance(marqueeLeadPause + 2*time.Second)
+	if a.marquee.lastOffset != 0 {
+		t.Fatalf("marquee scrolled under ReduceMotion: lastOffset=%.2f", a.marquee.lastOffset)
+	}
+}
+
+func TestDetailRoutePreservesPersistentShellAndBackButton(t *testing.T) {
+	a, _ := newDetailTestApp(t, 4)
+	a.nav = []routeKind{routeHome}
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.Frame()
+	searchHome, ok := tt.Find("片名")
+	if !ok {
+		t.Fatal("home search input missing")
+	}
+
+	// Push into detail route.
+	a.push(routeDetail)
+	tt.Frame()
+	if _, ok := tt.Find("返回"); !ok {
+		t.Fatalf("detail route missing back button: %v", tt.Texts())
+	}
+	searchDetail, ok := tt.Find("片名")
+	if !ok {
+		t.Fatal("detail search input missing")
+	}
+	if absf(searchDetail.X-searchHome.X) > 2 || absf(searchDetail.Y-searchHome.Y) > 2 {
+		t.Fatalf("search bar jumped across routeDetail push: home=%+v detail=%+v", searchHome, searchDetail)
+	}
+
+	// Pop back to home via Back button click.
+	if err := tt.Click("返回"); err != nil {
+		t.Fatalf("click back from detail: %v", err)
+	}
+	if a.route() != routeHome {
+		t.Fatalf("back button did not return to routeHome: route=%v", a.route())
+	}
+	tt.Advance(320 * time.Millisecond)
+	searchAfter, ok := tt.Find("片名")
+	if !ok || absf(searchAfter.X-searchHome.X) > 2 || absf(searchAfter.Y-searchHome.Y) > 2 {
+		t.Fatalf("search bar drifted after returning home: home=%+v after=%+v", searchHome, searchAfter)
+	}
+}
+
+func TestFailureCopyFeedbackAutoResetsAndDetailsDisclose(t *testing.T) {
+	a := newKeyboardTestApp(t)
+	a.player = &unknownSizeMediaPlayer{err: errors.New("403 forbidden stream")}
+	a.playFailure = &episodeFailure{
+		err:     errors.New("403 forbidden stream"),
+		line:    "主线路",
+		episode: catalog.Episode{Name: "第1集", ID: "1"},
+	}
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.Frame()
+
+	if err := tt.Click("错误详情"); err != nil {
+		t.Fatalf("expand failure details: %v", err)
+	}
+	if !a.failureUI.detailsOpen || !tt.HasText("复制") {
+		t.Fatalf("failure details did not reveal copy button: open=%v texts=%v", a.failureUI.detailsOpen, tt.Texts())
+	}
+	if err := tt.Click("复制"); err != nil {
+		t.Fatalf("click copy diagnostics: %v", err)
+	}
+	if !a.failureUI.copied || !tt.HasText("已复制") {
+		t.Fatalf("copy action did not show 已复制 feedback: copied=%v texts=%v", a.failureUI.copied, tt.Texts())
+	}
+	tt.Advance(failureCopyResetDelay + 200*time.Millisecond)
+	if a.failureUI.copied || !tt.HasText("复制") {
+		t.Fatalf("copy confirmation did not auto-reset after delay: copied=%v texts=%v", a.failureUI.copied, tt.Texts())
+	}
+}
+
+func TestSlidingSegmentedSwitchesCleanlyAndRespectsReduceMotion(t *testing.T) {
+	for _, reduceMotion := range []bool{false, true} {
+		name := "motion"
+		if reduceMotion {
+			name = "reduce-motion"
+		}
+		t.Run(name, func(t *testing.T) {
+			a := newKeyboardTestApp(t)
+			a.preferences = defaultPlayerPreferences()
+			a.preferences.Danmaku.Enabled = true
+			tt := ui.NewTester(a.view, 1120, 760)
+			tt.SetPreferences(ui.Preferences{ReduceMotion: reduceMotion})
+			tt.Frame()
+			if err := tt.Click("弹幕"); err != nil {
+				t.Fatalf("open danmaku popover: %v", err)
+			}
+			if err := tt.Click("稀疏"); err != nil {
+				t.Fatalf("select low density: %v", err)
+			}
+			if a.preferences.Danmaku.Density != "low" {
+				t.Fatalf("density = %q, want low", a.preferences.Danmaku.Density)
+			}
+			tt.Advance(180 * time.Millisecond)
+			if err := tt.Click("密集"); err != nil {
+				t.Fatalf("select high density: %v", err)
+			}
+			if a.preferences.Danmaku.Density != "high" {
+				t.Fatalf("density = %q, want high", a.preferences.Danmaku.Density)
+			}
+		})
+	}
+}
+
+func TestReduceMotionRendersAllBreakpointsCleanly(t *testing.T) {
+	a := newKeyboardTestApp(t)
+	a.panelOpen = true
+	a.showPlayerOSD("音量 80%")
+	for _, tc := range []struct {
+		name string
+		w, h int
+	}{
+		{"narrow-rail", 540, 420},
+		{"compact", 640, 420},
+		{"wide", 1120, 760},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tt := ui.NewTester(a.view, tc.w, tc.h)
+			tt.SetPreferences(ui.Preferences{ReduceMotion: true})
+			tt.Frame()
+			tt.Advance(300 * time.Millisecond)
+			if _, ok := tt.Find("播放控制条"); !ok {
+				t.Fatalf("%s: player dock missing under ReduceMotion", tc.name)
+			}
+		})
+	}
+}
+
+func TestDialogBackdropClickDismissesCleanly(t *testing.T) {
+	a := &app{nav: []routeKind{routeHome}}
+	defer a.close()
+	a.browser.importOpen = true
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.Frame()
+	if !tt.HasText("高级选项") {
+		t.Fatal("import dialog did not render")
+	}
+	// Clicking outside the centered 520px panel on the backdrop scrim must dismiss the dialog.
+	tt.ClickAt(20, 20)
+	if a.browser.importOpen {
+		t.Fatal("clicking backdrop scrim did not dismiss import dialog")
+	}
+	tt.Advance(220 * time.Millisecond)
+	if tt.HasText("高级选项") {
+		t.Fatalf("import dialog remained visible after backdrop dismissal: %v", tt.Texts())
+	}
+
+	// Verify player danmaku dialog also dismisses on backdrop click.
+	pa := newKeyboardTestApp(t)
+	pa.danmaku.open = true
+	ptt := ui.NewTester(pa.view, 1120, 760)
+	ptt.Frame()
+	if !ptt.HasText("弹幕设置") {
+		t.Fatal("danmaku dialog did not render")
+	}
+	ptt.ClickAt(20, 20)
+	if pa.danmaku.open {
+		t.Fatal("clicking backdrop scrim did not dismiss danmaku dialog")
+	}
+}
+
+func TestLivePageIdleProducesZeroRebuilds(t *testing.T) {
+	a := &app{nav: []routeKind{routeLive}}
+	defer a.close()
+	a.live.sources = []iptv.Source{{Name: "测试直播"}}
+	a.live.selectedSource = 0
+	a.live.channels = []iptv.Channel{
+		{Name: "CCTV-1 综合", Group: "央视", Streams: []iptv.Stream{{URL: "https://example.com/1.m3u8"}}},
+	}
+	a.live.state.last = &liveLastChannel{ChannelName: "CCTV-1 综合", Group: "央视"}
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.Advance(400 * time.Millisecond) // allow initial reveal transitions to settle
+	if tt.FramePending() {
+		t.Fatal("idle live page kept requesting frames after settling")
+	}
+	tt.Advance(time.Second)
+	if tt.FramePending() {
+		t.Fatal("idle live page scheduled continuous animation frames")
+	}
+}
+
+func TestScanIndicatorStaysIdleUnderReduceMotion(t *testing.T) {
+	a := &app{nav: []routeKind{routeHome}}
+	defer a.close()
+	a.library.feed.running = true
+	a.library.feed.progress = library.Event{Completed: 2, Total: 10}
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.scanBar(c, &a.library.feed)
+	}, 900, 80)
+	tt.SetPreferences(ui.Preferences{ReduceMotion: true})
+	tt.Advance(300 * time.Millisecond)
+	if tt.FramePending() {
+		t.Fatal("scan indicator scheduled spinner animation frames under ReduceMotion")
+	}
+}
+
+func TestMuteButtonUnmutesSavedZeroVolumeInOneClick(t *testing.T) {
+	a := newKeyboardTestApp(t)
+	a.muted = false
+	a.savedVolume = 0
+	a.player.SetVolume(0)
+	tt := ui.NewTester(a.view, 1120, 760)
+	tt.Frame()
+	if !a.isEffectivelyMuted(a.player) {
+		t.Fatal("expected zero volume to report effectively muted")
+	}
+	if err := tt.Click("静音切换"); err != nil {
+		t.Fatalf("click mute button: %v", err)
+	}
+	if a.muted || a.player.Volume() <= 0 {
+		t.Fatalf("first click on zero-volume player did not unmute: muted=%v vol=%v", a.muted, a.player.Volume())
 	}
 }
