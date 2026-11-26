@@ -44,47 +44,60 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest]
+        suite: [player, playlist, remaining]
         include:
-          - os: ubuntu-latest
-            partition: run
-          - os: ubuntu-latest
-            partition: skip
-          - os: macos-latest
-            partition: run
-          - os: macos-latest
-            partition: skip
           - os: windows-latest
+            suite: windows
           - os: windows-11-arm
+            suite: windows
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      # Linux covers the minimum. Desktop images often include a newer patch of that Go release.
+      - id: go-patch
+        if: runner.os != 'Linux'
+        shell: bash
+        run: awk '$1 == "go" { print "range=~" $2 }' go.mod >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v5
         with:
+          go-version: ${{ steps.go-patch.outputs.range }}
           go-version-file: go.mod
       - name: Vet
-        if: runner.os == 'Linux' && matrix.partition == 'skip'
+        if: runner.os == 'Linux' && matrix.suite == 'remaining'
         run: go vet ./...
       - name: Race Test
-        if: matrix.partition
+        if: runner.os != 'Windows'
         env:
-          PARTITION: ${{ matrix.partition }}
-        # Complementary -run / -skip cover new tests, examples and fuzz seeds too.
-        run: go test -race -vet=off -count=1 -timeout 20m -"$PARTITION" '^Test(Floating|Player)' ./...
+          SUITE: ${{ matrix.suite }}
+        run: |
+          player='^Test(Player|Danmaku)'
+          playlist='^Test(Floating|Local|Live)'
+          # The complement also covers new tests, examples and fuzz seeds.
+          case "$SUITE" in
+            player)    set -- -run "$player" ;;
+            playlist)  set -- -run "$playlist" ;;
+            remaining) set -- -skip "$player|$playlist" ;;
+            *) exit 1 ;;
+          esac
+          go test -race -vet=off -count=1 -timeout 20m "$@" ./...
       - name: Test
         if: runner.os == 'Windows'
-        run: go test -count=1 ./...
+        run: go test -vet=off -count=1 ./...
 
   required:
+    # Branch protection can require this check even when a PR changes only documentation.
     name: CI result
     needs: [changes, test]
-    if: ${{ !cancelled() }}
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
       - name: Verify test result or documentation-only skip
         env:
           TEST_RESULT: ${{ needs.test.result }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
         run: |
-          [ "$TEST_RESULT" = success ] || { [ "$DOCS_ONLY" = true ] && [ "$TEST_RESULT" = skipped ]; }
+          [ "$TEST_RESULT" = success ] || [ "$CHANGES_RESULT/$DOCS_ONLY/$TEST_RESULT" = success/true/skipped ]
