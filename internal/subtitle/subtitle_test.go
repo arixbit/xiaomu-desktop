@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestComputeShooterHash(t *testing.T) {
@@ -108,6 +109,30 @@ func TestSearchShooterAndDownload(t *testing.T) {
 	body, err := os.ReadFile(path)
 	if err != nil || !strings.Contains(string(body), "[Script Info]") {
 		t.Fatalf("downloaded body = %q, err=%v", string(body), err)
+	}
+}
+
+func TestSearchShooterReturnsHTTPErrorBeforeBody(t *testing.T) {
+	sendBody := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.(http.Flusher).Flush()
+		<-sendBody
+		_, _ = w.Write([]byte("x"))
+	}))
+	defer srv.Close()
+	defer close(sendBody)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	c := &Client{HTTP: srv.Client(), ShooterBaseURL: srv.URL}
+	_, err := c.SearchShooter(ctx, "a;b;c;d", "sample.mkv")
+	if err == nil || err.Error() != "射手字幕服务返回 HTTP 503" {
+		t.Fatalf("unexpected search error: %v", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("search waited for the error body until the request timed out")
 	}
 }
 

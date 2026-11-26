@@ -167,10 +167,11 @@ func (c *Client) SearchShooter(ctx context.Context, fileHash, filename string) (
 	if err != nil {
 		return nil, err
 	}
-	defer httpx.DrainAndClose(resp.Body)
 	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("射手字幕服务返回 HTTP %d", resp.StatusCode)
 	}
+	defer httpx.DrainAndClose(resp.Body)
 	data, _, err := httpx.ReadLimit(resp.Body, resp.ContentLength, maxSearchBytes)
 	if err != nil {
 		return nil, err
