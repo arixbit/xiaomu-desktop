@@ -37,16 +37,16 @@ macOS 13+ · Apple Silicon / Intel · Windows 10/11 · x64 / ARM64 · [下载最
 
 ## 下载与安装
 
-v0.10.0 带来全项目 Apple 级统一动效语言（弹簧滑移指示条、持久主壳路由连续性、边缘翻转弹层、可打断交互与全链路 `ReduceMotion` 适配）、播放进度条悬停 16:9 实时画面预览、影院深色悬浮舞台与原生失败路由卡、优酷公开直连弹幕与综艺精准匹配，并升级 `mygo-player v0.5.2` 恢复 Windows ARM64 原生支持。macOS 按芯片提供 `arm64` / `amd64` 轻量单架构 DMG 与 ZIP，Windows 提供 `x64` 与 `ARM64` 安装包（均内置对应架构 `mpv-2.dll`）；`v0.3.0–v0.9.7` 老版 macOS 仍可通过内置桥接清单自动两跳升级。下载页附有 `SHA256SUMS` 校验文件。[最新版下载](https://github.com/arixbit/xiaomu-desktop/releases/latest) · [v0.10.0 版本说明](docs/releases/v0.10.0.md)
+v0.10.1 新增本地视频封面匹配，修复 macOS 系统播放器的 HLS 播放和网络图片缓存，并加固应用更新。macOS 按芯片提供 `arm64` / `amd64` 单架构 DMG 与 ZIP。Windows 提供 `x64` 与 `ARM64` 安装包，均内置对应架构的 `mpv-2.dll`。`v0.3.0–v0.9.7` 老版 macOS 仍可通过桥接清单自动两跳升级。下载页附有 `SHA256SUMS` 校验文件。[最新版下载](https://github.com/arixbit/xiaomu-desktop/releases/latest) · [v0.10.1 版本说明](docs/releases/v0.10.1.md)
 
 ### macOS
 
-1. 按芯片架构选择对应安装包：Apple Silicon（M 系列）下载 `xiaomu-0.10.0-arm64.dmg`（或 `xiaomu-0.10.0-macos-arm64.zip`），Intel 下载 `xiaomu-0.10.0-amd64.dmg`（或 `xiaomu-0.10.0-macos-amd64.zip`）；打开 `.dmg` 将 `Xiaomu.app` 拖到“应用程序”（或解压 ZIP 后移动 App）。
+1. Apple Silicon（M 系列）下载 `xiaomu-0.10.1-arm64.dmg` 或 `xiaomu-0.10.1-macos-arm64.zip`，Intel 下载 `xiaomu-0.10.1-amd64.dmg` 或 `xiaomu-0.10.1-macos-amd64.zip`。打开 DMG 或解压 ZIP 后，将 `Xiaomu.app` 移到“应用程序”。
 2. 本版使用本地签名，尚无 Developer ID 签名及 Apple 公证。首次打开如被系统拦截，请在确认下载来源后，到“系统设置 → 隐私与安全性”选择“仍要打开”。也可以在终端执行 `xattr -d com.apple.quarantine /Applications/Xiaomu.app` 去掉隔离标记，之后双击即可打开；这会跳过 Gatekeeper 的首次检查，只在你信任下载来源时使用。
 
 ### Windows
 
-在 GitHub Releases 按架构下载 `xiaomu-setup-0.10.0-amd64.exe`（Windows x64）或 `xiaomu-setup-0.10.0-arm64.exe`（Windows ARM64），均内置对应架构 `mpv-2.dll`。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
+在 GitHub Releases 按架构下载 `xiaomu-setup-0.10.1-amd64.exe`（Windows x64）或 `xiaomu-setup-0.10.1-arm64.exe`（Windows ARM64），均内置对应架构的 `mpv-2.dll`。按提示安装到当前用户目录，无需管理员权限。安装包未做 Authenticode 签名，首次打开时 SmartScreen 可能提示未知发布者。
 
 打开小幕，在首页导入自己的配置。之后可以在侧边栏“片源”页更换配置，或在“直播”页导入自己的频道列表。
 
@@ -138,7 +138,7 @@ MyGo 是 Egoist 创建的 Go 桌面应用框架。小幕用它创建 macOS 与 W
 ## 环境
 
 - Go 1.27.3 或更新。`go.mod` 的 `go 1.27.3` 即工具链要求；Go 1.27 的 `go mod tidy` 会去掉与这一行相同的 `toolchain` 指令。
-- 播放窗口：macOS 13 及以上（Apple Silicon / Intel）与 Windows 10/11（x64 / ARM64）。MyGo 钉在 `v0.10.0`，`mygo-player` 钉在 `v0.5.2`。界面只用包 `ui`，没有网页前端。
+- 播放窗口：macOS 13 及以上（Apple Silicon / Intel）与 Windows 10/11（x64 / ARM64）。MyGo 固定在 `v0.10.1-0.20261127045957-d11fe48b8fc3`，`mygo-player` 固定在 `v0.5.2`。界面只用包 `ui`，没有网页前端。
 - 探针在 Linux、macOS 和 Windows 上都能编译运行。
 
 ## 探针
