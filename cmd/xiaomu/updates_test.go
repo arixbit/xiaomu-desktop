@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -236,6 +237,56 @@ func TestDarwinArchUpdateSourceRetriesTransientErrorsAndRequiresHTTPS(t *testing
 		t.Fatalf("loopback Open failed: %v", err)
 	}
 	rc.Close()
+}
+
+func TestDarwinArchUpdateSourceKeepsHTTPSAcrossRedirects(t *testing.T) {
+	var plainHits atomic.Int32
+	var rejectHits atomic.Int32
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		plainHits.Add(1)
+		fmt.Fprint(w, "plain")
+	}))
+	defer plain.Close()
+
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/download":
+			http.Redirect(w, r, "/asset", http.StatusFound)
+		case "/asset":
+			fmt.Fprint(w, "asset")
+		default:
+			rejectHits.Add(1)
+			http.Redirect(w, r, plain.URL+"/asset", http.StatusFound)
+		}
+	}))
+	defer secure.Close()
+	upgrade := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, secure.URL+"/reject", http.StatusFound)
+	}))
+	defer upgrade.Close()
+
+	src := &darwinArchUpdateSource{client: secure.Client(), delays: []time.Duration{time.Millisecond}}
+	body, err := src.Open(context.Background(), secure.URL+"/download")
+	if err != nil {
+		t.Fatalf("HTTPS redirect failed: %v", err)
+	}
+	data, err := io.ReadAll(body)
+	body.Close()
+	if err != nil || string(data) != "asset" {
+		t.Fatalf("HTTPS redirect response = %q, %v", data, err)
+	}
+	for _, start := range []string{secure.URL + "/reject", upgrade.URL} {
+		body, err = src.Open(context.Background(), start)
+		if body != nil {
+			body.Close()
+		}
+		if !errors.Is(err, errInsecureUpdateRedirect) || plainHits.Load() != 0 {
+			t.Fatalf("HTTPS download followed a plain HTTP redirect: err=%v, requests=%d", err, plainHits.Load())
+		}
+	}
+	if rejectHits.Load() != 2 {
+		t.Fatalf("insecure redirect should not trigger retries: requests=%d", rejectHits.Load())
+	}
 }
 
 func TestUniversalBridgeManifestValidForTwoHopMigration(t *testing.T) {

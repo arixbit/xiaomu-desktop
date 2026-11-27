@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,6 +20,8 @@ import (
 )
 
 const updateReleaseDownloadBase = "https://github.com/arixbit/xiaomu-desktop/releases/latest/download/"
+
+var errInsecureUpdateRedirect = errors.New("拒绝通过非 HTTPS 跳转下载更新")
 
 // darwinArchUpdateSource routes macOS update checks to the running CPU's
 // single-architecture manifest (update-darwin-arm64.json / amd64.json),
@@ -69,12 +72,27 @@ func (s *darwinArchUpdateSource) get(ctx context.Context, rawURL string) (io.Rea
 	if err != nil {
 		return nil, 0, err
 	}
-	if u.Scheme != "https" && !(u.Scheme == "http" && isUpdateLoopback(u.Hostname())) {
+	if !allowedUpdateURL(u) {
 		return nil, 0, fmt.Errorf("拒绝通过非 HTTPS 地址获取更新：%s", rawURL)
 	}
 	client := s.client
 	if client == nil {
 		client = httpx.SharedStreamClient()
+	}
+	// The custom macOS source issues its own requests. Apply the same
+	// transport policy without changing the shared client.
+	guarded := *client
+	guarded.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if !allowedUpdateURL(req.URL) || (req.URL.Scheme == "http" && via[len(via)-1].URL.Scheme == "https") {
+			return errInsecureUpdateRedirect
+		}
+		if len(via) >= 10 {
+			return http.ErrUseLastResponse
+		}
+		if client.CheckRedirect != nil {
+			return client.CheckRedirect(req, via)
+		}
+		return nil
 	}
 	for try := 0; ; try++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -84,7 +102,7 @@ func (s *darwinArchUpdateSource) get(ctx context.Context, rawURL string) (io.Rea
 		// Keep User-Agent strictly ASCII: GitHub's release asset CDN rejects
 		// non-ASCII User-Agent headers on cache misses.
 		req.Header.Set("User-Agent", "xiaomu-updater")
-		resp, err := client.Do(req)
+		resp, err := guarded.Do(req)
 		if err == nil && resp.StatusCode == http.StatusOK {
 			return resp.Body, resp.StatusCode, nil
 		}
@@ -93,7 +111,7 @@ func (s *darwinArchUpdateSource) get(ctx context.Context, rawURL string) (io.Rea
 		retryable := false
 		if err != nil {
 			attemptErr = err
-			retryable = ctx.Err() == nil
+			retryable = ctx.Err() == nil && !errors.Is(err, errInsecureUpdateRedirect)
 		} else {
 			status = resp.StatusCode
 			httpx.DrainAndClose(resp.Body)
@@ -111,6 +129,10 @@ func (s *darwinArchUpdateSource) get(ctx context.Context, rawURL string) (io.Rea
 		case <-timer.C:
 		}
 	}
+}
+
+func allowedUpdateURL(u *url.URL) bool {
+	return u.Scheme == "https" || (u.Scheme == "http" && isUpdateLoopback(u.Hostname()))
 }
 
 func isUpdateLoopback(host string) bool {

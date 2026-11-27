@@ -1,4 +1,4 @@
-Xiaomu v0.10.0 — License notices
+Xiaomu v0.10.1 — License notices
 
 ========================================================================
 
@@ -747,7 +747,7 @@ LICENSE
 
 ========================================================================
 
-github.com/egoist/mygo v0.10.0
+github.com/egoist/mygo v0.10.1-0.20261127045957-d11fe48b8fc3
 
 LICENSE
 
