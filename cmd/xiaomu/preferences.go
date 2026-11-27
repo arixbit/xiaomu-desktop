@@ -32,11 +32,14 @@ func (p subtitlePreferences) normalized() subtitlePreferences {
 }
 
 type playerPreferences struct {
-	Volume   float64             `json:"volume"`
-	Rate     float64             `json:"rate"`
-	AutoNext bool                `json:"auto_next"`
-	Danmaku  danmakuPreferences  `json:"danmaku"`
-	Subtitle subtitlePreferences `json:"subtitle"`
+	Volume    float64             `json:"volume"`
+	Rate      float64             `json:"rate"`
+	AutoNext  bool                `json:"auto_next"`
+	Danmaku   danmakuPreferences  `json:"danmaku"`
+	Subtitle  subtitlePreferences `json:"subtitle"`
+	TMDBToken string              `json:"tmdb_token,omitempty"`
+
+	DisableAutoLocalPoster bool `json:"disable_auto_local_poster,omitempty"`
 }
 
 func defaultPlayerPreferences() playerPreferences {
@@ -71,6 +74,7 @@ func readPlayerPreferences(path string) (playerPreferences, error) {
 	}
 	p.Danmaku = p.Danmaku.normalized()
 	p.Subtitle = p.Subtitle.normalized()
+	p.TMDBToken = strings.TrimSpace(p.TMDBToken)
 	return p, nil
 }
 
@@ -97,14 +101,16 @@ func (a *app) ensurePreferences() {
 	a.preferences.Subtitle = a.preferences.Subtitle.normalized()
 }
 
-func (a *app) savePreferences() {
+func (a *app) savePreferences() error {
 	a.ensurePreferences()
 	a.preferences.AutoNext = a.autoNext
 	if a.preferencesPath != "" {
 		if err := writeJSONFile(a.preferencesPath, a.preferences); err != nil {
 			a.status = "保存播放偏好失败：" + err.Error()
+			return err
 		}
 	}
+	return nil
 }
 
 func (a *app) applyPlayerPreferences(p mediaPlayer) {

@@ -74,6 +74,7 @@ type app struct {
 	discovery       discoveryBrowser
 	live            liveBrowser
 	history         historyStore
+	localPoster     localPosterState
 	localFileChecks map[string]localFileCheck
 	favorites       favoriteStore
 	searchHistory   searchHistoryStore
@@ -491,6 +492,7 @@ func main() {
 	// regardless of the OS light/dark setting.
 	mygo.Theme.SetSource(mygo.ThemeDark)
 	a := &app{autoNext: true, persist: true}
+	a.localPoster.workerURL = posterWorkerURL
 	a.initUpdates()
 	a.notify = postNotification
 	a.addRecent = mygo.App.AddRecentDocument

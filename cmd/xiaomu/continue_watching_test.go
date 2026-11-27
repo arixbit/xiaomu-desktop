@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"image"
 	"image/color"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/arixbit/xiaomu-desktop/internal/config"
+	"github.com/arixbit/xiaomu-desktop/internal/tmdb"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -93,6 +95,53 @@ func TestContinueWatchingHiddenWhenEmptyAndDisabledForRemovedSource(t *testing.T
 	_ = tt.Click("继续观看 旧片")
 	if a.player != nil || a.running(jobPlay) {
 		t.Fatal("removed source was requested")
+	}
+}
+
+func TestContinueWatchingMissingLocalPosterAction(t *testing.T) {
+	a := &app{}
+	defer a.close()
+	path := filepath.Join(t.TempDir(), "示例剧.mp4")
+	if err := os.WriteFile(path, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e := historyEntry{Name: filepath.Base(path), VideoID: path, Kind: historyKindLocal, Position: 20, Duration: 600}
+	a.history.note(e)
+
+	tt := ui.NewTester(a.view, 640, 420)
+	if _, ok := tt.Find("续播 " + e.Name); !ok {
+		t.Fatal("missing cover displaced the existing playback action")
+	}
+	if err := tt.Click("匹配封面 " + e.Name); err != nil {
+		t.Fatal(err)
+	}
+	if !a.localPoster.settings.open || a.localPoster.open {
+		t.Fatal("matching a cover without a token did not open cover settings")
+	}
+	lookups := 0
+	a.localPoster.newSearcher = func(string) localPosterSearcher {
+		return posterSearchFunc(func(_ context.Context, title, _ string, _ tmdb.Kind) ([]tmdb.Match, error) {
+			if title != "示例剧" {
+				t.Fatalf("unexpected title after saving token: %q", title)
+			}
+			lookups++
+			return nil, nil
+		})
+	}
+	a.localPoster.settings.token = "fixture"
+	if err := tt.Click("保存"); err != nil {
+		t.Fatal(err)
+	}
+	if lookups != 1 || !a.localPoster.open || a.localPoster.path != path {
+		t.Fatal("saving token did not continue matching the selected video")
+	}
+	a.closeLocalPosterDialog()
+	tt.Frame()
+	if err := tt.Click("匹配封面 " + e.Name); err != nil {
+		t.Fatal(err)
+	}
+	if !a.localPoster.open || a.localPoster.path != path {
+		t.Fatal("matching a cover with a token did not open the selected video's dialog")
 	}
 }
 

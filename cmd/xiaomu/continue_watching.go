@@ -164,7 +164,7 @@ func (a *app) homeContinueWatchingSection(c *ui.Context, entries []historyEntry)
 			}
 		})
 
-		posterSrc := a.poster(c, e.Pic)
+		posterSrc := a.historyPoster(c, e)
 		cwTrans := transContinueCard(a.homeResumeDir)
 		cardHost := ui.Box(c.Key("home-cw-card-host")).FillWidth().Clip()
 		if cwTrans.Exit != nil {
@@ -256,6 +256,22 @@ func (a *app) homeContinueWatchingSection(c *ui.Context, entries []historyEntry)
 							})
 							if resumeBtn.Clicked() {
 								a.resume(e)
+							}
+
+							if e.isLocal() && posterSrc == nil {
+								hint := "搜索并选择视频封面"
+								if !a.localPosterOnlineAvailable() {
+									hint = "填写 TMDB Token 后可搜索封面"
+								}
+								match := ghostButton(c.Key("cw-match-"+e.dedupKey()), "匹配封面").Height(36).Padding(0, 10).FontSize(13).
+									Label("匹配封面 " + e.Name).Tooltip(hint)
+								if match.Clicked() {
+									if !a.localPosterOnlineAvailable() {
+									a.openLocalPosterSettingsFor(e.VideoID)
+									} else {
+										a.openLocalPosterDialog(e)
+									}
+								}
 							}
 
 							if !e.isLocal() && a.library.root != nil {
