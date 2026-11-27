@@ -51,6 +51,9 @@ const (
 	jobSubtitle                // searching or downloading online external subtitles
 	jobEPG                     // loading IPTV EPG program guides
 	jobPan                     // verifying cloud-drive credentials or cleaning temp files
+	jobLocalPoster                      // finding artwork for the local video just opened
+	jobLocalPosterRead                  // reading visible artwork from the local cache
+	jobLocalPosterSearch                // searching or saving a manual artwork match
 	jobSlots
 )
 
@@ -77,6 +80,9 @@ func (a *app) busy() bool {
 	a.jobsMu.Lock()
 	defer a.jobsMu.Unlock()
 	for i := range a.jobs {
+		if jobSlot(i) >= jobLocalPoster && jobSlot(i) <= jobLocalPosterSearch {
+			continue
+		}
 		if a.jobs[i].cancel != nil {
 			return true
 		}

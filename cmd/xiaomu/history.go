@@ -41,6 +41,10 @@ type historyEntry struct {
 	Duration   float64   `json:"duration"`
 	Updated    time.Time `json:"updated"`
 	HomeHidden bool      `json:"home_hidden,omitempty"`
+
+	LocalPoster    string `json:"local_poster,omitempty"`
+	PosterManual   bool   `json:"poster_manual,omitempty"`
+	PosterSeriesID int    `json:"poster_series_id,omitempty"`
 }
 
 // historyKindNAS marks an entry recorded from a NAS file; historyKindSite
@@ -247,6 +251,10 @@ func (h *historyStore) note(e historyEntry) {
 			kept = append(kept, old)
 		} else {
 			e.HomeHidden = old.HomeHidden
+			if e.isLocal() && e.LocalPoster == "" {
+				e.LocalPoster, e.PosterManual = old.LocalPoster, old.PosterManual
+				e.PosterSeriesID = old.PosterSeriesID
+			}
 		}
 	}
 	h.entries = append([]historyEntry{e}, kept...)
@@ -384,14 +392,17 @@ func (a *app) recordHistory(p mediaPlayer, now time.Time) {
 		})
 	case a.playingFile && a.playingFilePath != "":
 		a.history.noted = now
+		poster, seriesID := a.takePendingLocalPoster()
 		a.history.note(historyEntry{
-			Name:     a.playingName,
-			Kind:     historyKindLocal,
-			Origin:   localHistoryOrigin(a.playingFilePath),
-			VideoID:  a.playingFilePath,
-			Position: position,
-			Duration: duration,
-			Updated:  now,
+			Name:           a.playingName,
+			Kind:           historyKindLocal,
+			Origin:         localHistoryOrigin(a.playingFilePath),
+			VideoID:        a.playingFilePath,
+			Position:       position,
+			Duration:       duration,
+			Updated:        now,
+			LocalPoster:    poster,
+			PosterSeriesID: seriesID,
 		})
 	default:
 		return
@@ -407,14 +418,17 @@ func (a *app) recordLocalCompletion(p mediaPlayer) {
 	}
 	now := time.Now()
 	dur := p.Duration().Seconds()
+	poster, seriesID := a.takePendingLocalPoster()
 	a.history.note(historyEntry{
-		Name:     a.playingName,
-		Kind:     historyKindLocal,
-		Origin:   localHistoryOrigin(a.playingFilePath),
-		VideoID:  a.playingFilePath,
-		Position: dur,
-		Duration: dur,
-		Updated:  now,
+		Name:           a.playingName,
+		Kind:           historyKindLocal,
+		Origin:         localHistoryOrigin(a.playingFilePath),
+		VideoID:        a.playingFilePath,
+		Position:       dur,
+		Duration:       dur,
+		Updated:        now,
+		LocalPoster:    poster,
+		PosterSeriesID: seriesID,
 	})
 	a.history.noted = now
 	a.flushHistory()
@@ -656,20 +670,24 @@ func (a *app) historyView(c *ui.Context) {
 	h := &a.history
 	p := paletteFor(c)
 	if len(h.entries) == 0 {
-		if a.library.root == nil {
-			emptyStateWithAction(c, "还没有播放记录", "看过的影片会出现在这里，点一下从上次的进度继续。", "添加片源", func() {
-				a.openImportDialog()
+		ui.Column(c).Fill().Children(func() {
+			ui.Row(c).FillWidth().Padding(0, scrollGutter, 0, 0).Justify(ui.End).Children(func() {
+				a.localPosterSettingsButton(c)
 			})
-		} else {
-			emptyStateWithAction(c, "还没有播放记录", "看过的影片会出现在这里，点一下从上次的进度继续。", "去首页看看", func() {
-				a.switchTab(routeHome)
-			})
-		}
+			if a.library.root == nil {
+				emptyStateWithAction(c, "还没有播放记录", "看过的影片会出现在这里，点一下从上次的进度继续。", "添加片源", a.openImportDialog)
+			} else {
+				emptyStateWithAction(c, "还没有播放记录", "看过的影片会出现在这里，点一下从上次的进度继续。", "去首页看看", func() {
+					a.switchTab(routeHome)
+				})
+			}
+		})
 		return
 	}
 	ui.Column(c).Fill().Gap(12).Children(func() {
 		ui.Row(c).FillWidth().Padding(0, scrollGutter, 0, 0).Gap(10).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "观看记录仅保存在本机").FontSize(12.5).TextColor(p.textMuted).Grow(1)
+			a.localPosterSettingsButton(c)
 			if a.historyClearButton(c) {
 				snapshot := append([]historyEntry(nil), h.entries...)
 				h.entries, h.dirty = nil, true
@@ -723,7 +741,7 @@ func (a *app) historyRow(c *ui.Context, i int, e historyEntry) {
 		mainArea.Children(func() {
 			posterBox := ui.Box(c).Size(48, 68).Radius(8).Clip().Background(p.cardPlaceholder).Border(1, p.border)
 			posterBox.Children(func() {
-				applyPosterImage(c, posterBox, a.poster(c, e.Pic))
+				applyPosterImage(c, posterBox, a.historyPoster(c, e))
 			})
 			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 				ui.Text(c, e.Name).FontSize(14).Bold().TextColor(p.text).SingleLine()
@@ -751,6 +769,9 @@ func (a *app) historyRow(c *ui.Context, i int, e historyEntry) {
 			a.resume(e)
 		}
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			if e.isLocal() && glassButton(c, "匹配封面").Height(34).Padding(0, 10).FontSize(12.5).Label("匹配封面 "+e.Name).Clicked() {
+				a.openLocalPosterDialog(e)
+			}
 			switch {
 			case available:
 				resumeBtn := ui.ButtonBase(c.Key("hist-resume-"+e.dedupKey())).Height(34).Padding(0, 14).Gap(6).Radius(9).

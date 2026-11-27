@@ -257,6 +257,8 @@ func (a *app) shell(c *ui.Context) {
 			a.liveDialog(c)
 			a.linkDialog(c)
 			a.panAuthPromptDialog(c)
+			a.localPosterDialog(c)
+			a.localPosterSettingsDialog(c)
 		})
 	})
 }

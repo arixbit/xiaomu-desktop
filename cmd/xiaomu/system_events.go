@@ -380,6 +380,8 @@ func (a *app) openLocalFileAt(path string, subtitles []string, at time.Duration,
 	}
 	a.syncNowPlaying()
 	a.startDanmaku()
+	a.closeLocalPosterDialog()
+	a.startLocalPoster(clean)
 	return true
 }
 

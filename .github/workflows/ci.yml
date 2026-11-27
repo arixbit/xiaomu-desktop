@@ -69,6 +69,9 @@ jobs:
       - name: Vet
         if: runner.os == 'Linux' && matrix.suite == 'remaining'
         run: go vet ./...
+      - name: Test poster Worker
+        if: runner.os == 'Linux' && matrix.suite == 'remaining'
+        run: node --test tools/poster-worker/worker.test.mjs
       - name: Race Test
         if: runner.os != 'Windows'
         env:
