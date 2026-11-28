@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -156,12 +157,14 @@ func TestMediaServerConnectBrowseAndDirectPlay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(a.media.path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0600 {
-		t.Fatalf("credential file mode = %o", info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(a.media.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("credential file mode = %o, want 0600", info.Mode().Perm())
+		}
 	}
 	if strings.Contains(string(data), password) || !strings.Contains(string(data), token) {
 		t.Fatalf("saved file leaked the password or dropped the token: %s", data)
