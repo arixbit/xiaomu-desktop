@@ -52,7 +52,7 @@ func (a *app) revealContinueWatchingKey(key string) {
 }
 
 func (a *app) openHistoryDetail(e historyEntry) {
-	if e.isLocal() {
+	if e.isLocal() || e.isMedia() {
 		return
 	}
 	a.openFavorite(favoriteEntry{
@@ -223,6 +223,8 @@ func (a *app) homeContinueWatchingSection(c *ui.Context, entries []historyEntry)
 							missingLabel := "片源已移除"
 							if e.isLocal() {
 								missingLabel = "文件已移除"
+							} else if e.isMedia() {
+								missingLabel = "服务器已移除"
 							}
 							ui.Text(c, missingLabel).FontSize(12).TextColor(p.warning).SingleLine()
 						} else if sub := continueWatchingSubline(e, fav, followed); sub != "" {
@@ -274,7 +276,7 @@ func (a *app) homeContinueWatchingSection(c *ui.Context, entries []historyEntry)
 								}
 							}
 
-							if !e.isLocal() && a.library.root != nil {
+							if !e.isLocal() && !e.isMedia() && a.library.root != nil {
 								if ghostButton(c.Key("cw-detail-"+e.dedupKey()), "详情").Height(36).Padding(0, 14).FontSize(13).
 									Label("继续观看详情 " + e.Name).Clicked() {
 									a.openHistoryDetail(e)

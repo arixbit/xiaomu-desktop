@@ -70,6 +70,12 @@ func (posterRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if isDoubanImageHost(host) {
 		cloned.Header.Set("User-Agent", "Mozilla/5.0")
 		cloned.Header.Set("Referer", "https://movie.douban.com/")
+	} else {
+		for key, value := range mediaPosterHeaders(cloned.URL) {
+			if value != "" {
+				cloned.Header.Set(key, value)
+			}
+		}
 	}
 	resp, err := fetchValidatedPosterResponse(cloned)
 	if err == nil || ctx.Err() != nil {

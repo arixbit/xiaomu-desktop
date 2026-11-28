@@ -743,7 +743,7 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool, floatingRec
 			}
 		}
 	}
-	if a.playingFile {
+	if a.playingFile || a.playingMedia {
 		name = a.playingName
 	}
 
@@ -2377,6 +2377,7 @@ func (a *app) leavePlayer() {
 	a.playingFile = false
 	a.playingFilePath = ""
 	a.playingName = ""
+	a.clearPlayingMedia()
 	a.localPlaylist = nil
 	a.localPlaylistIdx = -1
 	a.playerOverlay = playerOverlayState{}

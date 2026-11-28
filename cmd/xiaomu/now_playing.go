@@ -40,7 +40,7 @@ func (a *app) nowPlayingTitle() string {
 	if a.playingLive && a.live.playingChannel >= 0 && a.live.playingChannel < len(a.live.channels) {
 		return a.live.channels[a.live.playingChannel].Name
 	}
-	if a.playingFile {
+	if a.playingFile || (a.playingMedia && a.playingName != "") {
 		return a.playingName
 	}
 	if !a.playingDirect && a.title != nil && a.title.name != "" {

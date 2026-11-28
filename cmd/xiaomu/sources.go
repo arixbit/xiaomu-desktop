@@ -114,10 +114,11 @@ func (a *app) liveSourceSubtitle(index int, src iptv.Source) string {
 	return strings.Join(parts, " · ")
 }
 
-// sourcesView implements the S2 two-pillar Sources page: VOD (with embedded
-// cloud-drive authorization and filterable site browser) and Live IPTV.
+// sourcesView is the Sources page: VOD configuration (with cloud-drive
+// authorization and the site browser), live subscriptions, and Emby / Jellyfin
+// servers the user added on this machine.
 func (a *app) sourcesView(c *ui.Context) {
-	if a.sourcesTab != 0 && a.sourcesTab != 1 {
+	if a.sourcesTab < 0 || a.sourcesTab > 2 {
 		a.sourcesTab = 0
 	}
 	if a.sourcesSiteFilter < 0 || a.sourcesSiteFilter > 2 {
@@ -152,6 +153,12 @@ func (a *app) sourcesView(c *ui.Context) {
 						a.clearArmed()
 					}
 				}
+				if underlineTab(c, "sources-pillar", "sources-tab-media", "媒体库", a.sourcesTab == 2).Clicked() {
+					if a.sourcesTab != 2 {
+						a.sourcesTab = 2
+						a.clearArmed()
+					}
+				}
 			})
 			ui.Row(c).Wrap().Gap(8).AlignItems(ui.Center).Children(func() {
 				if a.sourcesTab == 0 {
@@ -171,6 +178,10 @@ func (a *app) sourcesView(c *ui.Context) {
 					}
 					if primaryButton(c, importBtnLabel).Clicked() {
 						a.openImportDialog()
+					}
+				} else if a.sourcesTab == 2 {
+					if primaryButton(c, "添加服务器").Clicked() {
+						a.openAddMediaServer("")
 					}
 				} else {
 					if a.live.url != "" {
@@ -206,10 +217,13 @@ func (a *app) sourcesView(c *ui.Context) {
 		}
 		ui.Box(c.Key("sources-tab-host")).Grow(1).FillWidth().MinHeight(0).Clip().Children(func() {
 			ui.Box(c.Key(fmt.Sprintf("sources-tab-%d", a.sourcesTab))).Fill().Transition(transTabPage).Children(func() {
-				if a.sourcesTab == 0 {
+				switch a.sourcesTab {
+				case 0:
 					a.sourcesVODTab(c, stats)
-				} else {
+				case 1:
 					a.sourcesLiveTab(c, liveChannels)
+				default:
+					a.sourcesMediaTab(c)
 				}
 			})
 		})
