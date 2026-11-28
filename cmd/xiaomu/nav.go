@@ -20,6 +20,7 @@ const (
 	routeSearch
 	routeDetail
 	routeSite
+	routeMedia
 )
 
 var tabs = []struct {
@@ -120,6 +121,14 @@ func (a *app) push(kind routeKind) {
 }
 
 // pop leaves the page on show, stopping the work only that page needed.
+// goBack moves up one media-library folder, or leaves the current page.
+func (a *app) goBack() {
+	if a.route() == routeMedia && a.mediaAscend() {
+		return
+	}
+	a.pop()
+}
+
 func (a *app) pop() {
 	if len(a.nav) <= 1 {
 		return
@@ -140,6 +149,12 @@ func (a *app) pop() {
 	case routeSite:
 		a.cancelJob(jobSite)
 		a.closeSite()
+	case routeMedia:
+		a.cancelJob(jobSite)
+		a.media.activeID = ""
+		a.media.stack = nil
+		a.media.items = nil
+		a.media.err = ""
 	}
 	a.clearStatus()
 }
@@ -174,6 +189,11 @@ func (a *app) pageTitle() string {
 		return ""
 	case routeSite:
 		return a.browser.site.Label()
+	case routeMedia:
+		if n := len(a.media.stack); n > 0 && a.media.stack[n-1].Title != "" {
+			return a.media.stack[n-1].Title
+		}
+		return "媒体库"
 	}
 	for _, tab := range tabs {
 		if tab.kind == a.route() {
@@ -242,6 +262,8 @@ func (a *app) shell(c *ui.Context) {
 								a.searchView(c)
 							case routeSite:
 								a.siteView(c)
+							case routeMedia:
+								a.mediaLibraryView(c)
 							default:
 								a.homeView(c)
 							}
@@ -257,6 +279,7 @@ func (a *app) shell(c *ui.Context) {
 			a.liveDialog(c)
 			a.linkDialog(c)
 			a.panAuthPromptDialog(c)
+			a.mediaServerDialog(c)
 			a.localPosterDialog(c)
 			a.localPosterSettingsDialog(c)
 		})
@@ -569,7 +592,7 @@ func (a *app) toolbar(c *ui.Context, m toolbarMetrics) {
 						ui.Icon(c, iconBack).Size(17, 17).TextColor(p.text).PassThrough()
 					})
 					if backBtn.Clicked() {
-						a.pop()
+						a.goBack()
 					}
 				}
 				if title := a.pageTitle(); title != "" {

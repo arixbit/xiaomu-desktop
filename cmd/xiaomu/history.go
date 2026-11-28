@@ -33,6 +33,7 @@ type historyEntry struct {
 	SiteKey    string    `json:"site_key"`
 	Kind       string    `json:"kind,omitempty"`
 	NASShare   string    `json:"nas_share,omitempty"` // share name, with the server address in Line
+	MediaUser  string    `json:"media_user,omitempty"` // Emby/Jellyfin user id the entry was recorded under
 	Origin     string    `json:"origin,omitempty"`
 	VideoID    string    `json:"video_id"`
 	Line       string    `json:"line"`
@@ -49,13 +50,24 @@ type historyEntry struct {
 
 // historyKindNAS marks an entry recorded from a NAS file; historyKindSite
 // marks one recorded from a library site; historyKindLocal marks one recorded
-// from a local file on disk. Kind is the only type check: a site whose key
-// happens to be "nas" or "local" must never be mistaken for one.
+// from a local file on disk; historyKindMedia marks one played from a
+// user-added Emby or Jellyfin server. Kind is the only type check: a site
+// whose key happens to be "nas", "local", or "media" must never be mistaken
+// for one. Media entries store the server's stable history key (its own
+// server id, else its address) in SiteKey, the item id in VideoID, and the
+// signed-in user id in MediaUser, never the access token or a media URL.
+// The user id is part of the identity: re-logging in with another account
+// must not adopt the previous account's progress.
 const (
 	historyKindNAS   = "nas"
 	historyKindSite  = "site"
 	historyKindLocal = "local"
+	historyKindMedia = "media"
 )
+
+func mediaHistoryKey(serverID, userID, itemID string) string {
+	return "media:" + serverID + ":" + userID + ":" + itemID
+}
 
 // isNAS reports whether the entry is a legacy NAS record from an older release.
 // Such records are ignored on load so upgrading from v0.8.7 never errors or
@@ -64,7 +76,7 @@ func (e historyEntry) isNAS() bool {
 	switch e.Kind {
 	case historyKindNAS:
 		return true
-	case historyKindSite, historyKindLocal:
+	case historyKindSite, historyKindLocal, historyKindMedia:
 		return false
 	default:
 		return strings.HasPrefix(e.ConfigURL, "smb://")
@@ -73,6 +85,10 @@ func (e historyEntry) isNAS() bool {
 
 func (e historyEntry) isLocal() bool {
 	return e.Kind == historyKindLocal
+}
+
+func (e historyEntry) isMedia() bool {
+	return e.Kind == historyKindMedia
 }
 
 func localHistoryKey(path string) string {
@@ -97,6 +113,9 @@ func localHistoryOrigin(path string) string {
 func (e historyEntry) dedupKey() string {
 	if e.isLocal() && e.VideoID != "" {
 		return localHistoryKey(e.VideoID)
+	}
+	if e.isMedia() && e.SiteKey != "" && e.VideoID != "" {
+		return mediaHistoryKey(e.SiteKey, e.MediaUser, e.VideoID)
 	}
 	return titleKey(e.Name)
 }
@@ -154,6 +173,7 @@ type historyStore struct {
 	rowsHead     *historyEntry
 	rowsLen      int
 	rowsDayStart time.Time
+	rowsGen      uint64
 }
 
 func (h *historyStore) findByTitle(name string) (historyEntry, bool) {
@@ -167,7 +187,7 @@ func (h *historyStore) findByTitle(name string) (historyEntry, bool) {
 	}
 	if idx, ok := h.byTitle[key]; ok && idx < len(h.entries) {
 		e := h.entries[idx]
-		if !e.isNAS() && !e.isLocal() && titleKey(e.Name) == key {
+		if !e.isNAS() && !e.isLocal() && !e.isMedia() && titleKey(e.Name) == key {
 			return e, true
 		}
 		h.rebuildTitleIndex()
@@ -194,7 +214,7 @@ func (h *historyStore) findLocalByPath(path string) (historyEntry, bool) {
 func (h *historyStore) rebuildTitleIndex() {
 	idx := make(map[string]int, len(h.entries))
 	for i, e := range h.entries {
-		if e.isNAS() || e.isLocal() {
+		if e.isNAS() || e.isLocal() || e.isMedia() {
 			continue
 		}
 		k := titleKey(e.Name)
@@ -211,20 +231,26 @@ func (h *historyStore) rebuildTitleIndex() {
 	}
 }
 
-func (h *historyStore) listRows(now time.Time) []historyListRow {
+// listRows builds the grouped history rows, skipping entries the visible
+// predicate rejects (media entries of accounts that are not currently
+// saved). gen must change whenever the predicate's answers may change.
+func (h *historyStore) listRows(now time.Time, visible func(historyEntry) bool, gen uint64) []historyListRow {
 	localNow := now.Local()
 	dayStart := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, localNow.Location())
 	var head *historyEntry
 	if len(h.entries) > 0 {
 		head = &h.entries[0]
 	}
-	if h.rowsHead == head && h.rowsLen == len(h.entries) && h.rowsDayStart.Equal(dayStart) && len(h.rowsCache) > 0 {
+	if h.rowsHead == head && h.rowsLen == len(h.entries) && h.rowsDayStart.Equal(dayStart) && h.rowsGen == gen && len(h.rowsCache) > 0 {
 		return h.rowsCache
 	}
 	dayEnd := dayStart.AddDate(0, 0, 1)
 	rows := make([]historyListRow, 0, len(h.entries)+2)
 	heading := ""
 	for i, e := range h.entries {
+		if visible != nil && !visible(e) {
+			continue
+		}
 		group := "更早"
 		if !e.Updated.Before(dayStart) && e.Updated.Before(dayEnd) {
 			group = "今天"
@@ -239,6 +265,7 @@ func (h *historyStore) listRows(now time.Time) []historyListRow {
 	h.rowsHead = head
 	h.rowsLen = len(h.entries)
 	h.rowsDayStart = dayStart
+	h.rowsGen = gen
 	return rows
 }
 
@@ -390,6 +417,21 @@ func (a *app) recordHistory(p mediaPlayer, now time.Time) {
 			Duration:  duration,
 			Updated:   now,
 		})
+	case a.playingMedia && a.playingMediaItem != "":
+		a.history.noted = now
+		a.history.note(historyEntry{
+			Name:      a.playingMediaName,
+			Pic:       a.playingMediaPic,
+			SiteKey:   a.playingMediaServer,
+			Kind:      historyKindMedia,
+			MediaUser: a.playingMediaUser,
+			Origin:    a.playingMediaOrigin,
+			VideoID:   a.playingMediaItem,
+			Episode:   a.playingMediaEpisode,
+			Position:  position,
+			Duration:  duration,
+			Updated:   now,
+		})
 	case a.playingFile && a.playingFilePath != "":
 		a.history.noted = now
 		poster, seriesID := a.takePendingLocalPoster()
@@ -479,6 +521,10 @@ func (a *app) historyAvailable(e historyEntry) bool {
 		a.localFileChecks[e.VideoID] = localFileCheck{ok: ok, at: now}
 		return ok
 	}
+	if e.isMedia() {
+		srv, ok := a.mediaServerByHistoryKey(e.SiteKey)
+		return ok && e.MediaUser == srv.UserID
+	}
 	return a.configAvailable(e.ConfigURL)
 }
 
@@ -530,6 +576,10 @@ func resumePoint(detail catalog.Detail, e historyEntry) (line int, episode catal
 // resume plays an entry from where it stopped, straight into the player.
 func (a *app) resume(e historyEntry) {
 	if e.isNAS() {
+		return
+	}
+	if e.isMedia() {
+		a.resumeMedia(e)
 		return
 	}
 	if e.isLocal() {
@@ -707,7 +757,7 @@ func (a *app) historyView(c *ui.Context) {
 				})
 			}
 		})
-		rows := h.listRows(c.Now())
+		rows := h.listRows(c.Now(), a.mediaEntryCurrent, a.media.gen)
 		h.list.Key = func(row int) any { return rows[row].key }
 		h.list.Label = func(row int) string { return rows[row].label }
 		ui.List(c, &h.list, len(rows), func(row int) {
@@ -753,9 +803,12 @@ func (a *app) historyRow(c *ui.Context, i int, e historyEntry) {
 				origin := e.Origin
 				originColor := p.textFaint
 				if !available {
-					if e.isLocal() {
+					switch {
+					case e.isLocal():
 						origin = "文件已移除"
-					} else {
+					case e.isMedia():
+						origin = "服务器已移除"
+					default:
 						origin = "片源已移除"
 					}
 					originColor = p.warning
@@ -773,6 +826,12 @@ func (a *app) historyRow(c *ui.Context, i int, e historyEntry) {
 				a.openLocalPosterDialog(e)
 			}
 			switch {
+			case !available && e.isMedia():
+				if glassButton(c, "添加服务器").Height(34).Padding(0, 14).FontSize(12.5).Label("添加服务器以恢复 " + e.Name).Clicked() {
+					a.switchTab(routeSources)
+					a.sourcesTab = 2
+					a.openAddMediaServer("")
+				}
 			case available:
 				resumeBtn := ui.ButtonBase(c.Key("hist-resume-"+e.dedupKey())).Height(34).Padding(0, 14).Gap(6).Radius(9).
 					AlignItems(ui.Center).Cursor(ui.CursorPointer).Label("继续播放 " + e.Name)

@@ -31,6 +31,47 @@ var (
 	posterNetClient  = &http.Client{Transport: posterRoundTripper{}, Timeout: posterTimeout}
 )
 
+func init() {
+	// Go's default redirect handling strips Authorization across hosts but
+	// copies custom headers, so a media server poster that redirects to
+	// another address would carry the Emby token with it. When a media
+	// poster request names its authorizing server (in the request
+	// context), credentials follow only while the target still matches
+	// that server, path prefix included. Other posters get the plain
+	// cross-origin strip.
+	posterClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("海报重定向次数过多")
+		}
+		if srv, ok := req.Context().Value(posterAuthKey{}).(posterServer); ok {
+			if !srv.matches(req.URL) {
+				stripPosterCredentials(req)
+			}
+			return nil
+		}
+		if len(via) > 0 && via[0].URL != nil && !posterSameOrigin(via[0].URL, req.URL) {
+			stripPosterCredentials(req)
+		}
+		return nil
+	}
+}
+
+type posterAuthKey struct{}
+
+func stripPosterCredentials(req *http.Request) {
+	req.Header.Del("Authorization")
+	req.Header.Del("X-Emby-Authorization")
+	req.Header.Del("X-Emby-Token")
+	req.Header.Del("Cookie")
+}
+
+func posterSameOrigin(a, b *url.URL) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
+}
+
 func initPosterNetImage() {
 	posterClientOnce.Do(func() {
 		netimage.SetClient(posterNetClient)
@@ -70,6 +111,16 @@ func (posterRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if isDoubanImageHost(host) {
 		cloned.Header.Set("User-Agent", "Mozilla/5.0")
 		cloned.Header.Set("Referer", "https://movie.douban.com/")
+	} else {
+		if headers, srv, ok := mediaPosterAuth(cloned.URL); ok {
+			for key, value := range headers {
+				if value != "" {
+					cloned.Header.Set(key, value)
+				}
+			}
+			cloned = cloned.WithContext(context.WithValue(cloned.Context(), posterAuthKey{}, srv))
+		}
+		stripMediaPosterQuery(cloned.URL)
 	}
 	resp, err := fetchValidatedPosterResponse(cloned)
 	if err == nil || ctx.Err() != nil {

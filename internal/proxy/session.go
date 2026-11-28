@@ -29,10 +29,45 @@ type SessionConfig struct {
 
 type sessionHeadersKey struct{}
 
+// boundHeaders is a header set tied to the origin it was registered for.
+// Credential headers in the set are only sent to that origin; other
+// headers (Referer, User-Agent) travel with every proxied request.
+type boundHeaders struct {
+	headers map[string]string
+	origin  string // scheme://host, lowercased; "" means unbound
+}
+
+func originOf(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+}
+
+func requestOrigin(u *url.URL) string {
+	if u == nil || u.Host == "" {
+		return ""
+	}
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+}
+
+func isCredentialHeader(name string) bool {
+	switch {
+	case strings.EqualFold(name, "Authorization"),
+		strings.EqualFold(name, "X-Emby-Authorization"),
+		strings.EqualFold(name, "X-Emby-Token"),
+		strings.EqualFold(name, "Cookie"):
+		return true
+	}
+	return false
+}
+
 type proxySession struct {
 	mu            sync.RWMutex
 	targetURL     string
 	headers       map[string]string
+	boundOrigin   string
 	filename      string
 	prefetch      bool
 	refresh       func(ctx context.Context) (string, map[string]string, error)
@@ -48,11 +83,12 @@ func (p *Proxy) RegisterSession(cfg SessionConfig) (id, localURL string) {
 
 	name := sanitizeFilename(cfg.Filename, cfg.URL)
 	s := &proxySession{
-		targetURL: strings.TrimSpace(cfg.URL),
-		headers:   clone(cfg.Headers),
-		filename:  name,
-		prefetch:  cfg.Prefetch,
-		refresh:   cfg.Refresh,
+		targetURL:   strings.TrimSpace(cfg.URL),
+		headers:     clone(cfg.Headers),
+		boundOrigin: originOf(cfg.URL),
+		filename:    name,
+		prefetch:    cfg.Prefetch,
+		refresh:     cfg.Refresh,
 	}
 	p.mu.Lock()
 	if p.sessions == nil {
@@ -82,38 +118,39 @@ func (p *Proxy) session(id string) (*proxySession, bool) {
 	return s, ok
 }
 
-func (s *proxySession) snapshot() (target string, headers map[string]string) {
+func (s *proxySession) snapshot() (target string, bh boundHeaders) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.targetURL, clone(s.headers)
+	return s.targetURL, boundHeaders{headers: clone(s.headers), origin: s.boundOrigin}
 }
 
-func (s *proxySession) tryRefresh(ctx context.Context) (string, map[string]string, bool) {
+func (s *proxySession) tryRefresh(ctx context.Context) (string, boundHeaders, bool) {
 	if s.refresh == nil {
-		return "", nil, false
+		return "", boundHeaders{}, false
 	}
 	s.mu.Lock()
 	// Coalesce/rate-limit refreshes so concurrent range probes do not hammer upstream.
 	if time.Since(s.lastRefreshed) < 5*time.Second {
-		t, h := s.targetURL, clone(s.headers)
+		t, bh := s.targetURL, boundHeaders{headers: clone(s.headers), origin: s.boundOrigin}
 		s.mu.Unlock()
-		return t, h, true
+		return t, bh, true
 	}
 	s.mu.Unlock()
 
 	newURL, newHeaders, err := s.refresh(ctx)
 	if err != nil || strings.TrimSpace(newURL) == "" {
-		return "", nil, false
+		return "", boundHeaders{}, false
 	}
 	s.mu.Lock()
 	s.targetURL = strings.TrimSpace(newURL)
+	s.boundOrigin = originOf(newURL)
 	if newHeaders != nil {
 		s.headers = clone(newHeaders)
 	}
 	s.lastRefreshed = time.Now()
-	t, h := s.targetURL, clone(s.headers)
+	t, bh := s.targetURL, boundHeaders{headers: clone(s.headers), origin: s.boundOrigin}
 	s.mu.Unlock()
-	return t, h, true
+	return t, bh, true
 }
 
 func (p *Proxy) serveSession(w http.ResponseWriter, r *http.Request) {
@@ -250,29 +287,29 @@ func (p *Proxy) serveSession(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
-func (p *Proxy) doSessionRequest(ctx context.Context, method, target string, headers map[string]string, rangeHdr string, isHLS bool) (*http.Response, error) {
-	return p.doSessionRequestWithTimeout(ctx, method, target, headers, rangeHdr, isHLS, 0)
+func (p *Proxy) doSessionRequest(ctx context.Context, method, target string, bh boundHeaders, rangeHdr string, isHLS bool) (*http.Response, error) {
+	return p.doSessionRequestWithTimeout(ctx, method, target, bh, rangeHdr, isHLS, 0)
 }
 
-func (p *Proxy) doSessionRequestWithTimeout(ctx context.Context, method, target string, headers map[string]string, rangeHdr string, isHLS bool, timeoutLimit time.Duration) (*http.Response, error) {
-	reqCtx := context.WithValue(ctx, sessionHeadersKey{}, headers)
+func (p *Proxy) doSessionRequestWithTimeout(ctx context.Context, method, target string, bh boundHeaders, rangeHdr string, isHLS bool, timeoutLimit time.Duration) (*http.Response, error) {
+	reqCtx := context.WithValue(ctx, sessionHeadersKey{}, bh)
 	req, err := http.NewRequestWithContext(reqCtx, method, target, nil)
 	if err != nil {
 		return nil, err
 	}
-	applyMap(req, headers)
+	applyMap(req, bh)
 	if rangeHdr != "" && !isHLS {
 		req.Header.Set("Range", rangeHdr)
 	}
 	return p.doWithTimeout(req, timeoutLimit)
 }
 
-func (p *Proxy) writeSessionPlaylist(w http.ResponseWriter, resp *http.Response, playlistURL, cacheKey string, headers map[string]string, wrap func(string) string, ctx context.Context, timeoutLimit time.Duration) {
+func (p *Proxy) writeSessionPlaylist(w http.ResponseWriter, resp *http.Response, playlistURL, cacheKey string, bh boundHeaders, wrap func(string) string, ctx context.Context, timeoutLimit time.Duration) {
 	if resp.StatusCode == http.StatusPartialContent {
-		reqCtx := context.WithValue(ctx, sessionHeadersKey{}, headers)
+		reqCtx := context.WithValue(ctx, sessionHeadersKey{}, bh)
 		req := resp.Request.Clone(reqCtx)
 		req.Header.Del("Range")
-		applyMap(req, headers)
+		applyMap(req, bh)
 		httpx.DrainAndClose(resp.Body)
 		full, err := p.doWithTimeout(req, timeoutLimit)
 		if err != nil {
@@ -307,9 +344,12 @@ func (p *Proxy) writeRewrittenWith(w http.ResponseWriter, playlistURL, cacheKey 
 	_, _ = io.WriteString(w, out)
 }
 
-func applyMap(req *http.Request, headers map[string]string) {
-	for k, v := range headers {
+func applyMap(req *http.Request, bh boundHeaders) {
+	for k, v := range bh.headers {
 		if v == "" || strings.EqualFold(k, "Host") {
+			continue
+		}
+		if isCredentialHeader(k) && requestOrigin(req.URL) != bh.origin {
 			continue
 		}
 		req.Header.Set(k, v)

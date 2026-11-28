@@ -49,6 +49,7 @@ type Proxy struct {
 
 	mu          sync.RWMutex
 	headers     map[string]string
+	boundOrigin string
 	sessions    map[string]*proxySession
 	playlists   map[string]cachedPlaylist
 	client      *http.Client
@@ -97,10 +98,20 @@ func Start(headers map[string]string) (*Proxy, error) {
 		if len(via) >= 10 {
 			return errors.New("proxy: too many redirects")
 		}
-		if hdr, ok := req.Context().Value(sessionHeadersKey{}).(map[string]string); ok {
+		if hdr, ok := req.Context().Value(sessionHeadersKey{}).(boundHeaders); ok {
 			applyMap(req, hdr)
 		} else {
 			p.apply(req)
+		}
+		// The injected headers belong to the original target. When a
+		// redirect leaves that origin, credential headers must not follow
+		// (a media server stream can redirect to an unrelated address);
+		// Referer/User-Agent stay, as plain playback sources rely on them.
+		if len(via) > 0 && via[0].URL != nil && !sameOrigin(via[0].URL, req.URL) {
+			req.Header.Del("Authorization")
+			req.Header.Del("X-Emby-Authorization")
+			req.Header.Del("X-Emby-Token")
+			req.Header.Del("Cookie")
 		}
 		return nil
 	}
@@ -111,6 +122,13 @@ func Start(headers map[string]string) (*Proxy, error) {
 
 // Base is the http://127.0.0.1:port origin.
 func (p *Proxy) Base() string { return p.base }
+
+func sameOrigin(a, b *url.URL) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
+}
 
 // Wrap returns the local URL that plays target with the current headers.
 func (p *Proxy) Wrap(target string) string {
@@ -135,10 +153,24 @@ func (p *Proxy) RegisterWrapSession(target string, headers map[string]string) (i
 	return id, p.wrapWithSID(id, target)
 }
 
-// SetHeaders replaces the headers injected on later requests.
+// SetHeaders replaces the headers injected on later requests. The set is
+// unbound: credential headers in it are withheld until SetHeadersFor
+// ties the set to a target origin.
 func (p *Proxy) SetHeaders(h map[string]string) {
 	p.mu.Lock()
 	p.headers = clone(h)
+	p.boundOrigin = ""
+	p.invalidatePlaylistsLocked("u:|")
+	p.mu.Unlock()
+}
+
+// SetHeadersFor replaces the injected headers and binds them to target's
+// origin: credential headers are only sent to that origin, on every
+// request including rewritten HLS segments and keys.
+func (p *Proxy) SetHeadersFor(target string, h map[string]string) {
+	p.mu.Lock()
+	p.headers = clone(h)
+	p.boundOrigin = originOf(target)
 	p.invalidatePlaylistsLocked("u:|")
 	p.mu.Unlock()
 }
@@ -253,7 +285,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	reqCtx := r.Context()
 	sid := r.URL.Query().Get("sid")
-	var sessHeaders map[string]string
+	var sessHeaders boundHeaders
 	if sid != "" {
 		sess, found := p.session(sid)
 		if !found {
@@ -381,7 +413,7 @@ func copyFlushing(dst io.Writer, src io.Reader, rc *http.ResponseController) {
 	}
 }
 
-func (p *Proxy) writePlaylistWith(w http.ResponseWriter, resp *http.Response, playlistURL, cacheKey string, ctx context.Context, sessHeaders map[string]string, hasSession bool, wrap func(string) string, timeoutLimit time.Duration) {
+func (p *Proxy) writePlaylistWith(w http.ResponseWriter, resp *http.Response, playlistURL, cacheKey string, ctx context.Context, sessHeaders boundHeaders, hasSession bool, wrap func(string) string, timeoutLimit time.Duration) {
 	if resp.StatusCode == http.StatusPartialContent {
 		// Extensionless playlist endpoints can only be identified after the
 		// response. Retry without the player's range before rewriting.
@@ -417,6 +449,9 @@ func (p *Proxy) apply(req *http.Request) {
 	defer p.mu.RUnlock()
 	for k, v := range p.headers {
 		if v == "" || strings.EqualFold(k, "Host") {
+			continue
+		}
+		if isCredentialHeader(k) && requestOrigin(req.URL) != p.boundOrigin {
 			continue
 		}
 		req.Header.Set(k, v)

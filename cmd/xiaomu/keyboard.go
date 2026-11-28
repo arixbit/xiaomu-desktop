@@ -65,7 +65,7 @@ func (a *app) handleKeyboard(c *ui.Context) {
 		// Outside the player, Escape goes back a page: from a search or a
 		// title to the page it came from. A dialog or a suggestions popup
 		// takes the key first, and a text field keeps it, as before.
-		a.pop()
+		a.goBack()
 		return
 	}
 	p := a.player

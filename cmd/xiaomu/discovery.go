@@ -297,7 +297,7 @@ var homeTabs = []homeTabSpec{
 // the H1 focus split (continue watching + followed series) and the Douban
 // discovery lists / latest site updates.
 func (a *app) homeView(c *ui.Context) {
-	cwEntries := continueWatchingEntries(a.history.entries)
+	cwEntries := a.continueWatching()
 	favEntries := a.favorites.entries
 	hasCW := len(cwEntries) > 0
 	hasFav := len(favEntries) > 0

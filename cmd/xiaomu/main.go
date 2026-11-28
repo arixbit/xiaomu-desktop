@@ -36,6 +36,7 @@ type app struct {
 
 	proxySession  string
 	panUI         panUIState
+	media         mediaServerUI
 	panLogin      *panLoginSession
 	startPanLogin func(pan.Provider, func())
 
@@ -119,9 +120,17 @@ type app struct {
 	playingDirectLive bool
 	// playingFile is set for a local file opened from the file manager; playingName
 	// is that file's name, shown in the header and Now Playing.
-	playingFile       bool
-	playingFilePath   string
-	playingName       string
+	playingFile         bool
+	playingFilePath     string
+	playingName         string
+	playingMedia        bool
+	playingMediaServer  string
+	playingMediaUser    string
+	playingMediaItem    string
+	playingMediaName    string
+	playingMediaEpisode string
+	playingMediaPic     string
+	playingMediaOrigin  string
 	localPlaylist     []string
 	localPlaylistIdx  int
 	playingSource     string
@@ -247,6 +256,7 @@ func (a *app) adoptPlayer(p mediaPlayer) {
 	a.playingFile = false
 	a.playingFilePath = ""
 	a.playingName = ""
+	a.clearPlayingMedia()
 	a.localPlaylist = nil
 	a.localPlaylistIdx = -1
 	a.playingSource, a.playingEpisode = "", ""
@@ -442,7 +452,7 @@ func (a *app) openPlaybackURL(raw string, headers map[string]string, keepCurrent
 			a.proxySession = ""
 			oldSession = ""
 		}
-		p.SetHeaders(headers)
+		p.SetHeadersFor(raw, headers)
 		localURL = p.Wrap(raw)
 	}
 	player, err := a.openMediaURL(localURL)
@@ -456,7 +466,7 @@ func (a *app) openPlaybackURL(raw string, headers map[string]string, keepCurrent
 	}
 	a.adoptPlayer(player)
 	if keepCurrent {
-		p.SetHeaders(headers)
+		p.SetHeadersFor(raw, headers)
 	}
 	if oldSession != "" && oldSession != sessID {
 		p.RemoveSession(oldSession)
@@ -567,6 +577,7 @@ func main() {
 		a.restoreSeriesSkips()
 		a.restoreSourceMemory()
 		a.restorePanCredentials()
+		a.restoreMediaServers()
 		a.setFullScreen(win.IsFullScreen())
 		win.OnFileDrop(func(e *mygo.FileDropEvent) {
 			if e == nil || len(e.Paths) == 0 {

@@ -416,7 +416,7 @@ func (a *app) homeFavoriteCard(c *ui.Context, e favoriteEntry, fixedWidth float3
 // wide home H1 split focus area (up to 2 stacked matte cards).
 func (a *app) homeFavoritesColumn(c *ui.Context) {
 	deferKey := ""
-	if cw := continueWatchingEntries(a.history.entries); len(cw) > 0 {
+	if cw := a.continueWatching(); len(cw) > 0 {
 		idx := a.homeResumeIdx
 		if idx < 0 || idx >= len(cw) {
 			idx = 0

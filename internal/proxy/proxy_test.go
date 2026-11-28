@@ -152,6 +152,167 @@ func TestRejectsNonHTTP(t *testing.T) {
 	}
 }
 
+func TestCredentialHeadersStayOffRedirectedHost(t *testing.T) {
+	var otherAuth, otherEmbyToken, otherReferer string
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		otherAuth = r.Header.Get("Authorization")
+		otherEmbyToken = r.Header.Get("X-Emby-Token")
+		otherReferer = r.Header.Get("Referer")
+		io.WriteString(w, "media")
+	}))
+	defer other.Close()
+	var originAuth string
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originAuth = r.Header.Get("Authorization")
+		http.Redirect(w, r, other.URL+"/movie.mkv", http.StatusFound)
+	}))
+	defer origin.Close()
+
+	p, err := Start(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	p.SetHeadersFor(origin.URL+"/Videos/1/stream.mkv", map[string]string{
+		"Authorization": "Emby Token=\"secret\"",
+		"X-Emby-Token":  "secret",
+		"Referer":       "https://example.com/",
+	})
+	resp, err := http.Get(p.Wrap(origin.URL + "/Videos/1/stream.mkv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || string(body) != "media" {
+		t.Fatalf("HTTP %d: %s", resp.StatusCode, body)
+	}
+	if originAuth == "" {
+		t.Fatal("origin did not receive the injected auth header")
+	}
+	if otherAuth != "" || otherEmbyToken != "" {
+		t.Fatalf("credential headers followed a redirect to another host: %q %q", otherAuth, otherEmbyToken)
+	}
+	if otherReferer == "" {
+		t.Fatal("non-credential headers should still follow redirects")
+	}
+}
+
+func TestCredentialHeadersStayOffCrossOriginSegments(t *testing.T) {
+	var segAuth, segReferer string
+	segHost := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		segAuth = r.Header.Get("Authorization")
+		segReferer = r.Header.Get("Referer")
+		io.WriteString(w, "segment")
+	}))
+	defer segHost.Close()
+	var listAuth string
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		listAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		io.WriteString(w, "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\n"+segHost.URL+"/seg.ts\n#EXT-X-ENDLIST\n")
+	}))
+	defer origin.Close()
+
+	p, err := Start(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	p.SetHeadersFor(origin.URL+"/master.m3u8", map[string]string{
+		"Authorization": "Emby Token=\"secret\"",
+		"Referer":       "https://example.com/",
+	})
+	resp, err := http.Get(p.Wrap(origin.URL + "/master.m3u8"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("playlist HTTP %d: %s", resp.StatusCode, body)
+	}
+	if listAuth == "" {
+		t.Fatal("playlist origin did not receive the auth header")
+	}
+	// Follow the rewritten segment URL back through the proxy.
+	var segURL string
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.Contains(line, "/u?url=") {
+			segURL = strings.TrimSpace(line)
+		}
+	}
+	if segURL == "" {
+		t.Fatalf("segment was not rewritten: %s", body)
+	}
+	resp, err = http.Get(segURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(segBody) != "segment" {
+		t.Fatalf("segment body = %q", segBody)
+	}
+	if segAuth != "" {
+		t.Fatalf("credential header reached a cross-origin segment host: %q", segAuth)
+	}
+	if segReferer == "" {
+		t.Fatal("non-credential headers should still reach segment hosts")
+	}
+}
+
+func TestSessionCredentialHeadersStayOffCrossOriginSub(t *testing.T) {
+	var subAuth string
+	subHost := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		subAuth = r.Header.Get("X-Emby-Token")
+		io.WriteString(w, "segment")
+	}))
+	defer subHost.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		io.WriteString(w, "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\n"+subHost.URL+"/seg.ts\n#EXT-X-ENDLIST\n")
+	}))
+	defer origin.Close()
+
+	p, err := Start(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	_, localURL := p.RegisterSession(SessionConfig{
+		URL:     origin.URL + "/master.m3u8",
+		Headers: map[string]string{"X-Emby-Token": "secret"},
+	})
+	resp, err := http.Get(localURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("playlist HTTP %d: %s", resp.StatusCode, body)
+	}
+	var segURL string
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.Contains(line, "/sub?url=") {
+			segURL = strings.TrimSpace(line)
+		}
+	}
+	if segURL == "" {
+		t.Fatalf("segment was not rewritten: %s", body)
+	}
+	resp, err = http.Get(segURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if subAuth != "" {
+		t.Fatalf("session credential header reached a cross-origin segment host: %q", subAuth)
+	}
+}
+
 func TestRedirectedPlaylistUsesFinalDirectoryAndFullBody(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

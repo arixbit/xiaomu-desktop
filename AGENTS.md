@@ -23,6 +23,7 @@
 - `internal/source` / `internal/library` / `internal/catalog`：站点识别、并发扫描与聚合索引；支持 type 0/1 CMS、drpy2、基础 FongMi class、`csp_XBPQ`、AList 与网盘站。`csp_` Android Dex 爬虫自动跳过。
 - `internal/drpy` / `internal/fongmi` / `internal/pdfh` / `internal/xbpq`：脚本宿主与规则解析。
 - `internal/pan` / `internal/alist`：原生夸克 / UC / 阿里云盘 / 百度网盘分享解析、原画直链与 AList 客户端。
+- `internal/mediaserver`：用户自己的 Emby / Jellyfin 登录、媒体库浏览与原文件直链。
 - `internal/resolve`：网页取流、分享页/iframe 解析、type 0/1 解析器与隔离 WebView 嗅探桥接。
 - `internal/iptv`：M3U/M3U8、TXT 与 TVBox `lives` 频道表解析及请求头合并。
 - `internal/danmaku`：弹弹play 兼容接口、国内直连公共弹幕源、过滤屏蔽与高能密度曲线。

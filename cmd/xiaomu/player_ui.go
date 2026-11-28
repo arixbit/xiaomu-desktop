@@ -743,7 +743,7 @@ func (a *app) playerHeader(c *ui.Context, hasEpisodes, compact bool, floatingRec
 			}
 		}
 	}
-	if a.playingFile {
+	if a.playingFile || a.playingMedia {
 		name = a.playingName
 	}
 
@@ -2370,6 +2370,11 @@ func (a *app) leavePlayer() {
 		a.proxy.RemoveSession(a.proxySession)
 		a.proxySession = ""
 	}
+	if a.proxy != nil {
+		// Do not leave the finished playback's credential headers in the
+		// shared proxy for whatever request comes next.
+		a.proxy.SetHeaders(nil)
+	}
 	a.playingStreams, a.playingStreamIdx = nil, 0
 	a.syncNowPlaying()
 	a.playingLive, a.playingDirect, a.playingDirectMPV, a.playingDirectLive = false, false, false, false
@@ -2377,6 +2382,7 @@ func (a *app) leavePlayer() {
 	a.playingFile = false
 	a.playingFilePath = ""
 	a.playingName = ""
+	a.clearPlayingMedia()
 	a.localPlaylist = nil
 	a.localPlaylistIdx = -1
 	a.playerOverlay = playerOverlayState{}
