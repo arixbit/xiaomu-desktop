@@ -296,6 +296,51 @@ func TestLoginBodyStaysOffOtherHosts(t *testing.T) {
 	}
 }
 
+func TestUpgradedBase(t *testing.T) {
+	cases := []struct {
+		base, final, want string
+		ok                bool
+	}{
+		{"http://media.example.com:8096", "https://media.example.com:8920/System/Info/Public", "https://media.example.com:8920", true},
+		{"http://media.example.com/emby", "https://media.example.com/emby/System/Info/Public", "https://media.example.com/emby", true},
+		{"http://media.example.com:8096", "http://media.example.com:8096/System/Info/Public", "", false},
+		{"http://media.example.com:8096", "https://other.example.com/System/Info/Public", "", false},
+		{"https://media.example.com:8920", "https://media.example.com:8920/System/Info/Public", "", false},
+		{"http://media.example.com:8096", "https://media.example.com:8920/somewhere/else", "", false},
+	}
+	for _, tc := range cases {
+		got, ok := upgradedBase(tc.base, tc.final)
+		if ok != tc.ok || got != tc.want {
+			t.Fatalf("upgradedBase(%q, %q) = %q, %v; want %q, %v", tc.base, tc.final, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+func TestConnectImplicitSchemeKeepsPasswordOffOtherHosts(t *testing.T) {
+	var otherPosts atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			otherPosts.Add(1)
+		}
+		io.WriteString(w, `{"ProductName":"Jellyfin Server","ServerName":"示例","Id":"srv-1"}`)
+	}))
+	defer other.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+
+	// No scheme typed: the probe follows to the other host, but the base
+	// must not move there, and the password must never be posted to it.
+	bare := strings.TrimPrefix(origin.URL, "http://")
+	if _, err := Connect(context.Background(), bare, "user", "secret", "device-1"); err == nil {
+		t.Fatal("connect succeeded through a cross-host redirect chain")
+	}
+	if otherPosts.Load() != 0 {
+		t.Fatal("login password was posted to another host")
+	}
+}
+
 func TestBadLogin(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/System/Info/Public" {

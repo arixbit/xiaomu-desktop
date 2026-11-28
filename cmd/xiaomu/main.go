@@ -452,7 +452,7 @@ func (a *app) openPlaybackURL(raw string, headers map[string]string, keepCurrent
 			a.proxySession = ""
 			oldSession = ""
 		}
-		p.SetHeaders(headers)
+		p.SetHeadersFor(raw, headers)
 		localURL = p.Wrap(raw)
 	}
 	player, err := a.openMediaURL(localURL)
@@ -466,7 +466,7 @@ func (a *app) openPlaybackURL(raw string, headers map[string]string, keepCurrent
 	}
 	a.adoptPlayer(player)
 	if keepCurrent {
-		p.SetHeaders(headers)
+		p.SetHeadersFor(raw, headers)
 	}
 	if oldSession != "" && oldSession != sessID {
 		p.RemoveSession(oldSession)

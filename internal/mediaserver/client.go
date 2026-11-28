@@ -217,13 +217,24 @@ func ClassifyProduct(productName string) Product {
 // stable for a saved server so the token stays bound to the same device;
 // an empty id gets a new random one.
 func Connect(ctx context.Context, baseURL, username, password, deviceID string) (Session, error) {
+	implicit := !strings.Contains(strings.TrimSpace(baseURL), "://")
 	c, err := New(baseURL)
 	if err != nil {
 		return Session{}, err
 	}
-	info, err := c.PublicInfo(ctx)
+	info, final, err := c.publicInfoFinal(ctx)
 	if err != nil {
 		return Session{}, err
+	}
+	// A bare host name defaults to http. If the probe was redirected to
+	// https on the same host, confirm that address before the password
+	// is sent; an explicitly typed http address (a LAN server) is kept.
+	if implicit {
+		if upgraded, ok := upgradedBase(c.base, final); ok {
+			if nc, err := New(upgraded); err == nil {
+				c = nc
+			}
+		}
 	}
 	if strings.TrimSpace(deviceID) == "" {
 		deviceID, err = newDeviceID()
@@ -251,21 +262,49 @@ func Connect(ctx context.Context, baseURL, username, password, deviceID string) 
 
 // PublicInfo calls GET /System/Info/Public.
 func (c *Client) PublicInfo(ctx context.Context) (PublicInfo, error) {
+	info, _, err := c.publicInfoFinal(ctx)
+	return info, err
+}
+
+// publicInfoFinal also reports the URL the probe landed on after redirects,
+// so Connect can confirm the effective address before sending a password.
+func (c *Client) publicInfoFinal(ctx context.Context) (PublicInfo, string, error) {
 	var raw struct {
 		ServerName  string `json:"servername"`
 		Version     string `json:"version"`
 		ProductName string `json:"productname"`
 		ID          string `json:"id"`
 	}
-	if err := c.do(ctx, Session{}, http.MethodGet, "/System/Info/Public", nil, nil, &raw); err != nil {
-		return PublicInfo{}, err
+	final, err := c.doFinal(ctx, Session{}, http.MethodGet, "/System/Info/Public", nil, nil, &raw)
+	if err != nil {
+		return PublicInfo{}, "", err
 	}
 	return PublicInfo{
 		ServerName:  strings.TrimSpace(raw.ServerName),
 		Version:     strings.TrimSpace(raw.Version),
 		ProductName: strings.TrimSpace(raw.ProductName),
 		ID:          strings.TrimSpace(raw.ID),
-	}, nil
+	}, final, nil
+}
+
+// upgradedBase returns the https base to use when the public probe for an
+// http base landed on https on the same host. Anything else (a different
+// host, a still-http landing, an unexpected final path) keeps the base.
+func upgradedBase(base, final string) (string, bool) {
+	b, err := url.Parse(base)
+	if err != nil || b.Scheme != "http" {
+		return "", false
+	}
+	f, err := url.Parse(final)
+	if err != nil || f.Scheme != "https" || !strings.EqualFold(f.Hostname(), b.Hostname()) {
+		return "", false
+	}
+	p := f.EscapedPath()
+	if !strings.HasSuffix(p, "/System/Info/Public") {
+		return "", false
+	}
+	p = strings.TrimRight(strings.TrimSuffix(p, "/System/Info/Public"), "/")
+	return "https://" + f.Host + p, true
 }
 
 // Login calls POST /Users/AuthenticateByName.
@@ -751,11 +790,17 @@ func decodeItemList(raw json.RawMessage) ([]rawItem, int, error) {
 }
 
 func (c *Client) do(ctx context.Context, s Session, method, path string, query url.Values, body any, out any) error {
+	_, err := c.doFinal(ctx, s, method, path, query, body, out)
+	return err
+}
+
+// doFinal is do plus the URL the request finally landed on after redirects.
+func (c *Client) doFinal(ctx context.Context, s Session, method, path string, query url.Values, body any, out any) (string, error) {
 	var rdr io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return "", err
 		}
 		rdr = bytes.NewReader(buf)
 	}
@@ -765,7 +810,7 @@ func (c *Client) do(ctx context.Context, s Session, method, path string, query u
 	}
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, rdr)
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Accept", "application/json; profile=\"PascalCase\"")
 	if body != nil {
@@ -776,29 +821,33 @@ func (c *Client) do(ctx context.Context, s Session, method, path string, query u
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("无法连接服务器")
+		return "", fmt.Errorf("无法连接服务器")
 	}
 	defer resp.Body.Close()
+	final := endpoint
+	if resp.Request != nil && resp.Request.URL != nil {
+		final = resp.Request.URL.String()
+	}
 	data, exceeded, err := httpx.ReadLimit(resp.Body, resp.ContentLength, bodyLimit)
 	if err != nil {
-		return fmt.Errorf("无法连接服务器")
+		return "", fmt.Errorf("无法连接服务器")
 	}
 	if exceeded {
-		return errors.New("服务器响应过大")
+		return "", errors.New("服务器响应过大")
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return ErrUnauthorized
+		return "", ErrUnauthorized
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("服务器返回 HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("服务器返回 HTTP %d", resp.StatusCode)
 	}
 	if out == nil || len(bytes.TrimSpace(data)) == 0 {
-		return nil
+		return final, nil
 	}
 	if err := decodeFlex(data, out); err != nil {
-		return errors.New("无法解析服务器响应")
+		return "", errors.New("无法解析服务器响应")
 	}
-	return nil
+	return final, nil
 }
 
 // decodeFlex lowercases object keys so PascalCase and camelCase bind to the

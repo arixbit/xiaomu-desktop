@@ -36,6 +36,16 @@ type savedMediaServer struct {
 	DeviceID    string `json:"device_id"`
 }
 
+// historyKey is the stable identity history entries are filed under: the
+// server's own id when known, else its address. Unlike the local record
+// id, it survives deleting and re-adding the same server.
+func (s savedMediaServer) historyKey() string {
+	if id := strings.TrimSpace(s.ServerID); id != "" {
+		return id
+	}
+	return s.BaseURL
+}
+
 func (s savedMediaServer) session() mediaserver.Session {
 	return mediaserver.Session{
 		BaseURL:     s.BaseURL,
@@ -84,6 +94,7 @@ type mediaCrumb struct {
 type mediaServerUI struct {
 	path       string
 	servers    []savedMediaServer
+	gen        uint64 // bumped whenever servers change; history display caches key on it
 	addOpen    bool
 	addWasOpen bool
 	addURL     string
@@ -213,6 +224,30 @@ func (a *app) mediaServer(id string) (savedMediaServer, bool) {
 	return savedMediaServer{}, false
 }
 
+// mediaServerByHistoryKey finds the saved server a media history entry
+// belongs to, by stable history key, falling back to the local record id
+// for entries written before stable keys existed.
+func (a *app) mediaServerByHistoryKey(key string) (savedMediaServer, bool) {
+	for _, s := range a.media.servers {
+		if s.historyKey() == key {
+			return s, true
+		}
+	}
+	return a.mediaServer(key)
+}
+
+// mediaEntryCurrent reports whether a history entry belongs to a currently
+// saved server account. Non-media entries are always current. Media
+// entries from another account (or a removed server) stay stored but are
+// not displayed.
+func (a *app) mediaEntryCurrent(e historyEntry) bool {
+	if !e.isMedia() {
+		return true
+	}
+	srv, ok := a.mediaServerByHistoryKey(e.SiteKey)
+	return ok && e.MediaUser == srv.UserID
+}
+
 func (a *app) upsertMediaServer(s savedMediaServer) {
 	if s.ID == "" {
 		s.ID = newLocalID()
@@ -227,12 +262,14 @@ func (a *app) upsertMediaServer(s savedMediaServer) {
 			s.DeviceID = a.media.servers[i].DeviceID
 		}
 		a.media.servers[i] = s
+		a.media.gen++
 		if err := a.saveMediaServers(); err != nil {
 			a.status = "保存媒体服务器失败：" + err.Error()
 		}
 		return
 	}
 	a.media.servers = append(a.media.servers, s)
+	a.media.gen++
 	if err := a.saveMediaServers(); err != nil {
 		a.status = "保存媒体服务器失败：" + err.Error()
 	}
@@ -249,6 +286,7 @@ func (a *app) removeMediaServer(id string) {
 		kept = append(kept, s)
 	}
 	a.media.servers = kept
+	a.media.gen++
 	if err := a.saveMediaServers(); err != nil {
 		a.status = "移除服务器失败：" + err.Error()
 		return
@@ -452,7 +490,7 @@ func (a *app) playMediaServerItem(srv savedMediaServer, itemID, name, episode, p
 				return
 			}
 			a.playingMedia = true
-			a.playingMediaServer = srv.ID
+			a.playingMediaServer = srv.historyKey()
 			a.playingMediaUser = srv.UserID
 			a.playingMediaItem = itemID
 			a.playingMediaName = name
@@ -464,7 +502,7 @@ func (a *app) playMediaServerItem(srv savedMediaServer, itemID, name, episode, p
 				a.playingName = strings.TrimSpace(name + " · " + episode)
 			}
 			a.resumeAt = at
-			a.revealContinueWatchingKey(mediaHistoryKey(srv.ID, srv.UserID, itemID))
+			a.revealContinueWatchingKey(mediaHistoryKey(srv.historyKey(), srv.UserID, itemID))
 			a.syncNowPlaying()
 		}}, nil
 	}, func(err error) {
@@ -473,7 +511,7 @@ func (a *app) playMediaServerItem(srv savedMediaServer, itemID, name, episode, p
 }
 
 func (a *app) resumeMedia(e historyEntry) {
-	srv, ok := a.mediaServer(e.SiteKey)
+	srv, ok := a.mediaServerByHistoryKey(e.SiteKey)
 	if !ok {
 		a.status = "这台媒体服务器已移除，重新添加后可继续播放"
 		return
@@ -779,8 +817,10 @@ const mediaPosterServerQuery = "xiaomu_server"
 // Poster images are loaded by the shared image client, which cannot take
 // per-URL headers. Tokens stay out of the image URL. A host:port is not an
 // identity: two accounts, or two servers under different path prefixes, can
-// share one. Lookup uses the saved server id when the URL carries one, and
-// otherwise a unique scheme + host + port + path prefix.
+// share one, and an ordinary source poster can happen to live on the same
+// address as a saved server. Only a URL stamped by a media-library entry
+// point with the saved server id is authorized; unstamped URLs never
+// borrow a media server's token.
 var (
 	mediaPosterMu  sync.RWMutex
 	mediaPosterIdx mediaPosterIndex
@@ -891,46 +931,47 @@ func stampMediaPosterURL(raw, serverID string) string {
 }
 
 func lookupMediaPoster(u *url.URL) (mediaserver.Session, bool) {
-	if u == nil || u.Host == "" {
+	srv, ok := lookupMediaPosterServer(u)
+	if !ok {
 		return mediaserver.Session{}, false
+	}
+	return srv.session, true
+}
+
+// lookupMediaPosterServer resolves the saved server a stamped poster URL
+// names. The URL must still match that server's scheme, host, and path
+// prefix, and no more specific saved server may also claim it.
+func lookupMediaPosterServer(u *url.URL) (posterServer, bool) {
+	if u == nil || u.Host == "" {
+		return posterServer{}, false
+	}
+	id := strings.TrimSpace(u.Query().Get(mediaPosterServerQuery))
+	if id == "" {
+		return posterServer{}, false
 	}
 	mediaPosterMu.RLock()
 	defer mediaPosterMu.RUnlock()
-	if id := strings.TrimSpace(u.Query().Get(mediaPosterServerQuery)); id != "" {
-		srv, ok := mediaPosterIdx.byID[id]
-		if !ok || !srv.matches(u) || mediaPosterIdx.moreSpecific(u, srv) {
-			return mediaserver.Session{}, false
-		}
-		return srv.session, true
+	srv, ok := mediaPosterIdx.byID[id]
+	if !ok || !srv.matches(u) || mediaPosterIdx.moreSpecific(u, srv) {
+		return posterServer{}, false
 	}
-	var best posterServer
-	bestLen := -1
-	found := false
-	ambiguous := false
-	for _, srv := range mediaPosterIdx.ordered {
-		if !srv.matches(u) {
-			continue
-		}
-		n := len(srv.path)
-		switch {
-		case !found || n > bestLen:
-			best, bestLen, found, ambiguous = srv, n, true, false
-		case n == bestLen:
-			ambiguous = true
-		}
-	}
-	if !found || ambiguous {
-		return mediaserver.Session{}, false
-	}
-	return best.session, true
+	return srv, true
 }
 
 func mediaPosterHeaders(u *url.URL) map[string]string {
-	sess, ok := lookupMediaPoster(u)
+	headers, _, _ := mediaPosterAuth(u)
+	return headers
+}
+
+// mediaPosterAuth returns the auth headers for a stamped poster URL plus
+// the server that authorized them, so redirect handling can keep the
+// credentials on that server (including its path prefix) only.
+func mediaPosterAuth(u *url.URL) (map[string]string, posterServer, bool) {
+	srv, ok := lookupMediaPosterServer(u)
 	if !ok {
-		return nil
+		return nil, posterServer{}, false
 	}
-	return mediaserver.AuthHeaders(sess)
+	return mediaserver.AuthHeaders(srv.session), srv, true
 }
 
 func stripMediaPosterQuery(u *url.URL) {

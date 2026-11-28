@@ -42,7 +42,7 @@ func TestMediaPosterRequestUsesHeaderNotURL(t *testing.T) {
 	a.syncMediaPosterAuth()
 	t.Cleanup(resetMediaPosterAuth)
 
-	req, err := http.NewRequest(http.MethodGet, srv.URL+"/Items/movie-1/Images/Primary?maxHeight=480&quality=80", nil)
+	req, err := http.NewRequest(http.MethodGet, stampMediaPosterURL(srv.URL+"/Items/movie-1/Images/Primary?maxHeight=480&quality=80", "server-1"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,9 +67,10 @@ func TestMediaHistoryStaysWithItsAccount(t *testing.T) {
 		Product:     string(mediaserver.ProductJellyfin),
 		UserID:      "user-a",
 		AccessToken: "token-a",
+		ServerID:    "srv-guid-1",
 		DeviceID:    "dev-1",
 	}}
-	entry := historyEntry{Kind: historyKindMedia, SiteKey: "server-1", MediaUser: "user-a", VideoID: "movie-1", Name: "示例"}
+	entry := historyEntry{Kind: historyKindMedia, SiteKey: "srv-guid-1", MediaUser: "user-a", VideoID: "movie-1", Name: "示例"}
 	if !a.historyAvailable(entry) {
 		t.Fatal("the recording account's entry should be available")
 	}
@@ -91,6 +92,31 @@ func TestMediaHistoryStaysWithItsAccount(t *testing.T) {
 	}
 	if !a.historyAvailable(other) {
 		t.Fatal("the new account's own entry should be available")
+	}
+
+	// Display follows the same identity: the old account's title is hidden.
+	a.history.entries = []historyEntry{entry, other}
+	cw := a.continueWatching()
+	if len(cw) != 1 || cw[0].MediaUser != "user-b" {
+		t.Fatalf("continue watching = %+v", cw)
+	}
+
+	// Deleting and re-adding the same server (new local id, same server
+	// id and account) recovers the entry.
+	a.media.servers = []savedMediaServer{{
+		ID:          "server-2",
+		BaseURL:     "https://media.example.com:8096",
+		Product:     string(mediaserver.ProductJellyfin),
+		UserID:      "user-a",
+		AccessToken: "token-a2",
+		ServerID:    "srv-guid-1",
+		DeviceID:    "dev-2",
+	}}
+	if !a.historyAvailable(entry) {
+		t.Fatal("re-adding the same server and account should recover its history")
+	}
+	if srv, ok := a.mediaServerByHistoryKey(entry.SiteKey); !ok || srv.ID != "server-2" {
+		t.Fatalf("history key lookup = %+v, %v", srv, ok)
 	}
 }
 
@@ -124,7 +150,7 @@ func TestMediaPosterAuthStaysOffRedirectedHost(t *testing.T) {
 	a.syncMediaPosterAuth()
 	t.Cleanup(resetMediaPosterAuth)
 
-	req, err := http.NewRequest(http.MethodGet, origin.URL+"/Items/movie-1/Images/Primary", nil)
+	req, err := http.NewRequest(http.MethodGet, stampMediaPosterURL(origin.URL+"/Items/movie-1/Images/Primary", "server-1"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +164,61 @@ func TestMediaPosterAuthStaysOffRedirectedHost(t *testing.T) {
 	}
 	if otherAuth != "" || otherEmbyAuth != "" || otherEmbyToken != "" {
 		t.Fatalf("poster auth followed a redirect to another host: %q %q %q", otherAuth, otherEmbyAuth, otherEmbyToken)
+	}
+}
+
+func TestMediaPosterAuthStaysOnServerPath(t *testing.T) {
+	const token = "poster-path-token"
+	var keptAuth, escapedAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/emby/Items/keep/Images/Primary":
+			http.Redirect(w, r, "/emby/poster.svg", http.StatusFound)
+		case "/emby/Items/escape/Images/Primary":
+			http.Redirect(w, r, "/other/poster.svg", http.StatusFound)
+		case "/emby/poster.svg":
+			keptAuth = r.Header.Get("X-Emby-Token")
+			w.Header().Set("Content-Type", "image/svg+xml")
+			io.WriteString(w, `<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"></svg>`)
+		case "/other/poster.svg":
+			escapedAuth = r.Header.Get("X-Emby-Token")
+			w.Header().Set("Content-Type", "image/svg+xml")
+			io.WriteString(w, `<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"></svg>`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	a := &app{}
+	a.media.servers = []savedMediaServer{{
+		ID:          "server-1",
+		BaseURL:     srv.URL + "/emby",
+		Product:     string(mediaserver.ProductEmby),
+		UserID:      "user-1",
+		AccessToken: token,
+		DeviceID:    "device-1",
+	}}
+	a.syncMediaPosterAuth()
+	t.Cleanup(resetMediaPosterAuth)
+
+	for _, item := range []string{"keep", "escape"} {
+		raw := stampMediaPosterURL(srv.URL+"/emby/Items/"+item+"/Images/Primary", "server-1")
+		req, err := http.NewRequest(http.MethodGet, raw, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := (posterRoundTripper{}).RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+	if keptAuth != token {
+		t.Fatalf("redirect within the server path lost auth: %q", keptAuth)
+	}
+	if escapedAuth != "" {
+		t.Fatalf("poster auth followed a redirect outside the server path: %q", escapedAuth)
 	}
 }
 
@@ -155,11 +236,20 @@ func TestMediaPosterAuthDoesNotCollide(t *testing.T) {
 
 	assertPosterToken(t, "https://media.example.com:8096/Items/1/Images/Primary?xiaomu_server=acct-a", "token-acct-a")
 	assertPosterToken(t, "https://media.example.com:8096/Items/1/Images/Primary?xiaomu_server=acct-b", "token-acct-b")
-	assertPosterToken(t, "https://media.example.com:8096/emby/Items/1/Images/Primary", "token-emby-path")
-	assertPosterToken(t, "https://media.example.com:8096/jellyfin/Items/1/Images/Primary?maxHeight=480", "token-jf-path")
-	assertPosterToken(t, "https://media.example.com:8920/Items/1/Images/Primary", "token-other-port")
-	if headers := posterHeadersFor(t, "https://media.example.com:8096/Items/1/Images/Primary"); len(headers) != 0 {
-		t.Fatalf("two accounts on one base must not share a guessed token: %#v", headers)
+	assertPosterToken(t, "https://media.example.com:8096/emby/Items/1/Images/Primary?xiaomu_server=emby-path", "token-emby-path")
+	assertPosterToken(t, "https://media.example.com:8096/jellyfin/Items/1/Images/Primary?xiaomu_server=jf-path", "token-jf-path")
+	assertPosterToken(t, "https://media.example.com:8920/Items/1/Images/Primary?xiaomu_server=other-port", "token-other-port")
+	// Unstamped URLs never borrow a token, even on a saved server's address:
+	// an ordinary source poster can live on the same host.
+	for _, raw := range []string{
+		"https://media.example.com:8096/Items/1/Images/Primary",
+		"https://media.example.com:8096/emby/Items/1/Images/Primary",
+		"https://media.example.com:8096/jellyfin/Items/1/Images/Primary?maxHeight=480",
+		"https://media.example.com:8920/Items/1/Images/Primary",
+	} {
+		if headers := posterHeadersFor(t, raw); len(headers) != 0 {
+			t.Fatalf("unstamped url %s borrowed auth: %#v", raw, headers)
+		}
 	}
 	if headers := posterHeadersFor(t, "https://other.example.com/Items/1/Images/Primary?xiaomu_server=acct-a"); len(headers) != 0 {
 		t.Fatalf("server id on another host leaked auth: %#v", headers)

@@ -21,7 +21,7 @@ const (
 // servePrefetch accelerates large non-HLS range streams (such as cloud-drive 4K MP4/MKV
 // files throttled per connection) using bounded concurrent range reads.
 // Returns true if the response was completely handled; false falls back to direct proxy.
-func (p *Proxy) servePrefetch(w http.ResponseWriter, r *http.Request, sess *proxySession, target string, headers map[string]string) bool {
+func (p *Proxy) servePrefetch(w http.ResponseWriter, r *http.Request, sess *proxySession, target string, headers boundHeaders) bool {
 	reqStart, reqEnd, hasRange, ok := parseSingleByteRange(r.Header.Get("Range"))
 	if !ok {
 		return false
@@ -188,7 +188,7 @@ func (p *Proxy) servePrefetch(w http.ResponseWriter, r *http.Request, sess *prox
 	return true
 }
 
-func (p *Proxy) fetchChunk(ctx context.Context, sess *proxySession, target string, headers map[string]string, start, end int64) ([]byte, error) {
+func (p *Proxy) fetchChunk(ctx context.Context, sess *proxySession, target string, headers boundHeaders, start, end int64) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

@@ -53,10 +53,11 @@ type historyEntry struct {
 // from a local file on disk; historyKindMedia marks one played from a
 // user-added Emby or Jellyfin server. Kind is the only type check: a site
 // whose key happens to be "nas", "local", or "media" must never be mistaken
-// for one. Media entries store the local server id in SiteKey, the item
-// id in VideoID, and the signed-in user id in MediaUser, never the access
-// token or a media URL. The user id is part of the identity: re-logging
-// in with another account must not adopt the previous account's progress.
+// for one. Media entries store the server's stable history key (its own
+// server id, else its address) in SiteKey, the item id in VideoID, and the
+// signed-in user id in MediaUser, never the access token or a media URL.
+// The user id is part of the identity: re-logging in with another account
+// must not adopt the previous account's progress.
 const (
 	historyKindNAS   = "nas"
 	historyKindSite  = "site"
@@ -172,6 +173,7 @@ type historyStore struct {
 	rowsHead     *historyEntry
 	rowsLen      int
 	rowsDayStart time.Time
+	rowsGen      uint64
 }
 
 func (h *historyStore) findByTitle(name string) (historyEntry, bool) {
@@ -229,20 +231,26 @@ func (h *historyStore) rebuildTitleIndex() {
 	}
 }
 
-func (h *historyStore) listRows(now time.Time) []historyListRow {
+// listRows builds the grouped history rows, skipping entries the visible
+// predicate rejects (media entries of accounts that are not currently
+// saved). gen must change whenever the predicate's answers may change.
+func (h *historyStore) listRows(now time.Time, visible func(historyEntry) bool, gen uint64) []historyListRow {
 	localNow := now.Local()
 	dayStart := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, localNow.Location())
 	var head *historyEntry
 	if len(h.entries) > 0 {
 		head = &h.entries[0]
 	}
-	if h.rowsHead == head && h.rowsLen == len(h.entries) && h.rowsDayStart.Equal(dayStart) && len(h.rowsCache) > 0 {
+	if h.rowsHead == head && h.rowsLen == len(h.entries) && h.rowsDayStart.Equal(dayStart) && h.rowsGen == gen && len(h.rowsCache) > 0 {
 		return h.rowsCache
 	}
 	dayEnd := dayStart.AddDate(0, 0, 1)
 	rows := make([]historyListRow, 0, len(h.entries)+2)
 	heading := ""
 	for i, e := range h.entries {
+		if visible != nil && !visible(e) {
+			continue
+		}
 		group := "更早"
 		if !e.Updated.Before(dayStart) && e.Updated.Before(dayEnd) {
 			group = "今天"
@@ -257,6 +265,7 @@ func (h *historyStore) listRows(now time.Time) []historyListRow {
 	h.rowsHead = head
 	h.rowsLen = len(h.entries)
 	h.rowsDayStart = dayStart
+	h.rowsGen = gen
 	return rows
 }
 
@@ -513,7 +522,7 @@ func (a *app) historyAvailable(e historyEntry) bool {
 		return ok
 	}
 	if e.isMedia() {
-		srv, ok := a.mediaServer(e.SiteKey)
+		srv, ok := a.mediaServerByHistoryKey(e.SiteKey)
 		return ok && e.MediaUser == srv.UserID
 	}
 	return a.configAvailable(e.ConfigURL)
@@ -748,7 +757,7 @@ func (a *app) historyView(c *ui.Context) {
 				})
 			}
 		})
-		rows := h.listRows(c.Now())
+		rows := h.listRows(c.Now(), a.mediaEntryCurrent, a.media.gen)
 		h.list.Key = func(row int) any { return rows[row].key }
 		h.list.Label = func(row int) string { return rows[row].label }
 		ui.List(c, &h.list, len(rows), func(row int) {

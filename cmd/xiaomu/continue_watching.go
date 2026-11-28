@@ -26,6 +26,19 @@ func continueWatchingEntries(history []historyEntry) []historyEntry {
 	return entries
 }
 
+// continueWatching is continueWatchingEntries over the entries that belong
+// to currently saved accounts: another account's media titles, posters,
+// and progress are not shown.
+func (a *app) continueWatching() []historyEntry {
+	visible := make([]historyEntry, 0, len(a.history.entries))
+	for _, e := range a.history.entries {
+		if a.mediaEntryCurrent(e) {
+			visible = append(visible, e)
+		}
+	}
+	return continueWatchingEntries(visible)
+}
+
 func (a *app) setContinueWatchingHidden(key string, hidden bool) {
 	if key == "" {
 		return
@@ -82,7 +95,7 @@ func continueWatchingSubline(e historyEntry, fav favoriteEntry, followed bool) s
 }
 
 func (a *app) continueWatchingStrip(c *ui.Context) {
-	entries := continueWatchingEntries(a.history.entries)
+	entries := a.continueWatching()
 	if len(entries) == 0 {
 		return
 	}
@@ -225,7 +238,7 @@ func (a *app) homeContinueWatchingSection(c *ui.Context, entries []historyEntry)
 								missingLabel = "文件已移除"
 							} else if e.isMedia() {
 								missingLabel = "服务器已移除"
-								if srv, ok := a.mediaServer(e.SiteKey); ok && e.MediaUser != srv.UserID {
+								if srv, ok := a.mediaServerByHistoryKey(e.SiteKey); ok && e.MediaUser != srv.UserID {
 									missingLabel = "其他账号的记录"
 								}
 							}
