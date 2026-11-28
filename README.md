@@ -137,7 +137,7 @@ MyGo 是 Egoist 创建的 Go 桌面应用框架。小幕用它创建 macOS 与 W
 
 ## 环境
 
-- Go 1.27.3 或更新。`go.mod` 的 `go 1.27.3` 即工具链要求；Go 1.27 的 `go mod tidy` 会去掉与这一行相同的 `toolchain` 指令。
+- Go 1.27.4 或更新。`go.mod` 的 `go 1.27.4` 即工具链要求；Go 1.27 的 `go mod tidy` 会去掉与这一行相同的 `toolchain` 指令。
 - 播放窗口：macOS 13 及以上（Apple Silicon / Intel）与 Windows 10/11（x64 / ARM64）。MyGo 固定在 `v0.10.1-0.20261127045957-d11fe48b8fc3`，`mygo-player` 固定在 `v0.5.2`。界面只用包 `ui`，没有网页前端。
 - 探针在 Linux、macOS 和 Windows 上都能编译运行。
 
@@ -228,7 +228,7 @@ XIAOMU_NATIVE_MEDIA_DIR=/tmp/xiaomu-local-hls go test ./cmd/xiaomu -run '^TestNa
 
 Linux 上可以编译与运行无头测试，实际播放请在 macOS 或 Windows（x64 / ARM64）上确认：
 
-1. 安装 Go 1.27.3+，克隆本分支。
+1. 安装 Go 1.27.4+，克隆本分支。
 2. `go test ./...`，确认探针和界面测试通过。
 3. `go tool mygo dev` 打开窗口。
 4. 点侧边栏底部“打开链接”，粘贴一条你自己的 mp4 直链（可先不填请求头），点播放，确认有画面和声音。
