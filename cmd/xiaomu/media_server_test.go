@@ -40,11 +40,7 @@ func TestMediaPosterRequestUsesHeaderNotURL(t *testing.T) {
 		DeviceID:    "device-1",
 	}}
 	a.syncMediaPosterAuth()
-	t.Cleanup(func() {
-		mediaPosterMu.Lock()
-		mediaPosterByHost = map[string]mediaserver.Session{}
-		mediaPosterMu.Unlock()
-	})
+	t.Cleanup(resetMediaPosterAuth)
 
 	req, err := http.NewRequest(http.MethodGet, srv.URL+"/Items/movie-1/Images/Primary?maxHeight=480&quality=80", nil)
 	if err != nil {
@@ -61,6 +57,103 @@ func TestMediaPosterRequestUsesHeaderNotURL(t *testing.T) {
 	if strings.Contains(gotURL, token) || strings.Contains(strings.ToLower(gotURL), "api_key") {
 		t.Fatalf("token leaked into image url %s", gotURL)
 	}
+}
+
+func TestMediaPosterAuthDoesNotCollide(t *testing.T) {
+	a := &app{}
+	a.media.servers = []savedMediaServer{
+		{ID: "acct-a", BaseURL: "https://media.example.com:8096", Product: string(mediaserver.ProductJellyfin), UserID: "user-a", AccessToken: "token-acct-a", DeviceID: "dev-a"},
+		{ID: "acct-b", BaseURL: "https://media.example.com:8096", Product: string(mediaserver.ProductJellyfin), UserID: "user-b", AccessToken: "token-acct-b", DeviceID: "dev-b"},
+		{ID: "emby-path", BaseURL: "https://media.example.com:8096/emby", Product: string(mediaserver.ProductEmby), UserID: "user-e", AccessToken: "token-emby-path", DeviceID: "dev-e"},
+		{ID: "jf-path", BaseURL: "https://media.example.com:8096/jellyfin", Product: string(mediaserver.ProductJellyfin), UserID: "user-j", AccessToken: "token-jf-path", DeviceID: "dev-j"},
+		{ID: "other-port", BaseURL: "https://media.example.com:8920", Product: string(mediaserver.ProductJellyfin), UserID: "user-p", AccessToken: "token-other-port", DeviceID: "dev-p"},
+	}
+	a.syncMediaPosterAuth()
+	t.Cleanup(resetMediaPosterAuth)
+
+	assertPosterToken(t, "https://media.example.com:8096/Items/1/Images/Primary?xiaomu_server=acct-a", "token-acct-a")
+	assertPosterToken(t, "https://media.example.com:8096/Items/1/Images/Primary?xiaomu_server=acct-b", "token-acct-b")
+	assertPosterToken(t, "https://media.example.com:8096/emby/Items/1/Images/Primary", "token-emby-path")
+	assertPosterToken(t, "https://media.example.com:8096/jellyfin/Items/1/Images/Primary?maxHeight=480", "token-jf-path")
+	assertPosterToken(t, "https://media.example.com:8920/Items/1/Images/Primary", "token-other-port")
+	if headers := posterHeadersFor(t, "https://media.example.com:8096/Items/1/Images/Primary"); len(headers) != 0 {
+		t.Fatalf("two accounts on one base must not share a guessed token: %#v", headers)
+	}
+	if headers := posterHeadersFor(t, "https://other.example.com/Items/1/Images/Primary?xiaomu_server=acct-a"); len(headers) != 0 {
+		t.Fatalf("server id on another host leaked auth: %#v", headers)
+	}
+	if headers := posterHeadersFor(t, "http://media.example.com:8096/Items/1/Images/Primary?xiaomu_server=acct-a"); len(headers) != 0 {
+		t.Fatalf("http request used the https server token: %#v", headers)
+	}
+	if headers := posterHeadersFor(t, "https://media.example.com:8096/emby/Items/1/Images/Primary?xiaomu_server=acct-a"); len(headers) != 0 {
+		t.Fatalf("root account token was sent to the /emby server: %#v", headers)
+	}
+
+	var gotAuth, gotURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotURL = r.URL.RequestURI()
+		w.Header().Set("Content-Type", "image/svg+xml")
+		io.WriteString(w, `<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"></svg>`)
+	}))
+	defer srv.Close()
+	b := &app{}
+	b.media.servers = []savedMediaServer{{
+		ID: "local-1", BaseURL: srv.URL, Product: string(mediaserver.ProductJellyfin),
+		UserID: "user-1", AccessToken: "token-local-1", DeviceID: "dev-1",
+	}, {
+		ID: "local-2", BaseURL: srv.URL, Product: string(mediaserver.ProductJellyfin),
+		UserID: "user-2", AccessToken: "token-local-2", DeviceID: "dev-2",
+	}}
+	b.syncMediaPosterAuth()
+	raw := stampMediaPosterURL(srv.URL+"/Items/movie-1/Images/Primary?maxHeight=480&quality=80", "local-2")
+	if strings.Contains(raw, "token-local-2") {
+		t.Fatalf("stamp put the token in the url: %s", raw)
+	}
+	req, err := http.NewRequest(http.MethodGet, raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := (posterRoundTripper{}).RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if !strings.Contains(gotAuth, `Token="token-local-2"`) || strings.Contains(gotAuth, "token-local-1") {
+		t.Fatalf("upstream auth = %q", gotAuth)
+	}
+	if strings.Contains(gotURL, "xiaomu_server") || strings.Contains(gotURL, "token-local") {
+		t.Fatalf("selector or token leaked upstream: %s", gotURL)
+	}
+}
+
+func posterHeadersFor(t *testing.T, raw string) map[string]string {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mediaPosterHeaders(u)
+}
+
+func assertPosterToken(t *testing.T, raw, token string) {
+	t.Helper()
+	headers := posterHeadersFor(t, raw)
+	blob := headers["Authorization"] + "\n" + headers["X-Emby-Token"] + "\n" + headers["X-Emby-Authorization"]
+	if !strings.Contains(blob, token) {
+		t.Fatalf("url %s auth = %#v, want %s", raw, headers, token)
+	}
+	for _, other := range []string{"token-acct-a", "token-acct-b", "token-emby-path", "token-jf-path", "token-other-port"} {
+		if other != token && strings.Contains(blob, other) {
+			t.Fatalf("url %s also carried %s: %#v", raw, other, headers)
+		}
+	}
+}
+
+func resetMediaPosterAuth() {
+	mediaPosterMu.Lock()
+	mediaPosterIdx = mediaPosterIndex{}
+	mediaPosterMu.Unlock()
 }
 
 func TestMediaServerConnectBrowseAndDirectPlay(t *testing.T) {

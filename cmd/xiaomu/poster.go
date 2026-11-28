@@ -76,6 +76,7 @@ func (posterRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 				cloned.Header.Set(key, value)
 			}
 		}
+		stripMediaPosterQuery(cloned.URL)
 	}
 	resp, err := fetchValidatedPosterResponse(cloned)
 	if err == nil || ctx.Err() != nil {

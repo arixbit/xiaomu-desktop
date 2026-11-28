@@ -438,7 +438,7 @@ func (a *app) openMediaItem(it mediaserver.Item) {
 		return
 	}
 	name, episode := mediaHistoryTitle(it)
-	a.playMediaServerItem(srv, it.ID, name, episode, it.ImageURL, srv.origin(), 0)
+	a.playMediaServerItem(srv, it.ID, name, episode, stampMediaPosterURL(it.ImageURL, srv.ID), srv.origin(), 0)
 }
 
 func (a *app) playMediaServerItem(srv savedMediaServer, itemID, name, episode, pic, origin string, at time.Duration) {
@@ -562,11 +562,11 @@ func mediaTypeLabel(it mediaserver.Item) string {
 	}
 }
 
-func mediaItemVideo(it mediaserver.Item) catalog.Video {
+func mediaItemVideo(it mediaserver.Item, serverID string) catalog.Video {
 	return catalog.Video{
 		ID:      catalog.ID(it.ID),
 		Name:    it.Name,
-		Pic:     it.ImageURL,
+		Pic:     stampMediaPosterURL(it.ImageURL, serverID),
 		Year:    it.Year,
 		Type:    mediaTypeLabel(it),
 		Remarks: mediaItemRemark(it),
@@ -744,7 +744,7 @@ func (a *app) mediaLibraryView(c *ui.Context) {
 		}
 		grid := ui.GridView(c, &m.grid, len(m.items), 152, 252, func(i int) {
 			item := m.items[i]
-			card := a.videoCard(c, mediaItemVideo(item), "", false)
+			card := a.videoCard(c, mediaItemVideo(item, m.activeID), "", false)
 			if card.Clicked() {
 				a.openMediaItem(item)
 			}
@@ -765,37 +765,176 @@ func newLocalID() string {
 	return hex.EncodeToString(buf)
 }
 
+// mediaPosterServerQuery selects which saved server should authorize a poster
+// request. It is not a credential. The image loader strips it before the
+// request leaves the machine, and the access token stays in a header.
+const mediaPosterServerQuery = "xiaomu_server"
+
 // Poster images are loaded by the shared image client, which cannot take
-// per-URL headers. Tokens stay out of the image URL and are attached here
-// when the host matches a saved server.
+// per-URL headers. Tokens stay out of the image URL. A host:port is not an
+// identity: two accounts, or two servers under different path prefixes, can
+// share one. Lookup uses the saved server id when the URL carries one, and
+// otherwise a unique scheme + host + port + path prefix.
 var (
-	mediaPosterMu     sync.RWMutex
-	mediaPosterByHost = map[string]mediaserver.Session{}
+	mediaPosterMu  sync.RWMutex
+	mediaPosterIdx mediaPosterIndex
 )
 
+type posterServer struct {
+	id      string
+	session mediaserver.Session
+	scheme  string
+	host    string
+	path    string
+}
+
+type mediaPosterIndex struct {
+	byID    map[string]posterServer
+	ordered []posterServer
+}
+
 func (a *app) syncMediaPosterAuth() {
-	next := make(map[string]mediaserver.Session, len(a.media.servers))
+	idx := mediaPosterIndex{
+		byID: make(map[string]posterServer, len(a.media.servers)),
+	}
 	for _, s := range a.media.servers {
-		u, err := url.Parse(s.BaseURL)
-		if err != nil || u.Host == "" || strings.TrimSpace(s.AccessToken) == "" {
+		srv, ok := posterServerFrom(s)
+		if !ok {
 			continue
 		}
-		next[strings.ToLower(u.Host)] = s.session()
+		if _, exists := idx.byID[s.ID]; exists {
+			continue
+		}
+		idx.byID[s.ID] = srv
+		idx.ordered = append(idx.ordered, srv)
 	}
 	mediaPosterMu.Lock()
-	mediaPosterByHost = next
+	mediaPosterIdx = idx
 	mediaPosterMu.Unlock()
 }
 
-func mediaPosterHeaders(u *url.URL) map[string]string {
+func posterServerFrom(s savedMediaServer) (posterServer, bool) {
+	if strings.TrimSpace(s.ID) == "" || strings.TrimSpace(s.AccessToken) == "" {
+		return posterServer{}, false
+	}
+	u, err := url.Parse(strings.TrimSpace(s.BaseURL))
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return posterServer{}, false
+	}
+	return posterServer{
+		id:      s.ID,
+		session: s.session(),
+		scheme:  strings.ToLower(u.Scheme),
+		host:    strings.ToLower(u.Host),
+		path:    cleanPosterPath(u.EscapedPath()),
+	}, true
+}
+
+func cleanPosterPath(p string) string {
+	p = pathUnescape(strings.TrimRight(p, "/"))
+	if p == "/" || p == "." {
+		return ""
+	}
+	return p
+}
+
+func pathUnescape(p string) string {
+	if decoded, err := url.PathUnescape(p); err == nil {
+		return decoded
+	}
+	return p
+}
+
+func (idx mediaPosterIndex) moreSpecific(u *url.URL, srv posterServer) bool {
+	for _, other := range idx.ordered {
+		if other.id == srv.id || other.scheme != srv.scheme || other.host != srv.host {
+			continue
+		}
+		if len(other.path) > len(srv.path) && other.matches(u) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s posterServer) matches(u *url.URL) bool {
+	if u == nil || !strings.EqualFold(u.Scheme, s.scheme) || !strings.EqualFold(u.Host, s.host) {
+		return false
+	}
+	path := cleanPosterPath(u.EscapedPath())
+	if s.path == "" {
+		return true
+	}
+	return path == s.path || strings.HasPrefix(path, s.path+"/")
+}
+
+func stampMediaPosterURL(raw, serverID string) string {
+	raw = strings.TrimSpace(raw)
+	serverID = strings.TrimSpace(serverID)
+	if raw == "" || serverID == "" {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return raw
+	}
+	q := u.Query()
+	q.Set(mediaPosterServerQuery, serverID)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func lookupMediaPoster(u *url.URL) (mediaserver.Session, bool) {
 	if u == nil || u.Host == "" {
-		return nil
+		return mediaserver.Session{}, false
 	}
 	mediaPosterMu.RLock()
-	sess, ok := mediaPosterByHost[strings.ToLower(u.Host)]
-	mediaPosterMu.RUnlock()
+	defer mediaPosterMu.RUnlock()
+	if id := strings.TrimSpace(u.Query().Get(mediaPosterServerQuery)); id != "" {
+		srv, ok := mediaPosterIdx.byID[id]
+		if !ok || !srv.matches(u) || mediaPosterIdx.moreSpecific(u, srv) {
+			return mediaserver.Session{}, false
+		}
+		return srv.session, true
+	}
+	var best posterServer
+	bestLen := -1
+	found := false
+	ambiguous := false
+	for _, srv := range mediaPosterIdx.ordered {
+		if !srv.matches(u) {
+			continue
+		}
+		n := len(srv.path)
+		switch {
+		case !found || n > bestLen:
+			best, bestLen, found, ambiguous = srv, n, true, false
+		case n == bestLen:
+			ambiguous = true
+		}
+	}
+	if !found || ambiguous {
+		return mediaserver.Session{}, false
+	}
+	return best.session, true
+}
+
+func mediaPosterHeaders(u *url.URL) map[string]string {
+	sess, ok := lookupMediaPoster(u)
 	if !ok {
 		return nil
 	}
 	return mediaserver.AuthHeaders(sess)
+}
+
+func stripMediaPosterQuery(u *url.URL) {
+	if u == nil || u.RawQuery == "" || !strings.Contains(u.RawQuery, mediaPosterServerQuery) {
+		return
+	}
+	q := u.Query()
+	if _, ok := q[mediaPosterServerQuery]; !ok {
+		return
+	}
+	q.Del(mediaPosterServerQuery)
+	u.RawQuery = q.Encode()
 }
