@@ -152,6 +152,51 @@ func TestRejectsNonHTTP(t *testing.T) {
 	}
 }
 
+func TestCredentialHeadersStayOffRedirectedHost(t *testing.T) {
+	var otherAuth, otherEmbyToken, otherReferer string
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		otherAuth = r.Header.Get("Authorization")
+		otherEmbyToken = r.Header.Get("X-Emby-Token")
+		otherReferer = r.Header.Get("Referer")
+		io.WriteString(w, "media")
+	}))
+	defer other.Close()
+	var originAuth string
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originAuth = r.Header.Get("Authorization")
+		http.Redirect(w, r, other.URL+"/movie.mkv", http.StatusFound)
+	}))
+	defer origin.Close()
+
+	p, err := Start(map[string]string{
+		"Authorization": "Emby Token=\"secret\"",
+		"X-Emby-Token":  "secret",
+		"Referer":       "https://example.com/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	resp, err := http.Get(p.Wrap(origin.URL + "/Videos/1/stream.mkv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || string(body) != "media" {
+		t.Fatalf("HTTP %d: %s", resp.StatusCode, body)
+	}
+	if originAuth == "" {
+		t.Fatal("origin did not receive the injected auth header")
+	}
+	if otherAuth != "" || otherEmbyToken != "" {
+		t.Fatalf("credential headers followed a redirect to another host: %q %q", otherAuth, otherEmbyToken)
+	}
+	if otherReferer == "" {
+		t.Fatal("non-credential headers should still follow redirects")
+	}
+}
+
 func TestRedirectedPlaylistUsesFinalDirectoryAndFullBody(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

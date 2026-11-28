@@ -125,6 +125,7 @@ type app struct {
 	playingName         string
 	playingMedia        bool
 	playingMediaServer  string
+	playingMediaUser    string
 	playingMediaItem    string
 	playingMediaName    string
 	playingMediaEpisode string

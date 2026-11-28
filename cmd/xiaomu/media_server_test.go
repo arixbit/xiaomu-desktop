@@ -59,6 +59,88 @@ func TestMediaPosterRequestUsesHeaderNotURL(t *testing.T) {
 	}
 }
 
+func TestMediaHistoryStaysWithItsAccount(t *testing.T) {
+	a := &app{}
+	a.media.servers = []savedMediaServer{{
+		ID:          "server-1",
+		BaseURL:     "https://media.example.com:8096",
+		Product:     string(mediaserver.ProductJellyfin),
+		UserID:      "user-a",
+		AccessToken: "token-a",
+		DeviceID:    "dev-1",
+	}}
+	entry := historyEntry{Kind: historyKindMedia, SiteKey: "server-1", MediaUser: "user-a", VideoID: "movie-1", Name: "示例"}
+	if !a.historyAvailable(entry) {
+		t.Fatal("the recording account's entry should be available")
+	}
+
+	// Re-login with another account on the same saved server.
+	a.media.servers[0].UserID = "user-b"
+	a.media.servers[0].AccessToken = "token-b"
+	if a.historyAvailable(entry) {
+		t.Fatal("the previous account's entry must not be available to the new account")
+	}
+	a.resumeMedia(entry)
+	if !strings.Contains(a.status, "另一个账号") {
+		t.Fatalf("resume status = %q", a.status)
+	}
+	other := entry
+	other.MediaUser = "user-b"
+	if entry.dedupKey() == other.dedupKey() {
+		t.Fatal("history keys collide across accounts")
+	}
+	if !a.historyAvailable(other) {
+		t.Fatal("the new account's own entry should be available")
+	}
+}
+
+func TestMediaPosterAuthStaysOffRedirectedHost(t *testing.T) {
+	const token = "poster-redirect-token"
+	var otherAuth, otherEmbyAuth, otherEmbyToken string
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		otherAuth = r.Header.Get("Authorization")
+		otherEmbyAuth = r.Header.Get("X-Emby-Authorization")
+		otherEmbyToken = r.Header.Get("X-Emby-Token")
+		w.Header().Set("Content-Type", "image/svg+xml")
+		io.WriteString(w, `<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"></svg>`)
+	}))
+	defer other.Close()
+	var originAuth string
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originAuth = r.Header.Get("Authorization")
+		http.Redirect(w, r, other.URL+"/poster.svg", http.StatusFound)
+	}))
+	defer origin.Close()
+
+	a := &app{}
+	a.media.servers = []savedMediaServer{{
+		ID:          "server-1",
+		BaseURL:     origin.URL,
+		Product:     string(mediaserver.ProductEmby),
+		UserID:      "user-1",
+		AccessToken: token,
+		DeviceID:    "device-1",
+	}}
+	a.syncMediaPosterAuth()
+	t.Cleanup(resetMediaPosterAuth)
+
+	req, err := http.NewRequest(http.MethodGet, origin.URL+"/Items/movie-1/Images/Primary", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := (posterRoundTripper{}).RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if !strings.Contains(originAuth, token) {
+		t.Fatalf("origin did not get poster auth: %q", originAuth)
+	}
+	if otherAuth != "" || otherEmbyAuth != "" || otherEmbyToken != "" {
+		t.Fatalf("poster auth followed a redirect to another host: %q %q %q", otherAuth, otherEmbyAuth, otherEmbyToken)
+	}
+}
+
 func TestMediaPosterAuthDoesNotCollide(t *testing.T) {
 	a := &app{}
 	a.media.servers = []savedMediaServer{

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -268,6 +269,30 @@ func TestAuthHeadersStayOffOtherHosts(t *testing.T) {
 	}
 	if leaked {
 		t.Fatal("auth headers followed a redirect to another host")
+	}
+}
+
+func TestLoginBodyStaysOffOtherHosts(t *testing.T) {
+	var hits atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer other.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+
+	c, err := New(origin.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Login(context.Background(), ProductJellyfin, "device-1", "user", "secret"); err == nil {
+		t.Fatal("login followed a cross-host redirect with its body")
+	}
+	if hits.Load() != 0 {
+		t.Fatal("login body reached another host")
 	}
 }
 

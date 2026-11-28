@@ -31,6 +31,32 @@ var (
 	posterNetClient  = &http.Client{Transport: posterRoundTripper{}, Timeout: posterTimeout}
 )
 
+func init() {
+	// Go's default redirect handling strips Authorization across hosts but
+	// copies custom headers, so a media server poster that redirects to
+	// another address would carry the Emby token with it. Strip credential
+	// headers whenever a poster redirect leaves the original origin.
+	posterClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("海报重定向次数过多")
+		}
+		if len(via) > 0 && via[0].URL != nil && !posterSameOrigin(via[0].URL, req.URL) {
+			req.Header.Del("Authorization")
+			req.Header.Del("X-Emby-Authorization")
+			req.Header.Del("X-Emby-Token")
+			req.Header.Del("Cookie")
+		}
+		return nil
+	}
+}
+
+func posterSameOrigin(a, b *url.URL) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
+}
+
 func initPosterNetImage() {
 	posterClientOnce.Do(func() {
 		netimage.SetClient(posterNetClient)

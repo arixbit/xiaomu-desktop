@@ -102,6 +102,16 @@ func Start(headers map[string]string) (*Proxy, error) {
 		} else {
 			p.apply(req)
 		}
+		// The injected headers belong to the original target. When a
+		// redirect leaves that origin, credential headers must not follow
+		// (a media server stream can redirect to an unrelated address);
+		// Referer/User-Agent stay, as plain playback sources rely on them.
+		if len(via) > 0 && via[0].URL != nil && !sameOrigin(via[0].URL, req.URL) {
+			req.Header.Del("Authorization")
+			req.Header.Del("X-Emby-Authorization")
+			req.Header.Del("X-Emby-Token")
+			req.Header.Del("Cookie")
+		}
 		return nil
 	}
 	p.srv = &http.Server{Handler: p}
@@ -111,6 +121,13 @@ func Start(headers map[string]string) (*Proxy, error) {
 
 // Base is the http://127.0.0.1:port origin.
 func (p *Proxy) Base() string { return p.base }
+
+func sameOrigin(a, b *url.URL) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
+}
 
 // Wrap returns the local URL that plays target with the current headers.
 func (p *Proxy) Wrap(target string) string {

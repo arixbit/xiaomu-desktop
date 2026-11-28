@@ -225,6 +225,9 @@ func (a *app) homeContinueWatchingSection(c *ui.Context, entries []historyEntry)
 								missingLabel = "文件已移除"
 							} else if e.isMedia() {
 								missingLabel = "服务器已移除"
+								if srv, ok := a.mediaServer(e.SiteKey); ok && e.MediaUser != srv.UserID {
+									missingLabel = "其他账号的记录"
+								}
 							}
 							ui.Text(c, missingLabel).FontSize(12).TextColor(p.warning).SingleLine()
 						} else if sub := continueWatchingSubline(e, fav, followed); sub != "" {

@@ -181,6 +181,11 @@ func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
 		return errors.New("重定向到了不支持的地址")
 	}
 	if len(via) > 0 && via[0].URL != nil && !sameOrigin(via[0].URL, req.URL) {
+		// A 307/308 would resend the request body (the login password) to
+		// the other address. Refuse instead of following it.
+		if req.Body != nil && req.Body != http.NoBody {
+			return errors.New("服务器把请求重定向到了其他地址")
+		}
 		req.Header.Del("Authorization")
 		req.Header.Del("X-Emby-Authorization")
 		req.Header.Del("X-Emby-Token")

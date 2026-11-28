@@ -453,6 +453,7 @@ func (a *app) playMediaServerItem(srv savedMediaServer, itemID, name, episode, p
 			}
 			a.playingMedia = true
 			a.playingMediaServer = srv.ID
+			a.playingMediaUser = srv.UserID
 			a.playingMediaItem = itemID
 			a.playingMediaName = name
 			a.playingMediaEpisode = episode
@@ -463,7 +464,7 @@ func (a *app) playMediaServerItem(srv savedMediaServer, itemID, name, episode, p
 				a.playingName = strings.TrimSpace(name + " · " + episode)
 			}
 			a.resumeAt = at
-			a.revealContinueWatchingKey(mediaHistoryKey(srv.ID, itemID))
+			a.revealContinueWatchingKey(mediaHistoryKey(srv.ID, srv.UserID, itemID))
 			a.syncNowPlaying()
 		}}, nil
 	}, func(err error) {
@@ -477,6 +478,10 @@ func (a *app) resumeMedia(e historyEntry) {
 		a.status = "这台媒体服务器已移除，重新添加后可继续播放"
 		return
 	}
+	if e.MediaUser != srv.UserID {
+		a.status = "这条记录是另一个账号的，换回原账号后可继续播放"
+		return
+	}
 	var at time.Duration
 	if !e.finished() && e.Position > 0 {
 		at = time.Duration(e.Position * float64(time.Second))
@@ -487,6 +492,7 @@ func (a *app) resumeMedia(e historyEntry) {
 func (a *app) clearPlayingMedia() {
 	a.playingMedia = false
 	a.playingMediaServer = ""
+	a.playingMediaUser = ""
 	a.playingMediaItem = ""
 	a.playingMediaName = ""
 	a.playingMediaEpisode = ""

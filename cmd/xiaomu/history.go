@@ -33,6 +33,7 @@ type historyEntry struct {
 	SiteKey    string    `json:"site_key"`
 	Kind       string    `json:"kind,omitempty"`
 	NASShare   string    `json:"nas_share,omitempty"` // share name, with the server address in Line
+	MediaUser  string    `json:"media_user,omitempty"` // Emby/Jellyfin user id the entry was recorded under
 	Origin     string    `json:"origin,omitempty"`
 	VideoID    string    `json:"video_id"`
 	Line       string    `json:"line"`
@@ -52,8 +53,10 @@ type historyEntry struct {
 // from a local file on disk; historyKindMedia marks one played from a
 // user-added Emby or Jellyfin server. Kind is the only type check: a site
 // whose key happens to be "nas", "local", or "media" must never be mistaken
-// for one. Media entries store the local server id in SiteKey and the item
-// id in VideoID, never the access token or a media URL.
+// for one. Media entries store the local server id in SiteKey, the item
+// id in VideoID, and the signed-in user id in MediaUser, never the access
+// token or a media URL. The user id is part of the identity: re-logging
+// in with another account must not adopt the previous account's progress.
 const (
 	historyKindNAS   = "nas"
 	historyKindSite  = "site"
@@ -61,8 +64,8 @@ const (
 	historyKindMedia = "media"
 )
 
-func mediaHistoryKey(serverID, itemID string) string {
-	return "media:" + serverID + ":" + itemID
+func mediaHistoryKey(serverID, userID, itemID string) string {
+	return "media:" + serverID + ":" + userID + ":" + itemID
 }
 
 // isNAS reports whether the entry is a legacy NAS record from an older release.
@@ -111,7 +114,7 @@ func (e historyEntry) dedupKey() string {
 		return localHistoryKey(e.VideoID)
 	}
 	if e.isMedia() && e.SiteKey != "" && e.VideoID != "" {
-		return mediaHistoryKey(e.SiteKey, e.VideoID)
+		return mediaHistoryKey(e.SiteKey, e.MediaUser, e.VideoID)
 	}
 	return titleKey(e.Name)
 }
@@ -408,16 +411,17 @@ func (a *app) recordHistory(p mediaPlayer, now time.Time) {
 	case a.playingMedia && a.playingMediaItem != "":
 		a.history.noted = now
 		a.history.note(historyEntry{
-			Name:     a.playingMediaName,
-			Pic:      a.playingMediaPic,
-			SiteKey:  a.playingMediaServer,
-			Kind:     historyKindMedia,
-			Origin:   a.playingMediaOrigin,
-			VideoID:  a.playingMediaItem,
-			Episode:  a.playingMediaEpisode,
-			Position: position,
-			Duration: duration,
-			Updated:  now,
+			Name:      a.playingMediaName,
+			Pic:       a.playingMediaPic,
+			SiteKey:   a.playingMediaServer,
+			Kind:      historyKindMedia,
+			MediaUser: a.playingMediaUser,
+			Origin:    a.playingMediaOrigin,
+			VideoID:   a.playingMediaItem,
+			Episode:   a.playingMediaEpisode,
+			Position:  position,
+			Duration:  duration,
+			Updated:   now,
 		})
 	case a.playingFile && a.playingFilePath != "":
 		a.history.noted = now
@@ -509,8 +513,8 @@ func (a *app) historyAvailable(e historyEntry) bool {
 		return ok
 	}
 	if e.isMedia() {
-		_, ok := a.mediaServer(e.SiteKey)
-		return ok
+		srv, ok := a.mediaServer(e.SiteKey)
+		return ok && e.MediaUser == srv.UserID
 	}
 	return a.configAvailable(e.ConfigURL)
 }
